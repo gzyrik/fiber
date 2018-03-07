@@ -34,7 +34,7 @@ enum status { dead = 0, suspended, normal, running };
  *    该预留值应该不小于, 切换子协程前, 父协程的栈内存增量, 否则将发生运行栈重叠;
  *    从而导致协程切换的额外内存消耗.
  */
-routine_t create(void*(*f)(void*) noexcept, const long stack_size) noexcept;
+routine_t create(void*(*f)(void*), const long stack_size) noexcept;
 
 /** 返回协程状态. 线程安全 */
 enum status status(routine_t co) noexcept;
@@ -80,9 +80,9 @@ static inline void* _ffunc_(void* data) noexcept {
     return f(yield(nullptr));
 }
 
-inline routine_t create(const std::function<void*(void*)noexcept>&f , const long stack_size = 128*1024) noexcept {
-    auto ptr = f.target<void*(*)(void*) noexcept>();
-    auto co = create((void*(*)(void*) noexcept)(ptr ? *ptr : _ffunc_), stack_size);
+inline routine_t create(const std::function<void*(void*)>&f , const long stack_size = 128*1024) noexcept {
+    auto ptr = f.target<void*(*)(void*)>();
+    auto co = create((void*(*)(void*))(ptr ? *ptr : _ffunc_), stack_size);
     if (co && !ptr) resume(co, (void*)&f);
     return co;
 }
@@ -92,7 +92,7 @@ inline routine_t create(const std::function<void*(void*)noexcept>&f , const long
  * The arguments passed to the function behave as the extra arguments to resume.
  * Returns the same values returned by resume, in case of error, propagates the error.
  */
-inline std::function<void*(void*)> wrap(const std::function<void*(void*)noexcept>& f, const long stack_size = 128*1024) noexcept {
+inline std::function<void*(void*)> wrap(const std::function<void*(void*)>& f, const long stack_size = 128*1024) noexcept {
     routine_t id = create(f, stack_size);
     if (!id) return nullptr;
     return [id](void* data) { return resume(id, data); };

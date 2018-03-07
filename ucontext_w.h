@@ -20,8 +20,8 @@
  *      59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
  */
 
-#ifndef UCONTEXT_H
-#define UCONTEXT_H
+#ifndef __UCONTEXT_W_H__
+#define __UCONTEXT_W_H__
 
 #include <windows.h>
 
@@ -50,10 +50,8 @@ typedef struct __ucontext {
 	__sigset_t			uc_sigmask;
 } ucontext_t;
 
+int getcontext(ucontext_t*ucp);
+int makecontext(ucontext_t*ucp, void (*func)(), int argc, ...);
+int swapcontext(ucontext_t*oucp, const ucontext_t *ucp);
 
-int getcontext(ucontext_t *ucp);
-int setcontext(const ucontext_t *ucp);
-int makecontext(ucontext_t *, void (*)(), int, ...);
-int swapcontext(ucontext_t *, const ucontext_t *);
-
-#endif /* UCONTEXT_H */
+#endif /* __UCONTEXT_W_H__ */

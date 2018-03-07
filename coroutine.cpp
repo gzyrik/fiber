@@ -6,7 +6,8 @@
 #include <cstdint>
 #include <mutex>
 #include <system_error>
-
+#include "coctx.h"
+#define _USE_COCTX 1
 #ifdef _MSC_VER
 #include <Windows.h>
 #include "ucontext_w.h"
@@ -20,10 +21,14 @@
 #define throw_errno(desc) \
     throw std::system_error(std::error_code(GetLastError(), std::system_category()), #desc)
 #else
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE
+#endif
 #include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <ucontext.h>
 #define throw_errno(desc) \
     throw std::system_error(std::error_code(errno, std::system_category()), #desc)
 typedef int HANDLE;
@@ -35,16 +40,19 @@ typedef int HANDLE;
 #include <sys/event.h>
 #define _USE_KEVENT 1
 #define POLL_EVENT_T struct kevent 
-#define _XOPEN_SOURCE
-#include <ucontext.h>
 #else
-#include <ucontext.h>
 #include <sys/epoll.h> 
 #include <sys/eventfd.h>
 #define _USE_UCONTEXT 1
 #define _USE_EPOLL 1
 #define POLL_EVENT_T struct epoll_event
 #endif
+#endif
+#ifdef _USE_COCTX
+#undef _USE_UCONTEXT
+#define ucontext_t coctx_t
+#define getcontext coctx_init
+#define swapcontext coctx_swap
 #endif
 static int64_t nowMS(void){
 #ifdef _WIN32
@@ -89,30 +97,30 @@ struct Routine {
 #ifdef _WIN32
     WSAOVERLAPPED overlapped;
 #endif
-#if _USE_UCONTEXT
+#if _USE_UCONTEXT || _USE_COCTX
     ucontext_t ctx;
     char* stack_sp;
     size_t stack_len;
 #endif
     const long stack_size;
     const routine_t index;
-    void*(*const func)(void*) noexcept;
+    void*(*const func)(void*);
     enum status status;
     char* fiber_stack;
     Routine *parent;
     void* data;
     long  fd;
-    Routine(const routine_t i, void*(*f)(void*)noexcept, const long ss):
+    Routine(const routine_t i, void*(*f)(void*), const long ss):
         stack_size(ss), index(i), func(f),
         status(suspended), fiber_stack(nullptr), parent(nullptr), 
         data(nullptr), fd(0) {
-#if _USE_UCONTEXT
+#if _USE_UCONTEXT || _USE_COCTX
         memset(&ctx, 0, sizeof(ctx));
 #endif
     }
     ~Routine() {
         if (!fiber_stack) return;
-#if _USE_UCONTEXT
+#if _USE_UCONTEXT || _USE_COCTX
         free(fiber_stack);
 #elif _WIN32
         if (stack_size == 0 && index == 0)
@@ -179,7 +187,7 @@ static void* YieldFiber(Routine* routine, enum status status) {
     routine->status = status;
     parent->status = running;
     _ordinator.current = parent;
-#if _USE_UCONTEXT
+#if _USE_UCONTEXT || _USE_COCTX
     routine->stack_sp = (char*)&parent;
     routine->stack_len= 0;
     if (routine->ctx.uc_stack.ss_sp && routine->stack_sp <= (char*)routine->ctx.uc_stack.ss_sp + STACK_MINSIZE)
@@ -204,19 +212,21 @@ static void* YieldFiber(Routine* routine, enum status status) {
 #endif
     return routine->data;
 }
-#ifdef _WIN32
+#if _USE_COCTX
+static void entry(void* lpParameter, void* a2)
+#elif defined _WIN32
 static void __stdcall entry(LPVOID lpParameter)
 #else
 static void entry(int a1, int a2)
 #endif
 {
-#ifndef _WIN32
+#if _USE_UCONTEXT
     intptr_t lpParameter = static_cast<intptr_t>(a1);
     if (sizeof(Routine*) > sizeof(int))
         lpParameter |= intptr_t(a2) << (sizeof(int) * 8);
 #endif
     Routine *routine = reinterpret_cast<Routine*>(lpParameter);
-#if _USE_UCONTEXT
+#if _USE_UCONTEXT || _USE_COCTX
     routine->stack_sp = (char*)&routine;
     routine->stack_len = 0;
     if (routine->ctx.uc_stack.ss_sp && routine->stack_sp <= (char*)routine->ctx.uc_stack.ss_sp + STACK_MINSIZE)
@@ -236,7 +246,7 @@ static void* ResumeFiber(Routine* routine) {
     current->status = normal;
     routine->status = running;
     _ordinator.current = routine;
-#if _USE_UCONTEXT
+#if _USE_UCONTEXT || _USE_COCTX
     current->stack_sp = (char*)&current;
     current->stack_len= 0;
     if (current->ctx.uc_stack.ss_sp && current->stack_sp <= (char*)current->ctx.uc_stack.ss_sp + STACK_MINSIZE)
@@ -255,6 +265,9 @@ static void* ResumeFiber(Routine* routine) {
             routine->ctx.uc_stack.ss_sp = routine->fiber_stack;
             routine->ctx.uc_stack.ss_size = routine->stack_size;
         }
+#ifdef _USE_COCTX
+        coctx_make(&routine->ctx, entry, routine, nullptr);
+#else
         routine->ctx.uc_link = &current->ctx;
         intptr_t ptr = reinterpret_cast<intptr_t>(routine);
         const int a1 = static_cast<int>(ptr);
@@ -273,6 +286,7 @@ static void* ResumeFiber(Routine* routine) {
             else
                 throw std::logic_error("makecontext argv invalid");
         }
+#endif
     }
     else if (routine->stack_size <= 0) {
         char* stack_bp = (char*)(routine->ctx.uc_stack.ss_sp) + routine->ctx.uc_stack.ss_size;
@@ -319,7 +333,7 @@ static void* ResumeFiber(Routine* routine) {
     return data;
 }
 /////////////////////////////////////////////////////////////////////////////////////////////
-routine_t create(void*(*f)(void*)noexcept, const long stack_size) noexcept {
+routine_t create(void*(*f)(void*), const long stack_size) noexcept {
     routine_t index = _ordinator.routines.size();
 
     if (index <= (routine_t(-1) >> 8)) {
@@ -587,160 +601,3 @@ int post(routine_t id, int result) {
     return true;
 }
 }
-#if 1
-#include <iostream>
-#include <string>
-#include <thread>
-static void* f(void* data) {
-    for(int i=0;i<10;++i)
-        coroutine::yield("abc");
-    return (void*)"end";
-}
-static void test0(){
-    auto co = coroutine::create(f);
-    try {
-        for (int i = 0; i < 110; ++i)
-            std::cerr << (char*)coroutine::resume(co, nullptr) << std::endl;
-    }
-    catch (std::exception& e) {
-        std::cerr << "exception caught: " << e.what() << std::endl;
-    }
-    std::cerr << coroutine::status(co) << std::endl;
-}
-static void test1(){
-    auto co = coroutine::wrap([](void*data) {
-        for (int i = 0; i<10; ++i) coroutine::yield("abc");
-        return (void*)"end";
-    });
-    try {
-        for (int i = 0; i < 110; ++i)
-            std::cerr << (char*)co(nullptr)<< std::endl;
-    }
-    catch (std::exception& e) {
-        std::cerr << "exception caught: " << e.what() << std::endl;
-    }
-}
-static long udp() {
-#ifdef _WIN32
-    long fd = WSASocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, 0, 0, WSA_FLAG_OVERLAPPED);
-    int nZero = 0;
-    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (char*)&nZero, sizeof(nZero));
-    return fd;
-#else
-#define closesocket close
-    return socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-#endif
-}
-static void* f1(void* addr) {
-    int fd = udp();
-    char buf[1500] = { 0 };
-    int addr_len = sizeof(sockaddr_in);
-    int ret = bind(fd, (sockaddr*)addr, addr_len);
-    for (int i = 0; i < 10000; ++i) {
-        fprintf(stderr, "\r%d", i);
-        ret = coroutine::wait(fd, coroutine::READ, [&](LPWSAOVERLAPPED overlapped, int revents) {
-#ifdef _WIN32
-            WSABUF wsabuf = { sizeof(buf), buf };
-            DWORD flags = 0;
-            return WSARecv(fd, &wsabuf, 1, nullptr, &flags, overlapped, nullptr);
-#else
-            return recv(fd, buf, sizeof(buf), 0);
-#endif
-        });
-        if(ret != sizeof(buf)) throw_errno("recv");
-    }
-    closesocket(fd);
-    std::cerr << "done to recv thread" << std::endl;
-    return nullptr;
-}
-static void* f2(void*addr) {
-    int fd = udp();
-    char buf[1500];
-    memset(buf, '0', sizeof(buf));
-    for (int i = 0; i < 10000; ++i) {
-        int ret = coroutine::wait(fd, coroutine::WRITE, [&](LPWSAOVERLAPPED overlapped, int revents) {
-#ifdef _WIN32
-            WSABUF wsabuf = { sizeof(buf), buf };
-            return WSASendTo(fd, &wsabuf, 1, nullptr, 0, (sockaddr*)addr, sizeof(sockaddr_in), overlapped, nullptr);
-#else
-            return sendto(fd, buf, sizeof(buf), 0, (sockaddr*)addr, sizeof(sockaddr_in));
-#endif
-        });
-        if(ret != sizeof(buf)) throw_errno("sendto");
-    }
-    closesocket(fd);
-    std::cerr << "done to send thread" << std::endl;
-    return nullptr;
-};
-static void test2() {
-#ifdef _WIN32
-    WSADATA wsd;
-    WSAStartup(MAKEWORD(2, 2), &wsd);
-#endif
-    struct sockaddr_in ipv4;
-    ipv4.sin_addr.s_addr = htonl(INADDR_ANY);
-    ipv4.sin_family = AF_INET;
-    ipv4.sin_port = htons(37000);
-
-    coroutine::resume(coroutine::create(f1), &ipv4);
-    ipv4.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    coroutine::resume(coroutine::create(f2), &ipv4);
-    coroutine::poll(-1);
-}
-static void* f3(void* data) {
-    for (int i = 0; i < 10; ++i)
-        coroutine::wait(0, coroutine::READ);
-    return (void*)"end";
-}
-static void test3() {
-    auto id = coroutine::create(f3);
-    coroutine::resume(id,nullptr);
-    std::thread th([id] {
-        for (int i = 0; i < 100; ++i)
-            coroutine::post(id, coroutine::READ);
-    });
-    coroutine::poll(-1);
-    th.join();
-}
-static void* f4_2(void*) {
-    auto id = coroutine::create(f, 0);
-    for (int i = 0; i < 10; ++i)
-        coroutine::resume(id, nullptr);
-    return nullptr;
-}
-static void f4_1(int n, coroutine::routine_t co[]) {
-    auto id = coroutine::create(f4_2, 0);
-    coroutine::resume(id, nullptr);
-    try {
-        char a[1024 * 2] = { 0 };
-        a[1023] = 0;
-        for (int i = 0; i < 5; ++i) {
-            for (int j = 0; j < n; ++j) coroutine::resume(co[j], nullptr);
-        }
-    }
-    catch (std::exception& e) {
-        std::cerr << "exception caught: " << e.what() << std::endl;
-    }
-}
-const int n = 1;
-static void* f4(void* data) {
-    auto co = (coroutine::routine_t*)data;
-    for(int i=0;i<n;++i)
-        co[i] = coroutine::create(f,0);
-    for (int i = 0; i < 5; ++i) {
-        for (int j = 0; j < n; ++j) coroutine::resume(co[j], nullptr);
-    }
-    f4_1(n, co);
-    return nullptr;
-}
-static void test4() {
-    coroutine::routine_t c[n];
-    auto co = coroutine::create(f4, 1024*4+1024*1024);
-    coroutine::resume(co, c);
-    std::cerr << coroutine::status(co) << std::endl;
-}
-int main(int argc, char* argv[]){
-    test1();
-    return 0;
-}
-#endif
