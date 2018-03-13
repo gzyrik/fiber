@@ -1,10 +1,14 @@
 #include "coctx.h"
-#include <stdio.h>
+#include <cstdio>
+#include <cstring>
+#undef NDEBUG 
+#include <cassert>
 //g++ -DCDECL_ASM -std=gnu++11 -o coctx_test.exe coctx_test.cpp  ucontext_s.cpp coctx_swap.S 
 static coctx_t f_ctx, m_ctx;
 void f(void* s1, void* s2)
 {
-    printf("%s %s\n", (char*)s1, (char*)s2);
+    assert(!strcmp((char*)s1, "hello"));
+    assert(!strcmp((char*)s2, "world"));
     coctx_swap(&f_ctx, &m_ctx);
 }
 int main()

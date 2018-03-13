@@ -59,15 +59,15 @@ void* resume(routine_t co, void* data);
 void* yield(void* data);
 
 /** event mask */
-enum { CUSTOM=0, READ=1, WRITE=2, CONNECT=4, ACCEPT=8 };
+enum { TIMEOUT=0, READ=1, WRITE=2, CONNECT=4, ACCEPT=8 };
 
 /** Wait for the events */
-long wait(long fd, int events);
-
-int post(routine_t co, int result);
+long wait(long fd, int events, unsigned timeout);
 
 /** entry io poll loop */
 void poll(int ms);
+
+int post(routine_t co, long result);
 
 /** Use the overlapped for IOCP */
 #ifdef _WIN32
@@ -75,7 +75,7 @@ LPWSAOVERLAPPED overlap(long fd);
 #endif
 
 #ifdef __cplusplus
-static inline void* _ffunc_(void* data) noexcept {
+static inline void* _ffunc_(void* data) {
     auto f = *(std::function<void*(void*)>*)(data);
     return f(yield(nullptr));
 }
@@ -98,13 +98,13 @@ inline std::function<void*(void*)> wrap(const std::function<void*(void*)>& f, co
     return [id](void* data) { return resume(id, data); };
 }
 
-inline long wait(long fd, int events, const std::function<long(LPWSAOVERLAPPED overlapped, int revents)>& f) {
+inline long wait(long fd, int events, const std::function<long(LPWSAOVERLAPPED overlapped, int revents)>& f, unsigned timeout=1000) {
 #ifdef _WIN32
     const long ret = f(overlap(fd), events);
     if (ret < 0 && WSAGetLastError() != ERROR_IO_PENDING) return ret;
-    return wait(fd, events);
+    return wait(fd, events, timeout);
 #else
-    if (!(events = (int)wait(fd, events))) return -1;
+    if (!(events = (int)wait(fd, events, timeout))) return -1;
     return f(nullptr, events);
 #endif
 }
