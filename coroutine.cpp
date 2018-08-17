@@ -105,6 +105,9 @@ static uint64_t nowMS(void){
 #endif
 }
 namespace coroutine {
+enum class Status : int8_t { dead = 0, suspended, normal, running };
+static const char* STATUS_STRING[]={nullptr, "suspended", "normal", "running"};
+
 struct Routine {
 #ifdef _WIN32
     WSAOVERLAPPED overlapped;
@@ -116,16 +119,16 @@ struct Routine {
 #endif
     const long stack_size;
     const routine_t index;
-    void*(*const func)(void*);
-    enum status status;
+    std::function<void*(void*)> func;
+    Status status;
     uint64_t timeout;
     char* fiber_stack;
     Routine *parent;
     void* data;
     long  fd;
-    Routine(const routine_t i, void*(*f)(void*), const long ss):
+    Routine(const routine_t i, const std::function<void*(void*)>& f, const long ss):
         stack_size(ss), index(i), func(f),
-        status(suspended), timeout(-1), fiber_stack(nullptr), parent(nullptr), 
+        status(Status::suspended), timeout(-1), fiber_stack(nullptr), parent(nullptr), 
         data(nullptr), fd(0) {
 #if _USE_UCONTEXT || _USE_COCTX
         memset(&ctx, 0, sizeof(ctx));
@@ -194,18 +197,18 @@ struct Ordinator : public Routine {
     }
 };
 thread_local static Ordinator _ordinator;
-static void* YieldFiber(Routine* routine, enum status status) {
+static void* YieldFiber(Routine* routine, Status status) {
     Routine *parent = routine->parent;
     if (!parent) throw_logic("yield no parent routine");
     routine->status = status;
-    parent->status = running;
+    parent->status = Status::running;
     _ordinator.current = parent;
 #if _USE_UCONTEXT || _USE_COCTX
     routine->stack_sp = (char*)&parent;
     routine->stack_len= 0;
     if (routine->ctx.uc_stack.ss_sp && routine->stack_sp <= (char*)routine->ctx.uc_stack.ss_sp + STACK_MINSIZE)
         throw_overflow("routine stack overflow at yield");
-    if (status != dead && routine->stack_size <= 0) {//save stack before swap
+    if (status != Status::dead && routine->stack_size <= 0) {//save stack before swap
         char* stack_bp = (char*)(routine->ctx.uc_stack.ss_sp) + routine->ctx.uc_stack.ss_size;
         routine->stack_len = stack_bp - routine->stack_sp;
         routine->fiber_stack = (char*)malloc(routine->stack_len);
@@ -245,7 +248,7 @@ static void entry(int a1, int a2)
     if (routine->ctx.uc_stack.ss_sp && routine->stack_sp <= (char*)routine->ctx.uc_stack.ss_sp + STACK_MINSIZE)
         throw_overflow("routine stack overflow at entry");
 #endif
-    routine->status = running;
+    routine->status = Status::running;
     if (routine->func) {
         try { routine->data = routine->func(routine->data); }
         catch (std::exception& e) {}
@@ -254,13 +257,13 @@ static void entry(int a1, int a2)
     if (routine->fd && _ordinator.poll_fd)
         epoll_ctl(_ordinator.poll_fd, EPOLL_CTL_DEL, routine->fd, nullptr);
 #endif
-    YieldFiber(routine, dead);
+    YieldFiber(routine, Status::dead);
 }
 static void* ResumeFiber(Routine* routine) {
     Routine *current = _ordinator.current;
     routine->parent = current;
-    current->status = normal;
-    routine->status = running;
+    current->status = Status::normal;
+    routine->status = Status::running;
     _ordinator.current = routine;
 #if _USE_UCONTEXT || _USE_COCTX
     current->stack_sp = (char*)&current;
@@ -340,7 +343,7 @@ static void* ResumeFiber(Routine* routine) {
         throw_logic("current routine changed after resume");
 #endif
     void* data = routine->data;
-    if (routine->status == dead) {
+    if (routine->status == Status::dead) {
         _ordinator.routines[routine->index] = nullptr;
         _ordinator.indexes.push_back(routine->index);
         delete routine;
@@ -349,7 +352,7 @@ static void* ResumeFiber(Routine* routine) {
     return data;
 }
 /////////////////////////////////////////////////////////////////////////////////////////////
-routine_t create(void*(*f)(void*), const long stack_size) noexcept {
+routine_t create(const std::function<void*(void*)>&f, const long stack_size) noexcept {
     routine_t index = _ordinator.routines.size();
 
     if (index <= (routine_t(-1) >> 8)) {
@@ -368,22 +371,25 @@ routine_t create(void*(*f)(void*), const long stack_size) noexcept {
     _ordinator.count++;
     return (index << 8) | _ordinator.thread_id;
 }
-enum status status(routine_t id) noexcept {
+routine_t create(void*(*f)(void*), const long stack_size) noexcept {
+    return create(std::function<void*(void*)>(f), stack_size);
+}
+const char* status(routine_t id) noexcept {
     const uint8_t thread_id = static_cast<uint8_t>(id & 0xFF);
     id >>= 8;
     if (_ordinator.thread_id == thread_id) {
-        if (id >= _ordinator.routines.size() || !_ordinator.routines[id]) return dead;
-        return _ordinator.routines[id]->status;
+        if (id >= _ordinator.routines.size() || !_ordinator.routines[id]) return STATUS_STRING[0];
+        return STATUS_STRING[int(_ordinator.routines[id]->status)];
     }
     else if (!_threads[thread_id])
-        return dead;
+        return STATUS_STRING[0];
     else {
         std::lock_guard<std::mutex> guard(_threads_mutex);
         const struct Ordinator* o = _threads[thread_id];
-        if (!o || id >= o->routines.size() || !o->routines[id]) return dead;
-        return o->routines[id]->status;
+        if (!o || id >= o->routines.size() || !o->routines[id]) return STATUS_STRING[0];
+        return STATUS_STRING[int(o->routines[id]->status)];
     }
-    return dead;
+    return STATUS_STRING[0];
 }
 void* resume(routine_t id, void* data) {
     const uint8_t thread_id = static_cast<uint8_t>(id & 0xFF);
@@ -393,7 +399,7 @@ void* resume(routine_t id, void* data) {
     if (id >= _ordinator.routines.size())
         throw_argument("resume invalid routine_t");
     Routine* routine = _ordinator.routines[id];
-    if (!routine || routine->status != suspended) throw_logic("resume not suspended routine");
+    if (!routine || routine->status != Status::suspended) throw_logic("resume not suspended routine");
 
     routine->data = data;
     return ResumeFiber(routine);
@@ -404,7 +410,7 @@ void* yield(void* data) {
     if (!routine) throw_logic("no current routine to yield");
 
     routine->data = data;
-    YieldFiber(routine, suspended);
+    YieldFiber(routine, Status::suspended);
 
     return routine->data;
 }
@@ -487,10 +493,10 @@ long wait(long fd, int events, unsigned timeout){
     if (!routine) throw_logic("no current routine to wait");
     routine->timeout = nowMS() + timeout;
 #ifdef _WIN32
-    return reinterpret_cast<intptr_t>(YieldFiber(routine, suspended));
+    return reinterpret_cast<intptr_t>(YieldFiber(routine, Status::suspended));
 #else
     if ((events&0xF) != 0 && fd != 0) InitWait(routine, fd, events);
-    const long ret = reinterpret_cast<intptr_t>(YieldFiber(routine, suspended));
+    const long ret = reinterpret_cast<intptr_t>(YieldFiber(routine, Status::suspended));
     if (!fd) return ret;
     long revents = (ret& ~0xF);
 #endif
@@ -538,7 +544,7 @@ void poll(int ms) {
             auto now = nowMS();
             for (index=0; index<_ordinator.routines.size(); ++index) {
                 Routine* routine = _ordinator.routines[index];
-                if (routine && routine->status == suspended  && routine->timeout <= now) {
+                if (routine && routine->status == Status::suspended  && routine->timeout <= now) {
                     routine->data = nullptr;
                     ResumeFiber(routine);
                     now = nowMS();
@@ -566,7 +572,7 @@ void poll(int ms) {
                         if (index >= _ordinator.routines.size() || !_ordinator.routines[index])
                             continue;
                         Routine* routine = _ordinator.routines[index];
-                        if (routine->status == suspended) {
+                        if (routine->status == Status::suspended) {
                             routine->data = reinterpret_cast<void*>(val.result);
                             ResumeFiber(routine);
                         }
@@ -577,7 +583,7 @@ void poll(int ms) {
                 if (index >= _ordinator.routines.size() || !_ordinator.routines[index])
                     continue;
                 Routine* routine = _ordinator.routines[index];
-                if (routine->status == suspended) {
+                if (routine->status == Status::suspended) {
                     routine->data = data;
                     ResumeFiber(routine);
                 } 
@@ -594,7 +600,7 @@ int post(routine_t id, long result) {
     HANDLE post_wfd;
     if (_ordinator.thread_id == thread_id) {
         if (id >= _ordinator.routines.size() || !_ordinator.routines[id]
-            || _ordinator.routines[id]->status == dead)
+            || _ordinator.routines[id]->status == Status::dead)
             return false;
         _ordinator.InitPoll();
 #ifdef _WIN32
@@ -609,7 +615,7 @@ int post(routine_t id, long result) {
         std::lock_guard<std::mutex> guard(_threads_mutex);
         struct Ordinator* o = _threads[thread_id];
         if (!o || id >= o->routines.size() || !o->routines[id]
-            || o->routines[id]->status == dead)
+            || o->routines[id]->status == Status::dead)
             return false;
         o->InitPoll();
 #ifdef _WIN32

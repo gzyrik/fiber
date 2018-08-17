@@ -12,16 +12,9 @@ namespace coroutine {
 #else
 #define noexcept
 #endif
+
 /** 协程ID = (线程内次序<<8) + 线程次序&0xFF. 0 为非法协程ID */
 typedef unsigned long routine_t;
-
-/** 协程状态
- * - suspended, 运行函数还没有执行, 或调用了 yield()
- * - dead, 运行函数已退出, 或发生了运行错误
- * - normal, 运行函数中, 又调用 resume() 切换到其他协程
- * - running, 运行函数正在运行中
- * */
-enum status { dead = 0, suspended, normal, running };
 
 /** 创建新协程. 
  * 新建的协程处于suspended 状态.
@@ -36,8 +29,14 @@ enum status { dead = 0, suspended, normal, running };
  */
 routine_t create(void*(*f)(void*), const long stack_size) noexcept;
 
-/** 返回协程状态. 线程安全 */
-enum status status(routine_t co) noexcept;
+/** 返回协程状态. 线程安全
+ * 返回值
+ * - nullptr, 运行函数已退出, 或发生了运行错误
+ * - 'suspended', 运行函数还没有执行, 或调用了 yield()
+ * - 'normal',  运行函数中, 又调用 resume() 切换到其他协程
+ * - 'running', 运行函数正在运行中
+ */
+const char* status(routine_t co) noexcept;
 
 /** Starts or continues the execution of coroutine co. 
  * The first time you resume a coroutine, it starts running its body;
@@ -75,17 +74,7 @@ LPWSAOVERLAPPED overlap(long fd);
 #endif
 
 #ifdef __cplusplus
-static inline void* _ffunc_(void* data) {
-    auto f = *(std::function<void*(void*)>*)(data);
-    return f(yield(nullptr));
-}
-
-inline routine_t create(const std::function<void*(void*)>&f , const long stack_size = 128*1024) noexcept {
-    auto ptr = f.target<void*(*)(void*)>();
-    auto co = create((void*(*)(void*))(ptr ? *ptr : _ffunc_), stack_size);
-    if (co && !ptr) resume(co, (void*)&f);
-    return co;
-}
+routine_t create(const std::function<void*(void*)>&f , const long stack_size = 128*1024) noexcept;
 
 /** Creates a new coroutine, with body f.
  * Returns a function that resumes the coroutine each time it is called.
@@ -121,4 +110,4 @@ template<typename T> T& yield(T& data) {
 }
 }
 #endif /* __cplusplus */
-#endif
+#endif /* __COROUTINE_H__ */

@@ -25,7 +25,7 @@ static void test0() {
         fprintf(stderr, "\r%s %d: %s", __FUNCTION__, i, data);
         assert(strcmp(data, "abc") == 0);
     }
-    assert(coroutine::dead == coroutine::status(co));
+    assert(!coroutine::status(co));
     fprintf(stderr, "\r%s done: yield,resume,status\n", __FUNCTION__);
 }
 static void test1() {
@@ -40,7 +40,7 @@ static void test1() {
     }
     catch (std::exception& e) { excepted = true; }
     assert(excepted);
-    assert(coroutine::dead == coroutine::status(co));
+    assert(!coroutine::status(co));
     fprintf(stderr, "\r%s done: resume exception\n", __FUNCTION__);
 }
 static void test2(){
