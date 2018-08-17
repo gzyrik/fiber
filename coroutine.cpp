@@ -128,7 +128,7 @@ struct Routine {
     long  fd;
     Routine(const routine_t i, const std::function<void*(void*)>& f, const long ss):
         stack_size(ss), index(i), func(f),
-        status(Status::suspended), timeout(-1), fiber_stack(nullptr), parent(nullptr), 
+        status(Status::suspended), timeout(0), fiber_stack(nullptr), parent(nullptr), 
         data(nullptr), fd(0) {
 #if _USE_UCONTEXT || _USE_COCTX
         memset(&ctx, 0, sizeof(ctx));
@@ -167,6 +167,7 @@ struct Ordinator : public Routine {
     std::vector<Routine*> routines;
     std::list<routine_t> indexes;
     Routine* current;
+    uint64_t timeout;
     size_t count;
     HANDLE poll_fd;
 #ifndef _WIN32
@@ -175,7 +176,7 @@ struct Ordinator : public Routine {
     std::once_flag poll_init;
     static void _InitPoll(Ordinator*);
     void InitPoll() { if (!poll_fd) std::call_once(poll_init, _InitPoll, this); }
-    Ordinator() : Routine(0, nullptr, 0), current(this),
+    Ordinator() : Routine(0, nullptr, 0), current(this), timeout(-1),
         count(0), poll_fd(0), thread_id(Occupy(this)){
         routines.push_back(this);
     }
@@ -491,7 +492,10 @@ LPWSAOVERLAPPED overlap(long fd) {
 long wait(long fd, int events, unsigned timeout){
     Routine *routine = _ordinator.current;
     if (!routine) throw_logic("no current routine to wait");
-    routine->timeout = nowMS() + timeout;
+    if (timeout != 0) {
+        routine->timeout = nowMS() + timeout;
+        if (routine->timeout < _ordinator.timeout) _ordinator.timeout = routine->timeout;
+    }
 #ifdef _WIN32
     return reinterpret_cast<intptr_t>(YieldFiber(routine, Status::suspended));
 #else
@@ -524,31 +528,42 @@ void poll(int ms) {
     static const size_t kMaxEvents = 8192;
     std::vector<POLL_EVENT_T> events(128);
     _ordinator.InitPoll();
-    if (ms >= 0) tvStop = nowMS() + ms;
+    auto now = nowMS();
+    if (ms >= 0) tvStop = now + ms;
+    if (_ordinator.timeout == -1) _ordinator.timeout = now + 1000;
     while (true) {
+        int waitMs = _ordinator.timeout - nowMS();
+        if (waitMs < 0) waitMs = 0;
 #ifdef _WIN32
         ULONG n = 0;
-        if (!GetQueuedCompletionStatusEx(_ordinator.poll_fd, &events[0], events.size(), &n, 10, FALSE)) {
+        if (!GetQueuedCompletionStatusEx(_ordinator.poll_fd, &events[0], events.size(), &n, waitMs, FALSE)) {
             n = 0;
             if (GetLastError() != WAIT_TIMEOUT) throw_errno(GetQueuedCompletionStatusEx);
         }
 #elif _USE_EPOLL
-        int n = epoll_wait(_ordinator.poll_fd, &events[0], static_cast<int>(events.size()), 10);
+        int n = epoll_wait(_ordinator.poll_fd, &events[0], static_cast<int>(events.size()), waitMs);
         if (n < 0 && errno != EINTR) throw_errno(epoll_wait);
 #elif _USE_KEVENT
-        static struct timespec timeout = {.tv_sec=0, .tv_nsec=10 * 1000 * 1000};
+        struct timespec timeout;
+        timeout.tv_sec = waitMs/1000;
+        timeout.tv_nsec = (waitMs - timeout.tv_sec * 1000) * 1000000LL;
         int n = kevent(_ordinator.poll_fd, nullptr, 0, &events[0], static_cast<int>(events.size()), &timeout);
         if (n < 0 && errno != EINTR) throw_errno(kevent);
 #endif
         if (n <= 0) {
-            auto now = nowMS();
+            now = nowMS();
+            _ordinator.timeout = now + 1000;
             for (index=0; index<_ordinator.routines.size(); ++index) {
                 Routine* routine = _ordinator.routines[index];
-                if (routine && routine->status == Status::suspended  && routine->timeout <= now) {
+                if (!routine || routine->status != Status::suspended || !routine->timeout) continue;
+                if (routine->timeout <= now) {
+                    routine->timeout = 0;
                     routine->data = nullptr;
                     ResumeFiber(routine);
                     now = nowMS();
                 }
+                else if (routine->timeout < _ordinator.timeout)
+                    _ordinator.timeout = routine->timeout;
             }
             if (_ordinator.count == 0 || (ms >= 0 && tvStop <= now)) break;
         }
@@ -634,5 +649,27 @@ int post(routine_t id, long result) {
         throw_errno("write post_wfd");
 #endif
     return true;
+}
+////////////////////////////////////////////////////////////////////////////////////////////////
+long send(long fd, const char* buf, const long size, const void* addr, int addr_len) {
+    return wait(fd, coroutine::WRITE, [&](LPWSAOVERLAPPED overlapped, int revents) {
+#ifdef _WIN32
+        WSABUF wsabuf = { size, buf };
+        return WSASendTo(fd, &wsabuf, 1, nullptr, 0, (struct sockaddr*)addr, addr_len, overlapped, nullptr);
+#else
+        return ::sendto(fd, buf, size, 0, (struct sockaddr*)addr, addr_len);
+#endif
+    });
+}
+long recv(long fd, char* buf, const long size,  void* addr, int addr_len) {
+    return wait(fd, coroutine::READ, [&](LPWSAOVERLAPPED overlapped, int revents) {
+#ifdef _WIN32
+        WSABUF wsabuf = { size, buf };
+        DWORD flags = 0;
+        return WSARecv(fd, &wsabuf, 1, nullptr, &flags, overlapped, nullptr);
+#else
+        return ::recv(fd, buf, size, 0);
+#endif
+    });
 }
 }

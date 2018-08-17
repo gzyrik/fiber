@@ -57,6 +57,7 @@ void* resume(routine_t co, void* data);
  */
 void* yield(void* data);
 
+
 /** event mask */
 enum { TIMEOUT=0, READ=1, WRITE=2, CONNECT=4, ACCEPT=8 };
 
@@ -67,6 +68,10 @@ long wait(long fd, int events, unsigned timeout);
 void poll(int ms);
 
 int post(routine_t co, long result);
+
+
+long recv(long fd, char* buf, const long size, void* addr=nullptr, int addr_len=0);
+long send(long fd, const char* buf, const long size, const void* addr=nullptr, int addr_len=0);
 
 /** Use the overlapped for IOCP */
 #ifdef _WIN32

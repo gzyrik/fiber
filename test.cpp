@@ -78,15 +78,7 @@ static void* test3_recv(void* addr) {
     int ret = bind(fd, (sockaddr*)addr, addr_len);
     for (int i = 0; i < 10000; ++i) {
         fprintf(stderr, "\r%s %d", "test3", i);
-        ret = coroutine::wait(fd, coroutine::READ, [&](LPWSAOVERLAPPED overlapped, int revents) {
-#ifdef _WIN32
-            WSABUF wsabuf = { sizeof(buf), buf };
-            DWORD flags = 0;
-            return WSARecv(fd, &wsabuf, 1, nullptr, &flags, overlapped, nullptr);
-#else
-            return recv(fd, buf, sizeof(buf), 0);
-#endif
-        });
+        ret = coroutine::recv(fd,  buf, sizeof(buf));
         assert(ret == sizeof(buf));
     }
     closesocket(fd);
@@ -96,14 +88,7 @@ static void* test3_send(void*addr) {
     int fd = udp();
     char buf[1500] = { 0 };
     for (int i = 0; i < 10000; ++i) {
-        int ret = coroutine::wait(fd, coroutine::WRITE, [&](LPWSAOVERLAPPED overlapped, int revents) {
-#ifdef _WIN32
-            WSABUF wsabuf = { sizeof(buf), buf };
-            return WSASendTo(fd, &wsabuf, 1, nullptr, 0, (sockaddr*)addr, sizeof(sockaddr_in), overlapped, nullptr);
-#else
-            return sendto(fd, buf, sizeof(buf), 0, (sockaddr*)addr, sizeof(sockaddr_in));
-#endif
-        });
+        int ret = coroutine::send(fd, buf, sizeof(buf), addr, sizeof(sockaddr_in));
         assert(ret == sizeof(buf));
     }
     closesocket(fd);
