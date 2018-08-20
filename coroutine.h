@@ -59,23 +59,25 @@ void* yield(void* data);
 
 
 ////////////////////////////////////////////////////////////////////////////////
-/** event mask */
-enum { TIMEOUT=0, READ=1, WRITE=2, CONNECT=4, ACCEPT=8 };
-
-/** set timeout millsecond time */
+/** 设置 wait()的超时毫秒, 返回之前的旧值 */
 unsigned timeout(unsigned ms);
 
-/** Wait for the events */
+/** 等待文件 fd 的events 就绪 */
 long wait(long fd, int events);
 
-/** entry io poll loop */
+/** 预定义的事件 */
+enum { TIMEOUT=0, READ=1, WRITE=2, CONNECT=4, ACCEPT=8 };
+
+/** 进入事件主循环 */
 void poll(int ms);
 
+/** 唤醒wait(), result 作为其返回值 */
 int post(routine_t co, long result);
 
 ////////////////////////////////////////////////////////////////////////////////
-long recv(long fd, char* buf, const unsigned long size, void* addr=nullptr, int addr_len=0);
-long send(long fd, const char* buf, const unsigned long size, const void* addr=nullptr, int addr_len=0);
+long connect(long fd, const void* addr, int addr_len, const char* buf, const unsigned long size);
+long recv(long fd, char* buf, const unsigned long size, void* addr, void* addr_len);
+long send(long fd, const char* buf, const unsigned long size, const void* addr, int addr_len);
 
 /** Use the overlapped for IOCP */
 #ifdef _WIN32
@@ -83,6 +85,13 @@ LPWSAOVERLAPPED overlap(long fd);
 #endif
 
 #ifdef __cplusplus
+inline long connect(long fd, const void* addr, int addr_len)
+{   return connect(fd, addr, addr_len, nullptr, 0); }
+inline long recv(long fd, char* buf, const unsigned long size)
+{   return recv(fd, buf, size, nullptr, nullptr); }
+inline long send(long fd, const char* buf, const unsigned long size)
+{   return send(fd, buf, size, nullptr, 0); }
+
 routine_t create(const std::function<void*(void*)>&f , const long stack_size = 128*1024) noexcept;
 
 /** Creates a new coroutine, with body f.
@@ -99,7 +108,8 @@ inline std::function<void*(void*)> wrap(const std::function<void*(void*)>& f, co
 inline long wait(long fd, int events, const std::function<long(LPWSAOVERLAPPED overlapped, int revents)>& f) {
 #ifdef _WIN32
     const long ret = f(overlap(fd), events);
-    if (ret < 0 && WSAGetLastError() != ERROR_IO_PENDING) return ret;
+    if (ret >= 0) return ret;
+    if (WSAGetLastError() != ERROR_IO_PENDING) return ret;
     return wait(fd, events);
 #else
     if (!(events = (int)wait(fd, events))) return -1;

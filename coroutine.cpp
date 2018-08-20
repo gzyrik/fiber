@@ -26,6 +26,7 @@ static std::string Location(const char* file, int lineno, const char* format, ..
 #define throw_argument(desc, ...) throw std::invalid_argument(Location(__FILE__, __LINE__, #desc, ##__VA_ARGS__))
 #ifdef _WIN32
 #include <Windows.h>
+#include <mswsock.h>
 #include "ucontext_w.h"
 #pragma comment( lib,"winmm.lib" )
 #pragma comment(lib, "ws2_32.lib")
@@ -37,6 +38,7 @@ static std::string Location(const char* file, int lineno, const char* format, ..
 #define POLL_EVENT_T OVERLAPPED_ENTRY
 #define throw_errno(desc) \
     throw std::system_error(std::error_code(GetLastError(), std::system_category()), Location(__FILE__, __LINE__, #desc))
+static LPFN_CONNECTEX ConnectEx;
 #else
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE   1
@@ -659,24 +661,55 @@ int post(routine_t id, long result) {
     return true;
 }
 ////////////////////////////////////////////////////////////////////////////////
-long send(long fd, const char* buf, const unsigned long size, const void* addr, int addr_len) {
-    return wait(fd, coroutine::WRITE, [&](LPWSAOVERLAPPED overlapped, int revents) {
+long connect(long fd, const void* addr, int addr_len, const char* buf, const unsigned long size) {
+    long ret = wait(fd, CONNECT, [&](LPWSAOVERLAPPED overlapped, int revents) {
 #ifdef _WIN32
-        WSABUF wsabuf = { size, (CHAR*)buf };
-        return WSASendTo(fd, &wsabuf, 1, nullptr, 0, (struct sockaddr*)addr, addr_len, overlapped, nullptr);
+        DWORD bytesDone = 0;
+        long ret;
+        if (!ConnectEx) {
+            GUID guidConnectEx=WSAID_CONNECTEX;
+            ret = WSAIoctl(fd,SIO_GET_EXTENSION_FUNCTION_POINTER,
+                    &guidConnectEx,sizeof(guidConnectEx),&ConnectEx,sizeof(ConnectEx),&bytesDone,NULL,NULL);
+            if (ret < 0) return ret;
+        }
+        ret = ConnectEx(fd, (struct sockaddr*)addr, addr_len, (PVOID)buf, size, &bytesDone, overlapped))
+              ? long(bytesDone) : -1;
+        size = 0;
+        return ret;
 #else
-        return ::sendto(fd, buf, size, 0, (struct sockaddr*)addr, addr_len);
+        return ::connect(fd, (struct sockaddr*)addr, addr_len);
+#endif
+    });
+    if (buf && size && ret >= 0)
+        return send(fd, buf, size, addr, addr_len);
+    return ret;
+}
+long send(long fd, const char* buf, const unsigned long size, const void* addr, int addr_len) {
+    return wait(fd, WRITE, [&](LPWSAOVERLAPPED overlapped, int revents) {
+#ifdef _WIN32
+        DWORD bytesDone = 0;
+        WSABUF wsabuf = { size, (CHAR*)buf };
+        int ret = ::WSASendTo(fd, &wsabuf, 1, &bytesDone, 0, (struct sockaddr*)addr, addr_len, overlapped, nullptr);
+        return ret == 0 ? bytesDone : -1;
+#else
+        return addr && addr_len
+            ? ::sendto(fd, buf, size, 0, (struct sockaddr*)addr, addr_len)
+            : ::send(fd, buf, size, 0);
 #endif
     });
 }
-long recv(long fd, char* buf, const unsigned long size,  void* addr, int addr_len) {
-    return wait(fd, coroutine::READ, [&](LPWSAOVERLAPPED overlapped, int revents) {
+long recv(long fd, char* buf, const unsigned long size,  void* addr, void* addr_len) {
+    return wait(fd, READ, [&](LPWSAOVERLAPPED overlapped, int revents) {
 #ifdef _WIN32
+        DWORD bytesDone = 0;
         WSABUF wsabuf = { size, (CHAR*)buf };
         DWORD flags = 0;
-        return WSARecv(fd, &wsabuf, 1, nullptr, &flags, overlapped, nullptr);
+        int ret = ::WSARecv(fd, &wsabuf, 1, &bytesDone, &flags, overlapped, nullptr);
+        return ret == 0 ? bytesDone : -1;
 #else
-        return ::recv(fd, buf, size, 0);
+        return (addr && addr_len)
+            ? ::recvfrom(fd, buf, size, 0, (struct sockaddr*)addr, (socklen_t*)addr_len)
+            : ::recv(fd, buf, size, 0);
 #endif
     });
 }
