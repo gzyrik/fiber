@@ -74,8 +74,8 @@ void poll(int ms);
 int post(routine_t co, long result);
 
 ////////////////////////////////////////////////////////////////////////////////
-long recv(long fd, char* buf, const long size, void* addr=nullptr, int addr_len=0);
-long send(long fd, const char* buf, const long size, const void* addr=nullptr, int addr_len=0);
+long recv(long fd, char* buf, const unsigned long size, void* addr=nullptr, int addr_len=0);
+long send(long fd, const char* buf, const unsigned long size, const void* addr=nullptr, int addr_len=0);
 
 /** Use the overlapped for IOCP */
 #ifdef _WIN32

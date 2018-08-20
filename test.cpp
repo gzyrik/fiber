@@ -135,41 +135,49 @@ static void test5() {
     fprintf(stderr, "\r%s done: wrap, wait timeout\n", __FUNCTION__);
 }
 static void* f4_2(void*) {
-    auto id = coroutine::create(f, 0);
-    for (int i = 0; i < 10; ++i)
-        coroutine::resume(id, nullptr);
+    auto co = coroutine::create(f, 0);
+    //the same as test0()
+    for (int i = 0; i < 11; ++i) coroutine::resume(co, nullptr);
+    assert(!coroutine::status(co));
     return nullptr;
 }
 static void f4_1(int n, coroutine::routine_t co[]) {
     auto id = coroutine::create(f4_2, 0);
     coroutine::resume(id, nullptr);
+    assert(!coroutine::status(id));
     try {
         char a[1024 * 2] = { 0 };
         a[1023] = 0;
         for (int i = 0; i < 5; ++i) {
             for (int j = 0; j < n; ++j) coroutine::resume(co[j], nullptr);
         }
+        a[sizeof(a)-1] = 1;
     }
     catch (std::exception& e) {
-        std::cerr << "exception caught: " << e.what() << std::endl;
+        std::cerr << "\nexception caught: " << e.what() << std::endl;
     }
 }
 const int n = 1;
 static void* f4(void* data) {
     auto co = (coroutine::routine_t*)data;
-    for(int i=0;i<n;++i)
-        co[i] = coroutine::create(f,0);
-    for (int i = 0; i < 5; ++i) {
+    for(int i=0;i<n;++i) co[i] = coroutine::create(f,0);
+    //the same as test0()
+    for (int i = 0; i < 6; ++i) {
         for (int j = 0; j < n; ++j) coroutine::resume(co[j], nullptr);
     }
+    //fprintf(stderr, "\r%s using large stack", __FUNCTION__);
     f4_1(n, co);
+    for (int j = 0; j < n; ++j) assert(!coroutine::status(co[j]));
     return nullptr;
 }
 static void test6() {
     coroutine::routine_t c[n];
-    auto co = coroutine::create(f4, 1024*4+1024*1024);
+    long stack_size = 1024*2+1024*4;
+    auto co = coroutine::create(f4, stack_size);
+    fprintf(stderr, "\r%s stack_size=%ld kB", __FUNCTION__, stack_size/1000);
     coroutine::resume(co, c);
-    std::cerr << coroutine::status(co) << std::endl;
+    assert(!coroutine::status(co));
+    fprintf(stderr, "\r%s done: shared-stack\n", __FUNCTION__);
 }
 int main(int argc, char* argv[]){
 #ifdef _WIN32
@@ -180,6 +188,7 @@ int main(int argc, char* argv[]){
     test3();//poll
     test4();//post
     test5();//timeout
+    test6();//shared-stack
     fprintf(stderr, "test passed!\n");
     return 0;
 }

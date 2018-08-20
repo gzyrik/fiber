@@ -4,19 +4,26 @@
 #include <vector>
 #include <list>
 #include <cstdint>
+#include <cstdarg>
 #include <mutex>
 #include <system_error>
 #include <sstream>
 #include <string>
 #include "coctx.h"
-static std::string Location(const char* file, int lineno, const char* desc){
+static std::string Location(const char* file, int lineno, const char* format, ...){
+    char desc[1024]; {
+        va_list args;
+        va_start(args, format);
+        vsprintf(desc,  format, args);
+        va_end(args);
+    }
     std::ostringstream oss;
     oss<<file<<':'<<lineno<<": "<<desc;
     return oss.str();
 }
-#define throw_logic(desc) throw std::logic_error(Location(__FILE__, __LINE__, #desc))
-#define throw_overflow(desc) throw std::overflow_error(Location(__FILE__, __LINE__, #desc))
-#define throw_argument(desc) throw std::invalid_argument(Location(__FILE__, __LINE__, #desc))
+#define throw_logic(desc, ...) throw std::logic_error(Location(__FILE__, __LINE__, #desc, ##__VA_ARGS__))
+#define throw_overflow(desc, ...) throw std::overflow_error(Location(__FILE__, __LINE__, #desc, ##__VA_ARGS__))
+#define throw_argument(desc, ...) throw std::invalid_argument(Location(__FILE__, __LINE__, #desc, ##__VA_ARGS__))
 #ifdef _WIN32
 #include <Windows.h>
 #include "ucontext_w.h"
@@ -276,8 +283,7 @@ static void* ResumeFiber(Routine* routine) {
         static_assert(sizeof(intptr_t) == sizeof(Routine*), "invalid intptr_t");
         if (getcontext(&routine->ctx) != 0) throw_errno(getcontext);
         if (routine->stack_size <= 0) {
-            if (!current->ctx.uc_stack.ss_sp)
-                throw_logic("current routine no stack at resume");
+            if (!current->ctx.uc_stack.ss_sp) throw_logic("current routine no stack at resume");
             routine->ctx.uc_stack.ss_sp = current->ctx.uc_stack.ss_sp;
             routine->ctx.uc_stack.ss_size = (current->stack_sp - (char*)current->ctx.uc_stack.ss_sp + routine->stack_size - STACK_ALIGN) & ~(STACK_ALIGN-1);
         }
@@ -316,7 +322,8 @@ static void* ResumeFiber(Routine* routine) {
             if (current->stack_size <= 0)
                 current->fiber_stack = (char*)malloc(current->stack_len);
             else if (current->stack_sp <= current->fiber_stack + current->stack_len + STACK_MINSIZE)
-                throw_overflow("routine shared stack overflow");
+                throw_overflow("routine shared stack overflow, at least %ld kB",
+                    long(current->stack_len - (current->stack_sp - current->fiber_stack) + STACK_MINSIZE + current->stack_size+999)/1000);
             memcpy(current->fiber_stack, current->stack_sp, current->stack_len);
         }
     }
@@ -652,20 +659,20 @@ int post(routine_t id, long result) {
     return true;
 }
 ////////////////////////////////////////////////////////////////////////////////
-long send(long fd, const char* buf, const long size, const void* addr, int addr_len) {
+long send(long fd, const char* buf, const unsigned long size, const void* addr, int addr_len) {
     return wait(fd, coroutine::WRITE, [&](LPWSAOVERLAPPED overlapped, int revents) {
 #ifdef _WIN32
-        WSABUF wsabuf = { size, buf };
+        WSABUF wsabuf = { size, (CHAR*)buf };
         return WSASendTo(fd, &wsabuf, 1, nullptr, 0, (struct sockaddr*)addr, addr_len, overlapped, nullptr);
 #else
         return ::sendto(fd, buf, size, 0, (struct sockaddr*)addr, addr_len);
 #endif
     });
 }
-long recv(long fd, char* buf, const long size,  void* addr, int addr_len) {
+long recv(long fd, char* buf, const unsigned long size,  void* addr, int addr_len) {
     return wait(fd, coroutine::READ, [&](LPWSAOVERLAPPED overlapped, int revents) {
 #ifdef _WIN32
-        WSABUF wsabuf = { size, buf };
+        WSABUF wsabuf = { size, (CHAR*)buf };
         DWORD flags = 0;
         return WSARecv(fd, &wsabuf, 1, nullptr, &flags, overlapped, nullptr);
 #else
