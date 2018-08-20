@@ -121,14 +121,15 @@ struct Routine {
     const routine_t index;
     std::function<void*(void*)> func;
     Status status;
-    uint64_t timeout;
+    unsigned timeout;
+    uint64_t poll_end;
     char* fiber_stack;
     Routine *parent;
     void* data;
     long  fd;
     Routine(const routine_t i, const std::function<void*(void*)>& f, const long ss):
         stack_size(ss), index(i), func(f),
-        status(Status::suspended), timeout(0), fiber_stack(nullptr), parent(nullptr), 
+        status(Status::suspended), timeout(1000), poll_end(0), fiber_stack(nullptr), parent(nullptr), 
         data(nullptr), fd(0) {
 #if _USE_UCONTEXT || _USE_COCTX
         memset(&ctx, 0, sizeof(ctx));
@@ -167,7 +168,7 @@ struct Ordinator : public Routine {
     std::vector<Routine*> routines;
     std::list<routine_t> indexes;
     Routine* current;
-    uint64_t timeout;
+    uint64_t poll_end;
     size_t count;
     HANDLE poll_fd;
 #ifndef _WIN32
@@ -176,7 +177,7 @@ struct Ordinator : public Routine {
     std::once_flag poll_init;
     static void _InitPoll(Ordinator*);
     void InitPoll() { if (!poll_fd) std::call_once(poll_init, _InitPoll, this); }
-    Ordinator() : Routine(0, nullptr, 0), current(this), timeout(-1),
+    Ordinator() : Routine(0, nullptr, 0), current(this), poll_end(-1),
         count(0), poll_fd(0), thread_id(Occupy(this)){
         routines.push_back(this);
     }
@@ -489,13 +490,17 @@ LPWSAOVERLAPPED overlap(long fd) {
     return &routine->overlapped;
 }
 #endif
-long wait(long fd, int events, unsigned timeout){
+unsigned timeout(unsigned ms) {
+    Routine *routine = _ordinator.current;
+    unsigned old = routine->timeout;
+    routine->timeout = ms;
+    return old;
+}
+long wait(long fd, int events){
     Routine *routine = _ordinator.current;
     if (!routine) throw_logic("no current routine to wait");
-    if (timeout != 0) {
-        routine->timeout = nowMS() + timeout;
-        if (routine->timeout < _ordinator.timeout) _ordinator.timeout = routine->timeout;
-    }
+    routine->poll_end = nowMS() + routine->timeout;
+    if (routine->poll_end < _ordinator.poll_end) _ordinator.poll_end = routine->poll_end;
 #ifdef _WIN32
     return reinterpret_cast<intptr_t>(YieldFiber(routine, Status::suspended));
 #else
@@ -530,9 +535,9 @@ void poll(int ms) {
     _ordinator.InitPoll();
     auto now = nowMS();
     if (ms >= 0) tvStop = now + ms;
-    if (_ordinator.timeout == -1) _ordinator.timeout = now + 1000;
+    if (_ordinator.poll_end == -1) _ordinator.poll_end = now + 1000;
     while (true) {
-        int waitMs = _ordinator.timeout - nowMS();
+        int waitMs = _ordinator.poll_end - nowMS();
         if (waitMs < 0) waitMs = 0;
 #ifdef _WIN32
         ULONG n = 0;
@@ -550,63 +555,59 @@ void poll(int ms) {
         int n = kevent(_ordinator.poll_fd, nullptr, 0, &events[0], static_cast<int>(events.size()), &timeout);
         if (n < 0 && errno != EINTR) throw_errno(kevent);
 #endif
-        if (n <= 0) {
-            now = nowMS();
-            _ordinator.timeout = now + 1000;
-            for (index=0; index<_ordinator.routines.size(); ++index) {
-                Routine* routine = _ordinator.routines[index];
-                if (!routine || routine->status != Status::suspended || !routine->timeout) continue;
-                if (routine->timeout <= now) {
-                    routine->timeout = 0;
-                    routine->data = nullptr;
-                    ResumeFiber(routine);
-                    now = nowMS();
-                }
-                else if (routine->timeout < _ordinator.timeout)
-                    _ordinator.timeout = routine->timeout;
-            }
-            if (_ordinator.count == 0 || (ms >= 0 && tvStop <= now)) break;
-        }
-        else {
-            for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i) {
 #ifdef _WIN32
-                index =  static_cast<routine_t>(events[i].lpCompletionKey);
-                data = reinterpret_cast<void*>(events[i].dwNumberOfBytesTransferred);
+            index =  static_cast<routine_t>(events[i].lpCompletionKey);
+            data = reinterpret_cast<void*>(events[i].dwNumberOfBytesTransferred);
 #elif _USE_EPOLL
-                index = static_cast<routine_t>(events[i].data.u64);
-                data = reinterpret_cast<void*>(events[i].events);
+            index = static_cast<routine_t>(events[i].data.u64);
+            data = reinterpret_cast<void*>(events[i].events);
 #elif _USE_KEVENT
-                index = reinterpret_cast<routine_t>(events[i].udata);
-                data = reinterpret_cast<void*>(events[i].filter);
+            index = reinterpret_cast<routine_t>(events[i].udata);
+            data = reinterpret_cast<void*>(events[i].filter);
 #endif
 #ifndef _WIN32
-                if (index == -1) {
-                    struct post_event val;
-                    while (::read(_ordinator.post_rfd, &val, sizeof(val)) == sizeof(val)) {
-                        index = val.index;
-                        if (index >= _ordinator.routines.size() || !_ordinator.routines[index])
-                            continue;
-                        Routine* routine = _ordinator.routines[index];
-                        if (routine->status == Status::suspended) {
-                            routine->data = reinterpret_cast<void*>(val.result);
-                            ResumeFiber(routine);
-                        }
+            if (index == -1) {
+                struct post_event val;
+                while (::read(_ordinator.post_rfd, &val, sizeof(val)) == sizeof(val)) {
+                    index = val.index;
+                    if (index >= _ordinator.routines.size() || !_ordinator.routines[index])
+                        continue;
+                    Routine* routine = _ordinator.routines[index];
+                    if (routine->status == Status::suspended) {
+                        routine->data = reinterpret_cast<void*>(val.result);
+                        ResumeFiber(routine);
                     }
-                    continue;
                 }
-#endif
-                if (index >= _ordinator.routines.size() || !_ordinator.routines[index])
-                    continue;
-                Routine* routine = _ordinator.routines[index];
-                if (routine->status == Status::suspended) {
-                    routine->data = data;
-                    ResumeFiber(routine);
-                } 
+                continue;
             }
-            if (_ordinator.count == 0) break;
-            if (static_cast<size_t>(n) == events.size() && events.size() < kMaxEvents)
-                events.resize(events.size() * 2);
+#endif
+            if (index >= _ordinator.routines.size() || !_ordinator.routines[index])
+                continue;
+            Routine* routine = _ordinator.routines[index];
+            if (routine->status == Status::suspended) {
+                routine->data = data;
+                ResumeFiber(routine);
+            } 
         }
+
+        now = nowMS();
+        _ordinator.poll_end = now + 1000;
+        for (index=0; index<_ordinator.routines.size(); ++index) {
+            Routine* routine = _ordinator.routines[index];
+            if (!routine || routine->status != Status::suspended || !routine->poll_end) continue;
+            if (routine->poll_end <= now) {
+                routine->poll_end = 0;
+                routine->data = nullptr;
+                ResumeFiber(routine);
+                now = nowMS();
+            }
+            else if (routine->poll_end < _ordinator.poll_end)
+                _ordinator.poll_end = routine->poll_end;
+        }
+        if (_ordinator.count == 0 || (ms >= 0 && tvStop <= now)) break;
+        if (static_cast<size_t>(n) == events.size() && events.size() < kMaxEvents)
+            events.resize(events.size() * 2);
     }
 }
 int post(routine_t id, long result) {
@@ -650,7 +651,7 @@ int post(routine_t id, long result) {
 #endif
     return true;
 }
-////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 long send(long fd, const char* buf, const long size, const void* addr, int addr_len) {
     return wait(fd, coroutine::WRITE, [&](LPWSAOVERLAPPED overlapped, int revents) {
 #ifdef _WIN32

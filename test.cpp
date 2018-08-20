@@ -109,7 +109,7 @@ static void test3() {
 static void* test4_wait(void* data) {
     for (int i = 0; i < 10; ++i){
         fprintf(stderr, "\r%s %d", (char*)data, i);
-        assert(coroutine::wait(0, 0x100, 10000) == 0x1000);
+        assert(coroutine::wait(0, 0x100) == 0x1000);
     }
     return (void*)"end";
 }
@@ -126,8 +126,8 @@ static void test4() {
 }
 static void test5() {
     auto co = coroutine::wrap([](void*data) {
-        coroutine::wait(0, 0, 100);
-        fprintf(stderr, "\r%s timeout", (char*)data);
+        fprintf(stderr, "\r%s wait for 1000 ms timtout", (char*)data);
+        coroutine::wait(0, 0);
         return nullptr;
     });
     co((void*)__FUNCTION__);

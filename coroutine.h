@@ -58,18 +58,22 @@ void* resume(routine_t co, void* data);
 void* yield(void* data);
 
 
+////////////////////////////////////////////////////////////////////////////////
 /** event mask */
 enum { TIMEOUT=0, READ=1, WRITE=2, CONNECT=4, ACCEPT=8 };
 
+/** set timeout millsecond time */
+unsigned timeout(unsigned ms);
+
 /** Wait for the events */
-long wait(long fd, int events, unsigned timeout);
+long wait(long fd, int events);
 
 /** entry io poll loop */
 void poll(int ms);
 
 int post(routine_t co, long result);
 
-
+////////////////////////////////////////////////////////////////////////////////
 long recv(long fd, char* buf, const long size, void* addr=nullptr, int addr_len=0);
 long send(long fd, const char* buf, const long size, const void* addr=nullptr, int addr_len=0);
 
@@ -92,13 +96,13 @@ inline std::function<void*(void*)> wrap(const std::function<void*(void*)>& f, co
     return [id](void* data) { return resume(id, data); };
 }
 
-inline long wait(long fd, int events, const std::function<long(LPWSAOVERLAPPED overlapped, int revents)>& f, unsigned timeout=1000) {
+inline long wait(long fd, int events, const std::function<long(LPWSAOVERLAPPED overlapped, int revents)>& f) {
 #ifdef _WIN32
     const long ret = f(overlap(fd), events);
     if (ret < 0 && WSAGetLastError() != ERROR_IO_PENDING) return ret;
-    return wait(fd, events, timeout);
+    return wait(fd, events);
 #else
-    if (!(events = (int)wait(fd, events, timeout))) return -1;
+    if (!(events = (int)wait(fd, events))) return -1;
     return f(nullptr, events);
 #endif
 }
