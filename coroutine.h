@@ -60,7 +60,7 @@ void* yield(void* data);
 
 ////////////////////////////////////////////////////////////////////////////////
 /** 设置 wait()的超时毫秒, 返回之前的旧值 */
-unsigned timeout(unsigned ms);
+unsigned timeout(unsigned ms) noexcept;
 
 /** 等待文件 fd 的events 就绪 */
 long wait(long fd, int events);

@@ -165,14 +165,15 @@ static void* f4(void* data) {
     for (int i = 0; i < 6; ++i) {
         for (int j = 0; j < n; ++j) coroutine::resume(co[j], nullptr);
     }
-    //fprintf(stderr, "\r%s using large stack", __FUNCTION__);
+    char a[1024] = "using large stack 1024";
+    fprintf(stderr, "\r%s", a);
     f4_1(n, co);
     for (int j = 0; j < n; ++j) assert(!coroutine::status(co[j]));
     return nullptr;
 }
 static void test6() {
     coroutine::routine_t c[n];
-    long stack_size = 1024*2+1024*4;
+    long stack_size = 1024*2+1024*5;
     auto co = coroutine::create(f4, stack_size);
     fprintf(stderr, "\r%s stack_size=%ld kB", __FUNCTION__, stack_size/1000);
     coroutine::resume(co, c);

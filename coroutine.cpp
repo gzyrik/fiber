@@ -10,20 +10,13 @@
 #include <sstream>
 #include <string>
 #include "coctx.h"
-static std::string Location(const char* file, int lineno, const char* format, ...){
-    char desc[1024]; {
-        va_list args;
-        va_start(args, format);
-        vsprintf(desc,  format, args);
-        va_end(args);
-    }
-    std::ostringstream oss;
-    oss<<file<<':'<<lineno<<": "<<desc;
-    return oss.str();
-}
-#define throw_logic(desc, ...) throw std::logic_error(Location(__FILE__, __LINE__, #desc, ##__VA_ARGS__))
-#define throw_overflow(desc, ...) throw std::overflow_error(Location(__FILE__, __LINE__, #desc, ##__VA_ARGS__))
-#define throw_argument(desc, ...) throw std::invalid_argument(Location(__FILE__, __LINE__, #desc, ##__VA_ARGS__))
+#define STRINGIFY(macro_or_string)    STRINGIFY_ARG (macro_or_string)
+#define STRINGIFY_ARG(contents)       #contents
+#define STRTHROW(desc)  __FILE__ ":" STRINGIFY (__LINE__)" " #desc
+#define throw_logic(desc) throw std::logic_error(STRTHROW(desc))
+#define throw_overflow(desc) throw std::overflow_error(STRTHROW(desc))
+#define throw_argument(desc) throw std::invalid_argument(STRTHROW(desc))
+
 #ifdef _WIN32
 #include <Windows.h>
 #include <mswsock.h>
@@ -31,13 +24,13 @@ static std::string Location(const char* file, int lineno, const char* format, ..
 #pragma comment( lib,"winmm.lib" )
 #pragma comment(lib, "ws2_32.lib")
 #pragma warning(disable:4293)
-#define STACK_ALIGN 1024
-#define STACK_MINSIZE 1024
+#define STACK_ALIGN 16 
+#define STACK_MINSIZE 64
 #define _USE_UCONTEXT 0
 #define _USE_COCTX 0
 #define POLL_EVENT_T OVERLAPPED_ENTRY
 #define throw_errno(desc) \
-    throw std::system_error(std::error_code(GetLastError(), std::system_category()), Location(__FILE__, __LINE__, #desc))
+    throw std::system_error(std::error_code(GetLastError(), std::system_category()), STRTHROW(#desc))
 static LPFN_CONNECTEX ConnectEx;
 #else
 #ifndef _XOPEN_SOURCE
@@ -52,10 +45,10 @@ static LPFN_CONNECTEX ConnectEx;
 #define _USE_COCTX 1
 #define _USE_UCONTEXT 0
 #define throw_errno(desc) \
-    throw std::system_error(std::error_code(errno, std::system_category()), Location(__FILE__, __LINE__, #desc))
+    throw std::system_error(std::error_code(errno, std::system_category()), STRTHROW(desc))
 typedef int HANDLE;
 #define STACK_ALIGN 16
-#define STACK_MINSIZE 0
+#define STACK_MINSIZE 64
 #if __APPLE__ && __MACH__
 #include <mach/mach.h>
 #include <mach/mach_time.h>
@@ -221,9 +214,12 @@ static void* YieldFiber(Routine* routine, Status status) {
         throw_overflow("routine stack overflow at yield");
     if (status != Status::dead && routine->stack_size <= 0) {//save stack before swap
         char* stack_bp = (char*)(routine->ctx.uc_stack.ss_sp) + routine->ctx.uc_stack.ss_size;
-        routine->stack_len = stack_bp - routine->stack_sp;
-        routine->fiber_stack = (char*)malloc(routine->stack_len);
-        memcpy(routine->fiber_stack, routine->stack_sp, routine->stack_len);
+        if (stack_bp > routine->stack_sp) {
+            routine->stack_len = stack_bp - routine->stack_sp;
+            assert(!routine->fiber_stack);
+            routine->fiber_stack = (char*)malloc(routine->stack_len);
+            memcpy(routine->fiber_stack, routine->stack_sp, routine->stack_len);
+        }
     }
     if (swapcontext(&routine->ctx, &parent->ctx) != 0) throw_errno(swapcontext);
     routine = _ordinator.current;
@@ -287,9 +283,11 @@ static void* ResumeFiber(Routine* routine) {
         if (routine->stack_size <= 0) {
             if (!current->ctx.uc_stack.ss_sp) throw_logic("current routine no stack at resume");
             routine->ctx.uc_stack.ss_sp = current->ctx.uc_stack.ss_sp;
-            routine->ctx.uc_stack.ss_size = (current->stack_sp - (char*)current->ctx.uc_stack.ss_sp + routine->stack_size - STACK_ALIGN) & ~(STACK_ALIGN-1);
+            routine->ctx.uc_stack.ss_size = (current->stack_sp - (char*)current->ctx.uc_stack.ss_sp
+                    + routine->stack_size - STACK_ALIGN) & ~(STACK_ALIGN-1);
         }
         else {
+            assert(!routine->fiber_stack);
             routine->fiber_stack = (char*)malloc(routine->stack_size);
             routine->ctx.uc_stack.ss_sp = routine->fiber_stack;
             routine->ctx.uc_stack.ss_size = routine->stack_size;
@@ -321,11 +319,17 @@ static void* ResumeFiber(Routine* routine) {
         char* stack_bp = (char*)(routine->ctx.uc_stack.ss_sp) + routine->ctx.uc_stack.ss_size;
         if (stack_bp > current->stack_sp) {//save overlapped stack before swap
             current->stack_len = stack_bp - current->stack_sp;
-            if (current->stack_size <= 0)
+            if (current->stack_size <= 0) {
+                assert(!current->fiber_stack);
                 current->fiber_stack = (char*)malloc(current->stack_len);
-            else if (current->stack_sp <= current->fiber_stack + current->stack_len + STACK_MINSIZE)
-                throw_overflow("routine shared stack overflow, at least %ld kB",
-                    long(current->stack_len - (current->stack_sp - current->fiber_stack) + STACK_MINSIZE + current->stack_size+999)/1000);
+            }
+            else if (current->stack_sp <= current->fiber_stack + current->stack_len + STACK_MINSIZE) {
+                fprintf(stderr, "\nroutine shared stack overflow, at least %ld kB",
+                        long(current->stack_len
+                            - (current->stack_sp - current->fiber_stack)
+                            + STACK_MINSIZE + current->stack_size+999)/1000);
+                throw_overflow("routine shared stack overflow");
+            }
             memcpy(current->fiber_stack, current->stack_sp, current->stack_len);
         }
     }
@@ -499,7 +503,7 @@ LPWSAOVERLAPPED overlap(long fd) {
     return &routine->overlapped;
 }
 #endif
-unsigned timeout(unsigned ms) {
+unsigned timeout(unsigned ms) noexcept {
     Routine *routine = _ordinator.current;
     unsigned old = routine->timeout;
     routine->timeout = ms;
@@ -672,9 +676,9 @@ long connect(long fd, const void* addr, int addr_len, const char* buf, const uns
                     &guidConnectEx,sizeof(guidConnectEx),&ConnectEx,sizeof(ConnectEx),&bytesDone,NULL,NULL);
             if (ret < 0) return ret;
         }
-        ret = ConnectEx(fd, (struct sockaddr*)addr, addr_len, (PVOID)buf, size, &bytesDone, overlapped))
+        ret = ConnectEx(fd, (struct sockaddr*)addr, addr_len, (PVOID)buf, size, &bytesDone, overlapped)
               ? long(bytesDone) : -1;
-        size = 0;
+        buf = nullptr;
         return ret;
 #else
         return ::connect(fd, (struct sockaddr*)addr, addr_len);
