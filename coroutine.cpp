@@ -9,7 +9,6 @@
 #include <system_error>
 #include <sstream>
 #include <string>
-#include "coctx.h"
 #define STRINGIFY(macro_or_string)    STRINGIFY_ARG (macro_or_string)
 #define STRINGIFY_ARG(contents)       #contents
 #define STRTHROW(desc)  __FILE__ ":" STRINGIFY (__LINE__)" " #desc
@@ -31,7 +30,9 @@
 #define POLL_EVENT_T OVERLAPPED_ENTRY
 #define throw_errno(desc) \
     throw std::system_error(std::error_code(GetLastError(), std::system_category()), STRTHROW(#desc))
-static LPFN_CONNECTEX ConnectEx;
+static LPFN_CONNECTEX _lpfnConnectEx;
+static LPFN_ACCEPTEX _lpfnAcceptEx;
+static LPFN_DISCONNECTEX _lpfnDisconnectEx;
 #else
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE   1
@@ -64,6 +65,7 @@ typedef int HANDLE;
 #endif
 #if _USE_COCTX
 #undef _USE_UCONTEXT
+#include "coctx.h"
 #define ucontext_t coctx_t
 #define getcontext coctx_init
 #define swapcontext coctx_swap
@@ -237,10 +239,10 @@ static void* YieldFiber(Routine* routine, Status status) {
 }
 #if _USE_COCTX
 static void entry(void* lpParameter, void* a2)
+#elif _USE_UCONTEXT
+static void entry(int a1, int a2)
 #elif defined _WIN32
 static void __stdcall entry(LPVOID lpParameter)
-#else
-static void entry(int a1, int a2)
 #endif
 {
 #if _USE_UCONTEXT
@@ -665,28 +667,57 @@ int post(routine_t id, long result) {
     return true;
 }
 ////////////////////////////////////////////////////////////////////////////////
-long connect(long fd, const void* addr, int addr_len, const char* buf, const unsigned long size) {
-    long ret = wait(fd, CONNECT, [&](LPWSAOVERLAPPED overlapped, int revents) {
+int close(long fd) {
 #ifdef _WIN32
+    if (!_lpfnDisconnectEx) {
+        GUID guid=WSAID_DISCONNECTEX;
         DWORD bytesDone = 0;
-        long ret;
-        if (!ConnectEx) {
-            GUID guidConnectEx=WSAID_CONNECTEX;
-            ret = WSAIoctl(fd,SIO_GET_EXTENSION_FUNCTION_POINTER,
-                    &guidConnectEx,sizeof(guidConnectEx),&ConnectEx,sizeof(ConnectEx),&bytesDone,NULL,NULL);
-            if (ret < 0) return ret;
+        WSAIoctl(fd,SIO_GET_EXTENSION_FUNCTION_POINTER,
+                &guid,sizeof(guid),&_lpfnAcceptEx,sizeof(_lpfnAcceptEx),&bytesDone,nullptr,nullptr);
+    }
+    return (int)wait(fd, ACCEPT, [&](LPWSAOVERLAPPED overlapped, int revents) {
+        return _lpfnDisconnectEx(fd, overlapped, 0, 0) ? 0 : -1;
+    });
+#else
+    return ::close(fd);
+#endif
+}
+long accept(long fd, void* addr, void* addr_len) {
+#ifdef _WIN32
+    DWORD bytesDone = 0;
+    char lpOutputBuf[512+512];
+    if (!_lpfnAcceptEx) {
+        GUID guid=WSAID_ACCEPTEX;
+        WSAIoctl(fd,SIO_GET_EXTENSION_FUNCTION_POINTER,
+                &guid,sizeof(guid),&_lpfnAcceptEx,sizeof(_lpfnAcceptEx),&bytesDone,nullptr,nullptr);
+    }
+    SOCKET acceptSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    long ret = wait(fd, ACCEPT, [&](LPWSAOVERLAPPED overlapped, int revents) {
+        return _lpfnAcceptEx(fd, acceptSocket, lpOutputBuf, 0, 512, 512, &bytesDone, overlapped) ? 0 : -1;
+    });
+    if (ret < 0) return ret;
+    if (addr) memcpy(addr, lpOutputBuf+512, 512);
+    return  acceptSocket;
+#else
+    return wait(fd, ACCEPT, [&](LPWSAOVERLAPPED overlapped, int revents) {
+        return ::accept(fd, (struct sockaddr*)addr, (socklen_t*)addr_len);
+    });
+#endif
+}
+int connect(long fd, const void* addr, int addr_len) {
+    return (int)wait(fd, CONNECT, [&](LPWSAOVERLAPPED overlapped, int revents) {
+#ifdef _WIN32
+        if (!_lpfnConnectEx) {
+            GUID guid=WSAID_CONNECTEX;
+            DWORD bytesDone = 0;
+            WSAIoctl(fd,SIO_GET_EXTENSION_FUNCTION_POINTER,
+                    &guid,sizeof(guid),&_lpfnConnectEx,sizeof(_lpfnConnectEx),&bytesDone,nullptr,nullptr);
         }
-        ret = ConnectEx(fd, (struct sockaddr*)addr, addr_len, (PVOID)buf, size, &bytesDone, overlapped)
-              ? long(bytesDone) : -1;
-        buf = nullptr;
-        return ret;
+        return _lpfnConnectEx(fd, (struct sockaddr*)addr, addr_len, nullptr, 0, nullptr, overlapped) ? 0 : -1;
 #else
         return ::connect(fd, (struct sockaddr*)addr, addr_len);
 #endif
     });
-    if (buf && size && ret >= 0)
-        return send(fd, buf, size, addr, addr_len);
-    return ret;
 }
 long send(long fd, const char* buf, const unsigned long size, const void* addr, int addr_len) {
     return wait(fd, WRITE, [&](LPWSAOVERLAPPED overlapped, int revents) {

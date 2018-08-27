@@ -75,9 +75,11 @@ void poll(int ms);
 int post(routine_t co, long result);
 
 ////////////////////////////////////////////////////////////////////////////////
-long connect(long fd, const void* addr, int addr_len, const char* buf, const unsigned long size);
+long accept(long fd, void* addr, void* addr_len);
+int  connect(long fd, const void* addr, int addr_len);
 long recv(long fd, char* buf, const unsigned long size, void* addr, void* addr_len);
 long send(long fd, const char* buf, const unsigned long size, const void* addr, int addr_len);
+int  close(long fd);
 
 /** Use the overlapped for IOCP */
 #ifdef _WIN32
@@ -85,8 +87,6 @@ LPWSAOVERLAPPED overlap(long fd);
 #endif
 
 #ifdef __cplusplus
-inline long connect(long fd, const void* addr, int addr_len)
-{   return connect(fd, addr, addr_len, nullptr, 0); }
 inline long recv(long fd, char* buf, const unsigned long size)
 {   return recv(fd, buf, size, nullptr, nullptr); }
 inline long send(long fd, const char* buf, const unsigned long size)

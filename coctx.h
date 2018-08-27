@@ -14,13 +14,7 @@ typedef struct {
         size_t ss_size;
     } uc_stack;
 } coctx_t;
-#ifdef __cplusplus
-extern "C" {
-#endif
-    int coctx_init(coctx_t*ucp);
-    int coctx_make(coctx_t*ucp, void (*func)(void*s1, void*s2), void*s1, void*s2);
-    int coctx_swap(coctx_t *oucp, coctx_t *ucp);
-#ifdef __cplusplus
-}
-#endif
+int coctx_init(coctx_t*ucp) noexcept;
+int coctx_make(coctx_t*ucp, void (*func)(void*s1, void*s2), void*s1, void*s2) noexcept;
+extern "C" int coctx_swap(coctx_t *oucp, coctx_t *ucp) noexcept;
 #endif /* __UCONTEXT_S_H__ */

@@ -50,8 +50,8 @@ typedef struct __ucontext {
 	__sigset_t			uc_sigmask;
 } ucontext_t;
 
-int getcontext(ucontext_t*ucp);
-int makecontext(ucontext_t*ucp, void (*func)(), int argc, ...);
-int swapcontext(ucontext_t*oucp, const ucontext_t *ucp);
+int getcontext(ucontext_t*ucp) noexcept;
+int makecontext(ucontext_t*ucp, void (*func)(), int argc, ...) noexcept;
+int swapcontext(ucontext_t*oucp, const ucontext_t *ucp) noexcept;
 
 #endif /* __UCONTEXT_W_H__ */

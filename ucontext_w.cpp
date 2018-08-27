@@ -24,7 +24,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-int getcontext(ucontext_t *ucp)
+int getcontext(ucontext_t *ucp) noexcept
 {
 	int ret;
 
@@ -35,7 +35,7 @@ int getcontext(ucontext_t *ucp)
 	return (ret == 0) ? -1: 0;
 }
 
-int setcontext(const ucontext_t *ucp)
+static int setcontext(const ucontext_t *ucp) noexcept
 {
 	int ret;
 	
@@ -44,7 +44,7 @@ int setcontext(const ucontext_t *ucp)
 	return (ret == 0) ? -1: 0;
 }
 
-int makecontext(ucontext_t *ucp, void (*func)(), int argc, ...)
+int makecontext(ucontext_t *ucp, void (*func)(), int argc, ...) noexcept
 {
 	int i;
     va_list ap;
@@ -84,7 +84,7 @@ int makecontext(ucontext_t *ucp, void (*func)(), int argc, ...)
 	return 0;
 }
 
-int swapcontext(ucontext_t *oucp, const ucontext_t *ucp)
+int swapcontext(ucontext_t *oucp, const ucontext_t *ucp) noexcept
 {
 	int ret;
 

@@ -71,12 +71,12 @@ enum
 //yasm -rcpp -D_M_IX86=1 -DCDECL_ASM -fwin32 -pgas  coctx_swap.S -o coctx_swap32.obj 
 //yasm -rcpp -D_WIN64=1 -fwin64 -pgas  coctx_swap.S -o coctx_swap64.obj
 //g++ -o coctx_test.exe -DCDECL_ASM coctx_test.cpp ucontext_s.cpp coctx_swap.S 
-int coctx_init(coctx_t *ctx )
+int coctx_init(coctx_t *ctx ) noexcept
 {
     memset( ctx,0,sizeof(*ctx));
     return 0;
 }
-int coctx_make(coctx_t*ctx, void (*pfn)(void*s1, void*s2), void*s1, void*s2)
+int coctx_make(coctx_t*ctx, void (*pfn)(void*s1, void*s2), void*s1, void*s2) noexcept
 {
     memset(ctx->regs, 0, sizeof(ctx->regs));
     char *sp = ctx->uc_stack.ss_sp + ctx->uc_stack.ss_size;
