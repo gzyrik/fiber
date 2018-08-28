@@ -29,7 +29,7 @@
 #define _USE_COCTX 0
 #define POLL_EVENT_T OVERLAPPED_ENTRY
 #define throw_errno(desc) \
-    throw std::system_error(std::error_code(GetLastError(), std::system_category()), STRTHROW(#desc))
+    throw std::system_error(std::error_code(GetLastError(), std::system_category()), STRTHROW(desc))
 static LPFN_CONNECTEX _lpfnConnectEx;
 static LPFN_ACCEPTEX _lpfnAcceptEx;
 static LPFN_DISCONNECTEX _lpfnDisconnectEx;
@@ -350,10 +350,15 @@ static void* ResumeFiber(Routine* routine) {
             throw_errno(ConvertThreadToFiber);
     }
     if (!routine->fiber_stack) {
-        SIZE_T ss = 0;
-        if (routine->stack_size > 0) ss = routine->stack_size;
-        if (!(routine->fiber_stack = (char*)CreateFiber(ss, entry, static_cast<LPVOID>(routine))))
-            throw_errno(CreateFiber);
+        SIZE_T dwStackCommitSize = 0, dwStackReserveSize=0;
+        if (routine->stack_size >= 0)
+            dwStackReserveSize = routine->stack_size;
+        else
+            dwStackCommitSize = -routine->stack_size;
+
+        routine->fiber_stack = (char*)CreateFiberEx(dwStackCommitSize, dwStackReserveSize,
+                0, entry, static_cast<LPVOID>(routine));
+        if (!routine->fiber_stack) throw_errno(CreateFiberEx);
     }
     SwitchToFiber((LPVOID)routine->fiber_stack);
     if (_ordinator.current != current)
