@@ -2,45 +2,58 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include<time.h>
+#ifdef _WIN32
+#include <windows.h>
+static void sleep(int s) { Sleep(s*1000);}
+#else
 #include <unistd.h>
+#include <sys/time.h>
+#endif
 static int _count;
-static int consumer(struct pt *pt) PT_BEGIN(pt) {
+static PT_THREAD(consumer, char token);
+static PT_THREAD(producer, char token);
+static PT_THREAD(driver_thread, PT_CTX* pt1);
+
+PT_BEGIN(consumer, char token) {
     while (_count) {
-        PT_WAIT_UNTIL(pt, _count > 0);
+        PT_WAIT_UNTIL(_count > 0);
 
         if (rand() < RAND_MAX/2) {
             --_count;
-            putc('-',stderr);
+            putc(token,stderr);
         }
         else
-            PT_YIELD(pt);
+            PT_YIELD();
     }
-} PT_END(pt)
+} PT_END
 
-static int producer(struct pt *pt) PT_BEGIN(pt) {
+PT_BEGIN(producer, char token) {
     while (_count) {
-        PT_YIELD_UNTIL(pt, _count < 9);
+        PT_YIELD_UNTIL(_count < 9);
         if (rand() > RAND_MAX/2) {
             ++_count;
-            putc('+',stderr);
+            putc(token,stderr);
         }
     }
-} PT_END(pt)
+} PT_END
 
-static int driver_thread(struct pt *pt) PT_BEGIN(pt) {
-    static struct pt pt1, pt2;
-    PT_WAIT_THREAD(pt, producer(&pt1) & consumer(&pt2));
-} PT_END(pt)
+PT_BEGIN(driver_thread, PT_CTX* pt1) {
+    static PT_CTX pt2;
+    PT_WAIT_THREAD(producer(pt1, '+') & consumer(&pt2, '-'));
+} PT_END
 
 int main(void)
 {
-    static struct pt driver_pt;
+    PT_CTX driver_pt={0}, pt1={0};
+
     srand((int)time(0));
     _count = (rand() % 9)+1;
     putc('0'+_count,stderr);
-    while(PT_ALIVE(driver_thread(&driver_pt))) {
+
+    while(PT_ALIVE(driver_thread(&driver_pt, &pt1))) {
         sleep(1);putc('.',stderr);
     }
+
     putc('\n',stderr);
     return 0;
 }
