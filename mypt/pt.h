@@ -7,79 +7,82 @@
 #define PT_EXITED  2
 #define PT_ENDED   3
 
+#define _LC_REF(s) (*(PT_CTX*)(s))
+#define _LC_CLR(s) _LC_REF(s) = (PT_CTX)0;
+
+/** 协程的上下文环境
+ * @var typedef PT_CTX;
+ * 由于是 stackless 协程, 所以重入后所有函数内定义的局部值都会失效,
+ * 可以将局部值,暂存在自定义的上下文中. 例如
+ * struct my_cxt{ PT_CTX _; int i; };
+ */
 #ifdef __GNUC__
-struct pt { void * lc; };
+typedef void* PT_CTX;
 
-#define _LC_CLR(s) (s) = (void*)0;
-
-#define _LC_RESUME(s) if((s) != (void*)0) goto *(s);
+#define _LC_RESUME(s) if(_LC_REF(s) != (PT_CTX*)0) goto *_LC_REF(s);
 
 #define _LC_CONCAT2(s1, s2) s1##s2
 #define _LC_CONCAT(s1, s2) _LC_CONCAT2(s1, s2)
 #define _LC_SET(s) _LC_CONCAT(LC_LABEL, __LINE__): \
-    (s) = &&_LC_CONCAT(LC_LABEL, __LINE__);
+    _LC_REF(s) = &&_LC_CONCAT(LC_LABEL, __LINE__);
 
 #define _LC_END(s) _LC_CLR(s)
 
 #else
-struct pt { unsigned short lc; };
+typedef unsigned short PT_CTX;
 
-#define _LC_CLR(s) (s) = 0;
+#define _LC_RESUME(s) switch(_LC_REF(s)) { case 0:
 
-#define _LC_RESUME(s) switch(s) { case 0:
-
-#define _LC_SET(s) (s) = __LINE__; case __LINE__:
+#define _LC_SET(s) _LC_REF(s) = __LINE__; case __LINE__:
 
 #define _LC_END(s) } _LC_CLR(s)
 
 #endif
 
-/** 声明协程函数
- * @param func 函数名称
- * @param ...  相应的形参
+/** 开始协程代码块,必须以 PT_END 结尾.
+ * 注意: 在此之前的函数内代码,重入时将重复执行!
  */
-#define PT_THREAD(func, ...) char func(struct pt *PT_SELF_PTR, ##__VA_ARGS__)
+#define PT_BEGIN(pt) {\
+    char PT_YIELD_FLAG = 1; _LC_RESUME(pt)
 
-/** 开始协程函数的实现代码块,必须以 PT_END 结尾
- * @param func 函数名称
- * @param ...  相应的形参
+/** 结束协程代码块,必须与 PT_BEGIN 对应.
+ * 注意: 在此之后的函数内代码,将永远不会被执行!
  */
-#define PT_BEGIN(func, ...) char func(struct pt *PT_SELF_PTR, ##__VA_ARGS__){\
-    char PT_YIELD_FLAG = 1; _LC_RESUME(PT_SELF_PTR->lc)
+#define PT_END(pt) _LC_END(pt) return PT_ENDED; }
 
-/** 结束协程函数的实现代码块,必须与 PT_BEGIN 对应 */
-#define PT_END _LC_END(PT_SELF_PTR->lc) return PT_ENDED; }
-
-/** 判断条件为真,否则协程出让 */
-#define PT_WAIT_UNTIL(condition) do {\
-    _LC_SET(PT_SELF_PTR->lc)\
+/** 持续进行条件判断. 若为真,则继续, 反之出让 */
+#define PT_WAIT_UNTIL(pt, condition) do {\
+    _LC_SET(pt)\
     if(!(condition)) return PT_WAITING; \
 } while(0)
 
-/** 协程出让. 继续后再判断条件为真, 否则出让
+/** 出让等待重入后,持续判断条件
  * 与 PT_WAIT_UNTIL 区别在于,至少出让一次.
  */
-#define PT_YIELD_UNTIL(condition) do {\
+#define PT_YIELD_UNTIL(pt, condition) do {\
     PT_YIELD_FLAG = 0;\
-    _LC_SET(PT_SELF_PTR->lc)\
+    _LC_SET(pt)\
     if((PT_YIELD_FLAG == 0) || !(condition)) return PT_YIELDED;\
 } while(0)
 
-/** 协程出让. 继续后,从下行执行 */
-#define PT_YIELD() PT_YIELD_UNTIL(1)
-#define PT_ALIVE(f) ((f) < PT_EXITED)
+/** 出让等待重入后, 从下行执行 */
+#define PT_YIELD(pt) PT_YIELD_UNTIL(pt, 1)
 
-/**  等待子协程退出 */
-#define PT_WAIT_THREAD(thread) PT_WAIT_UNTIL(!PT_ALIVE(thread))
+/** 协程是否为存活状态. 即没调用 PT_END,PT_EXIT
+ * 多个协程时可用 &, 例如
+ * PT_ALIVE(thread1(&pt1) & thread2(&pt2))
+ */
+#define PT_ALIVE(threads) ((threads) < PT_EXITED)
 
-#define PT_EXIT() do {\
-    _LC_CLR(PT_SELF_PTR->lc) return PT_EXITED;\
-} while(0)
+/** 等待子协程退出 */
+#define PT_WAIT_THREAD(pt, threads) PT_WAIT_UNTIL(pt, !PT_ALIVE(threads))
 
-#define PT_RESTART() do {\
-    _LC_CLR(PT_SELF_PTR->lc) return PT_WAITING;\
-} while(0)
+/** 退出函数. 复位协程, 返回 PT_EXITED 状态 */
+#define PT_EXIT(pt) do { _LC_CLR(pt) return PT_EXITED; } while(0)
 
-#define PT_CTX  struct pt
+/** 退出函数. 复位协程, 返回 PT_WAITING 状态 
+ * 与 PT_EXIT 区别在于,返回值对 PT_ALIVE() 影响不同
+ */
+#define PT_RESTART(pt) do { _LC_CLR(pt) return PT_WAITING; } while(0)
 
 #endif
