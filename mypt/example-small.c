@@ -15,12 +15,12 @@ typedef struct {
 } ctx_t;
 static int _count;
 static int consumer(ctx_t* pt, char token) PT_BEGIN(pt){
-    while (_count) {
+    while (1) {
         PT_WAIT_UNTIL(pt, _count > 0);
 
-        if (rand() < RAND_MAX/2) {
-            --_count;
+        if (rand() > RAND_MAX/3) {
             putc(token,stderr);
+            if(--_count == 0) PT_EXIT(pt);
         }
         else
             PT_YIELD(pt);
@@ -29,11 +29,11 @@ static int consumer(ctx_t* pt, char token) PT_BEGIN(pt){
 
 static int producer(ctx_t* pt, char token) PT_BEGIN(pt) {
     while (_count) {
-        PT_YIELD_UNTIL(pt, _count < 9);
         if (rand() > RAND_MAX/2) {
-            ++_count;
             putc(token,stderr);
+            ++_count;
         }
+        PT_YIELD_UNTIL(pt, _count < 9);
     }
 } PT_END(pt)
 
@@ -50,8 +50,9 @@ int main(void)
     _count = (rand() % 9)+1;
     putc('0'+_count,stderr);
 
-    while(PT_ALIVE(driver_thread(&driver_pt, &pt1))) {
-        sleep(1);putc('.',stderr);
+    while(PT_SCHEDULE(driver_thread(&driver_pt, &pt1))) {
+        putc('.',stderr);
+        sleep(1);
     }
 
     putc('\n',stderr);

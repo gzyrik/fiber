@@ -26,7 +26,7 @@ typedef void* PT_CTX;
 #define _LC_SET(s) _LC_CONCAT(LC_LABEL, __LINE__): \
     _LC_REF(s) = &&_LC_CONCAT(LC_LABEL, __LINE__);
 
-#define _LC_END(s) _LC_CLR(s)
+#define _LC_END(s) _LC_SET(s)
 
 #else
 typedef unsigned short PT_CTX;
@@ -35,7 +35,7 @@ typedef unsigned short PT_CTX;
 
 #define _LC_SET(s) _LC_REF(s) = __LINE__; case __LINE__:
 
-#define _LC_END(s) } _LC_CLR(s)
+#define _LC_END(s) _LC_SET(s) break; }
 
 #endif
 
@@ -46,17 +46,19 @@ typedef unsigned short PT_CTX;
     char PT_YIELD_FLAG = 1; _LC_RESUME(pt)
 
 /** 结束协程代码块,必须与 PT_BEGIN 对应.
+ * 返回 PT_EXITED 状态
  * 注意: 在此之后的函数内代码,将永远不会被执行!
+ * 就算重入,也将直接跳至该处直接退出.
  */
 #define PT_END(pt) _LC_END(pt) return PT_ENDED; }
 
-/** 持续进行条件判断. 若为真,则继续, 反之出让 */
+/** 持续进行条件判断. 若为 true,则继续, 反之出让 */
 #define PT_WAIT_UNTIL(pt, condition) do {\
     _LC_SET(pt)\
     if(!(condition)) return PT_WAITING; \
 } while(0)
 
-/** 出让等待重入后,持续判断条件
+/** 出让并在重入后,持续判断条件
  * 与 PT_WAIT_UNTIL 区别在于,至少出让一次.
  */
 #define PT_YIELD_UNTIL(pt, condition) do {\
@@ -65,23 +67,34 @@ typedef unsigned short PT_CTX;
     if((PT_YIELD_FLAG == 0) || !(condition)) return PT_YIELDED;\
 } while(0)
 
-/** 出让等待重入后, 从下行执行 */
+/** 出让并在重入后, 从下行执行 */
 #define PT_YIELD(pt) PT_YIELD_UNTIL(pt, 1)
 
-/** 协程是否为存活状态. 即没调用 PT_END,PT_EXIT
- * 多个协程时可用 &, 例如
- * PT_ALIVE(thread1(&pt1) & thread2(&pt2))
+/** 调度一个或多个协程
+ * 只要有一个调度中的协程,不在退出状态(即没有执行 PT_END,PT_EXIT),
+ * 整个调度就返回 true.
+ *
+ * @param threads 一个或多个协程的函数调用,
+ * 多个时可用 &, 例如
+ *      while (PT_SCHEDULE(thread1(&pt1) & thread2(&pt2))) sleep(1);
  */
-#define PT_ALIVE(threads) ((threads) < PT_EXITED)
+#define PT_SCHEDULE(threads) ((threads) < PT_EXITED)
 
-/** 等待子协程退出 */
-#define PT_WAIT_THREAD(pt, threads) PT_WAIT_UNTIL(pt, !PT_ALIVE(threads))
+/** 持续调度一个或多个子协程
+ * 只要有一个调度中的子协程,不在退出状态(即没有执行 PT_END,PT_EXIT)
+ * 就出让并在重入后, 持续调度.
+ * @see PT_SCHEDULE
+ */
+#define PT_WAIT_THREAD(pt, threads) PT_WAIT_UNTIL(pt, !PT_SCHEDULE(threads))
 
-/** 退出函数. 复位协程, 返回 PT_EXITED 状态 */
-#define PT_EXIT(pt) do { _LC_CLR(pt) return PT_EXITED; } while(0)
+/** 退出协程
+ * 注意: 就算重入,也将直接跳至该处直接退出.
+ * 与 PT_END 区别在于, 返回PT_EXITED 状态
+ */
+#define PT_EXIT(pt) do { _LC_SET(pt) return PT_EXITED; } while(0)
 
-/** 退出函数. 复位协程, 返回 PT_WAITING 状态 
- * 与 PT_EXIT 区别在于,返回值对 PT_ALIVE() 影响不同
+/** 复位协程
+ * 出让并在重入后, 函数将重新从头执行
  */
 #define PT_RESTART(pt) do { _LC_CLR(pt) return PT_WAITING; } while(0)
 
