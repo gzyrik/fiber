@@ -547,14 +547,14 @@ struct post_event {
     routine_t index;
     long result;
 };
-void poll(int ms) {
+void poll(unsigned ms) {
     uint64_t tvStop;
     routine_t index; void* data;
     static const size_t kMaxEvents = 8192;
     std::vector<POLL_EVENT_T> events(128);
     _ordinator.InitPoll();
     auto now = nowMS();
-    if (ms >= 0) tvStop = now + ms;
+    if (ms != -1) tvStop = now + ms;
     if (_ordinator.poll_end == -1) _ordinator.poll_end = now + 1000;
     while (true) {
         int waitMs = _ordinator.poll_end - nowMS();
@@ -625,12 +625,12 @@ void poll(int ms) {
             else if (routine->poll_end < _ordinator.poll_end)
                 _ordinator.poll_end = routine->poll_end;
         }
-        if (_ordinator.count == 0 || (ms >= 0 && tvStop <= now)) break;
+        if (_ordinator.count == 0 || (ms != -1 && tvStop <= now)) break;
         if (static_cast<size_t>(n) == events.size() && events.size() < kMaxEvents)
             events.resize(events.size() * 2);
     }
 }
-int post(routine_t id, long result) {
+int post(routine_t id, long result, unsigned ms) {
     const uint8_t thread_id = static_cast<uint8_t>(id & 0xFF);
     id >>= 8;
     HANDLE post_wfd;
@@ -680,14 +680,14 @@ int close(long fd) {
         WSAIoctl(fd,SIO_GET_EXTENSION_FUNCTION_POINTER,
                 &guid,sizeof(guid),&_lpfnAcceptEx,sizeof(_lpfnAcceptEx),&bytesDone,nullptr,nullptr);
     }
-    return (int)wait(fd, ACCEPT, [&](LPWSAOVERLAPPED overlapped, int revents) {
+    return (int)wait(fd, WRITE, [&](LPWSAOVERLAPPED overlapped, int revents) {
         return _lpfnDisconnectEx(fd, overlapped, 0, 0) ? 0 : -1;
     });
 #else
     return ::close(fd);
 #endif
 }
-long accept(long fd, void* addr, void* addr_len) {
+long accept(long fd, sockaddr* addr, void* addr_len) {
 #ifdef _WIN32
     DWORD bytesDone = 0;
     char lpOutputBuf[512+512];
@@ -705,11 +705,11 @@ long accept(long fd, void* addr, void* addr_len) {
     return  acceptSocket;
 #else
     return wait(fd, ACCEPT, [&](LPWSAOVERLAPPED overlapped, int revents) {
-        return ::accept(fd, (struct sockaddr*)addr, (socklen_t*)addr_len);
+        return ::accept(fd, addr, (socklen_t*)addr_len);
     });
 #endif
 }
-int connect(long fd, const void* addr, int addr_len) {
+int connect(long fd, const sockaddr* addr, int addr_len) {
     return (int)wait(fd, CONNECT, [&](LPWSAOVERLAPPED overlapped, int revents) {
 #ifdef _WIN32
         if (!_lpfnConnectEx) {
@@ -718,27 +718,27 @@ int connect(long fd, const void* addr, int addr_len) {
             WSAIoctl(fd,SIO_GET_EXTENSION_FUNCTION_POINTER,
                     &guid,sizeof(guid),&_lpfnConnectEx,sizeof(_lpfnConnectEx),&bytesDone,nullptr,nullptr);
         }
-        return _lpfnConnectEx(fd, (struct sockaddr*)addr, addr_len, nullptr, 0, nullptr, overlapped) ? 0 : -1;
+        return _lpfnConnectEx(fd, addr, addr_len, nullptr, 0, nullptr, overlapped) ? 0 : -1;
 #else
-        return ::connect(fd, (struct sockaddr*)addr, addr_len);
+        return ::connect(fd, addr, addr_len);
 #endif
     });
 }
-long send(long fd, const char* buf, const unsigned long size, const void* addr, int addr_len) {
+long send(long fd, const char* buf, const unsigned long size, const sockaddr* addr, int addr_len) {
     return wait(fd, WRITE, [&](LPWSAOVERLAPPED overlapped, int revents) {
 #ifdef _WIN32
         DWORD bytesDone = 0;
         WSABUF wsabuf = { size, (CHAR*)buf };
-        int ret = ::WSASendTo(fd, &wsabuf, 1, &bytesDone, 0, (struct sockaddr*)addr, addr_len, overlapped, nullptr);
+        int ret = ::WSASendTo(fd, &wsabuf, 1, &bytesDone, 0, addr, addr_len, overlapped, nullptr);
         return ret == 0 ? bytesDone : -1;
 #else
         return addr && addr_len
-            ? ::sendto(fd, buf, size, 0, (struct sockaddr*)addr, addr_len)
+            ? ::sendto(fd, buf, size, 0, addr, addr_len)
             : ::send(fd, buf, size, 0);
 #endif
     });
 }
-long recv(long fd, char* buf, const unsigned long size,  void* addr, void* addr_len) {
+long recv(long fd, char* buf, const unsigned long size, sockaddr* addr, void* addr_len) {
     return wait(fd, READ, [&](LPWSAOVERLAPPED overlapped, int revents) {
 #ifdef _WIN32
         DWORD bytesDone = 0;
@@ -748,7 +748,7 @@ long recv(long fd, char* buf, const unsigned long size,  void* addr, void* addr_
         return ret == 0 ? bytesDone : -1;
 #else
         return (addr && addr_len)
-            ? ::recvfrom(fd, buf, size, 0, (struct sockaddr*)addr, (socklen_t*)addr_len)
+            ? ::recvfrom(fd, buf, size, 0, addr, (socklen_t*)addr_len)
             : ::recv(fd, buf, size, 0);
 #endif
     });

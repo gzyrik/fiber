@@ -88,7 +88,7 @@ static void* test3_send(void*addr) {
     int fd = udp();
     char buf[1500] = { 0 };
     for (int i = 0; i < 10000; ++i) {
-        int ret = coroutine::send(fd, buf, sizeof(buf), addr, sizeof(sockaddr_in));
+        int ret = coroutine::send(fd, buf, sizeof(buf), (sockaddr*)addr, sizeof(sockaddr_in));
         assert(ret == sizeof(buf));
     }
     closesocket(fd);

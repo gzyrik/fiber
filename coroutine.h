@@ -6,6 +6,7 @@
 #else
 typedef struct _OVERLAPPED * LPWSAOVERLAPPED;
 #endif
+typedef struct sockaddr sockaddr;
 #ifdef __cplusplus
 #include <functional>
 namespace coroutine {
@@ -69,16 +70,16 @@ long wait(long fd, int events);
 enum { TIMEOUT=0, READ=1, WRITE=2, CONNECT=4, ACCEPT=8 };
 
 /** 进入事件主循环 */
-void poll(int ms);
+void poll(unsigned ms);
 
 /** 唤醒wait(), result 作为其返回值 */
-int post(routine_t co, long result);
+int post(routine_t co, long result, unsigned ms);
 
 ////////////////////////////////////////////////////////////////////////////////
-long accept(long fd, void* addr, void* addr_len);
-int  connect(long fd, const void* addr, int addr_len);
-long recv(long fd, char* buf, const unsigned long size, void* addr, void* addr_len);
-long send(long fd, const char* buf, const unsigned long size, const void* addr, int addr_len);
+long accept(long fd, sockaddr* addr, void* addr_len);
+int  connect(long fd, const sockaddr* addr, int addr_len);
+long recv(long fd, char* buf, const unsigned long size, sockaddr* addr, void* addr_len);
+long send(long fd, const char* buf, const unsigned long size, const sockaddr* addr, int addr_len);
 int  close(long fd);
 
 /** Use the overlapped for IOCP */
