@@ -328,7 +328,7 @@ ST_HIDDEN void _st_select_dispatch(void)
     }
 
     /* Check for I/O operations */
-    nfd = select(_ST_SELECT_MAX_OSFD + 1, rp, wp, ep, tvp);
+    nfd = _ST_SYS_CALL(select)(_ST_SELECT_MAX_OSFD + 1, rp, wp, ep, tvp);
 
     /* Notify threads that are associated with the selected descriptors */
     if (nfd > 0) {
@@ -532,7 +532,7 @@ ST_HIDDEN void _st_poll_dispatch(void)
     }
 
     /* Check for I/O operations */
-    nfd = poll(_ST_POLLFDS, _ST_POLL_OSFD_CNT, timeout);
+    nfd = _ST_SYS_CALL(poll)(_ST_POLLFDS, _ST_POLL_OSFD_CNT, timeout);
 
     /* Notify threads that are associated with the selected descriptors */
     if (nfd > 0) {
@@ -1265,8 +1265,8 @@ ST_HIDDEN void _st_epoll_dispatch(void)
     }
 
     /* Check for I/O operations */
-    nfd = epoll_wait(_st_epoll_data->epfd, _st_epoll_data->evtlist,
-                     _st_epoll_data->evtlist_size, timeout);
+    nfd = _ST_SYS_CALL(epoll_wait)(_st_epoll_data->epfd, _st_epoll_data->evtlist,
+                                   _st_epoll_data->evtlist_size, timeout);
 
     if (nfd > 0) {
         for (i = 0; i < nfd; i++) {

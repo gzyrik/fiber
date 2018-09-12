@@ -78,7 +78,7 @@ static void print_sys_error(const char *msg);
 int main(int argc, char *argv[])
 {
   extern char *optarg;
-  int opt, sock, n;
+  int opt, sock; socklen_t n;
   int laddr, raddr, num_procs, alt_ev, one_process;
   int serialize_accept = 0;
   struct sockaddr_in lcl_addr, cli_addr;

@@ -137,8 +137,9 @@ extern void *st_netfd_getspecific(st_netfd_t fd);
 extern int st_netfd_serialize_accept(st_netfd_t fd);
 extern int st_netfd_poll(st_netfd_t fd, int how, st_utime_t timeout);
 
+extern int st_socket(int domain, int type, int protocol);
 extern int st_poll(struct pollfd *pds, int npds, st_utime_t timeout);
-extern st_netfd_t st_accept(st_netfd_t fd, struct sockaddr *addr, int *addrlen,
+extern st_netfd_t st_accept(st_netfd_t fd, struct sockaddr *addr, socklen_t *addrlen,
 			    st_utime_t timeout);
 extern int st_connect(st_netfd_t fd, const struct sockaddr *addr, int addrlen,
 		      st_utime_t timeout);
@@ -160,10 +161,14 @@ extern ssize_t st_writev(st_netfd_t fd, const struct iovec *iov, int iov_size,
 			 st_utime_t timeout);
 extern int st_writev_resid(st_netfd_t fd, struct iovec **iov, int *iov_size,
 			   st_utime_t timeout);
-extern int st_recvfrom(st_netfd_t fd, void *buf, int len, int flags,
-		       struct sockaddr *from, int *fromlen,
+extern int st_recv(st_netfd_t fd, void *buf, int len, int flags,
 		       st_utime_t timeout);
-extern int st_sendto(st_netfd_t fd, const void *msg, int len,
+extern int st_recvfrom(st_netfd_t fd, void *buf, int len, int flags,
+		       struct sockaddr *from, socklen_t *fromlen,
+		       st_utime_t timeout);
+extern int st_send(st_netfd_t fd, const void *buf, size_t len, int flags,
+               st_utime_t timeout);
+extern int st_sendto(st_netfd_t fd, const void *msg, int len, int flags,
 		     const struct sockaddr *to, int tolen, st_utime_t timeout);
 extern int st_recvmsg(st_netfd_t fd, struct msghdr *msg, int flags,
 		      st_utime_t timeout);
@@ -174,6 +179,10 @@ extern st_netfd_t st_open(const char *path, int oflags, mode_t mode);
 #ifdef DEBUG
 extern void _st_show_thread_stack(st_thread_t thread, const char *messg);
 extern void _st_iterate_threads(void);
+#endif
+
+#ifdef ST_HOOK_SYS
+extern st_netfd_t st_netfd(int osfd);
 #endif
 
 #ifdef __cplusplus

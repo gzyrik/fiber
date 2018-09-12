@@ -129,8 +129,7 @@ static int parse_answer(querybuf_t *ans, int len, struct in_addr *addr)
 }
 
 
-static int query_domain(st_netfd_t nfd, const char *name, struct in_addr *addr,
-			st_utime_t timeout)
+static int query_domain(int nfd, const char *name, struct in_addr *addr)
 {
   querybuf_t qbuf;
   u_char *buf = qbuf.buf;
@@ -146,8 +145,8 @@ static int query_domain(st_netfd_t nfd, const char *name, struct in_addr *addr,
     }
     id = hp->id;
 
-    if (st_sendto(nfd, buf, len, (struct sockaddr *)&(_res.nsaddr_list[i]),
-		  sizeof(struct sockaddr), timeout) != len) {
+    if (sendto(nfd, buf, len, 0, (struct sockaddr *)&(_res.nsaddr_list[i]),
+		  sizeof(struct sockaddr)) != len) {
       h_errno = NETDB_INTERNAL;
       /* EINTR means interrupt by other thread, NOT by a caught signal */
       if (errno == EINTR)
@@ -157,7 +156,7 @@ static int query_domain(st_netfd_t nfd, const char *name, struct in_addr *addr,
 
     /* Wait for reply */
     do {
-      len = st_recvfrom(nfd, buf, blen, NULL, NULL, timeout);
+      len = recvfrom(nfd, buf, blen, 0, NULL, NULL);
       if (len <= 0)
 	break;
     } while (id != hp->id);
@@ -204,7 +203,7 @@ static int query_domain(st_netfd_t nfd, const char *name, struct in_addr *addr,
 #define CLOSE_AND_RETURN(ret) \
   {                           \
     n = errno;                \
-    st_netfd_close(nfd);      \
+    close(nfd);               \
     errno = n;                \
     return (ret);             \
   }
@@ -214,9 +213,8 @@ int dns_getaddr(const char *host, struct in_addr *addr, st_utime_t timeout)
 {
   char name[MAXDNAME], **domain;
   const char *cp;
-  int s, n, maxlen, dots;
+  int nfd, n, maxlen, dots;
   int trailing_dot, tried_as_is;
-  st_netfd_t nfd;
 
   if ((_res.options & RES_INIT) == 0 && res_init() == -1) {
     h_errno = NETDB_INTERNAL;
@@ -233,15 +231,8 @@ int dns_getaddr(const char *host, struct in_addr *addr, st_utime_t timeout)
   }
 
   /* Create UDP socket */
-  if ((s = socket(PF_INET, SOCK_DGRAM, 0)) < 0) {
+  if ((nfd = socket(PF_INET, SOCK_DGRAM, 0)) < 0) {
     h_errno = NETDB_INTERNAL;
-    return -1;
-  }
-  if ((nfd = st_netfd_open_socket(s)) == NULL) {
-    h_errno = NETDB_INTERNAL;
-    n = errno;
-    close(s);
-    errno = n;
     return -1;
   }
 
@@ -263,7 +254,7 @@ int dns_getaddr(const char *host, struct in_addr *addr, st_utime_t timeout)
    * 'as is'.  The threshold can be set with the "ndots" option.
    */
   if (dots >= _res.ndots) {
-    if (query_domain(nfd, host, addr, timeout) == 0)
+    if (query_domain(nfd, host, addr) == 0)
       CLOSE_AND_RETURN(0);
     if (h_errno == NETDB_INTERNAL && errno == EINTR)
       CLOSE_AND_RETURN(-1);
@@ -281,7 +272,7 @@ int dns_getaddr(const char *host, struct in_addr *addr, st_utime_t timeout)
     name[n++] = '.';
     for (domain = _res.dnsrch; *domain; domain++) {
       strncpy(name + n, *domain, maxlen - n);
-      if (query_domain(nfd, name, addr, timeout) == 0)
+      if (query_domain(nfd, name, addr) == 0)
 	CLOSE_AND_RETURN(0);
       if (h_errno == NETDB_INTERNAL && errno == EINTR)
 	CLOSE_AND_RETURN(-1);
@@ -296,7 +287,7 @@ int dns_getaddr(const char *host, struct in_addr *addr, st_utime_t timeout)
    * name or whether it ends with a dot.
    */
   if (!tried_as_is) {
-    if (query_domain(nfd, host, addr, timeout) == 0)
+    if (query_domain(nfd, host, addr) == 0)
       CLOSE_AND_RETURN(0);
   }
 

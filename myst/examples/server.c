@@ -851,7 +851,7 @@ static void *handle_connections(void *arg)
 {
   st_netfd_t srv_nfd, cli_nfd;
   struct sockaddr_in from;
-  int fromlen;
+  socklen_t fromlen;
   long i = (long) arg;
 
   srv_nfd = srv_socket[i].nfd;

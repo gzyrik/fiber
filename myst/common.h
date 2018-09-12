@@ -245,6 +245,9 @@ typedef struct _st_netfd {
   _st_destructor_t destructor; /* Private data destructor function */
   void *aux_data;             /* Auxiliary data for internal use */
   struct _st_netfd *next;     /* For putting on the free list */
+#ifdef ST_HOOK_SYS
+  st_utime_t snd_timeo, rcv_timeo;
+#endif
 } _st_netfd_t;
 
 
@@ -434,6 +437,15 @@ void _st_iterate_threads(void);
  */
 #define _ST_STACK_PAD_SIZE MD_STACK_PAD_SIZE
 
+#ifdef ST_HOOK_SYS
+#define _ST_SYS_CALL(func) func##_f
+extern int (*select_f)(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
+extern int (*poll_f)(struct pollfd *fds, nfds_t nfds, int timeout);
+struct epoll_event;
+extern int (*epoll_wait_f)(int epfd, struct epoll_event *events, int maxevents, int timeout);
+#else
+#define _ST_SYS_CALL(func) func
+#endif
 
 /*****************************************
  * Forward declarations

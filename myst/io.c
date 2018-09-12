@@ -68,6 +68,10 @@ static int _st_osfd_limit = -1;
 
 static void _st_netfd_free_aux_data(_st_netfd_t *fd);
 
+#ifdef ST_HOOK_SYS
+#include "hook.h"
+#endif
+
 int _st_io_init(void)
 {
   struct sigaction sigact;
@@ -94,7 +98,11 @@ int _st_io_init(void)
     return -1;
   _st_osfd_limit = (int) rlim.rlim_max;
 
+#ifdef ST_HOOK_SYS
+  return _st_hook_init();
+#else
   return 0;
+#endif
 }
 
 
@@ -108,6 +116,10 @@ void st_netfd_free(_st_netfd_t *fd)
 {
   if (!fd->inuse)
     return;
+
+#ifdef ST_HOOK_SYS
+  _st_netfd_hook[fd->osfd] = NULL;
+#endif
 
   fd->inuse = 0;
   if (fd->aux_data)
@@ -144,16 +156,20 @@ static _st_netfd_t *_st_netfd_new(int osfd, int nonblock, int is_socket)
 
   if (nonblock) {
     /* Use just one system call */
-    if (is_socket && ioctl(osfd, FIONBIO, &flags) != -1)
-      return fd;
+    if (is_socket && _ST_SYS_CALL(ioctl)(osfd, FIONBIO, &flags) != -1)
+      ;
     /* Do it the Posix way */
-    if ((flags = fcntl(osfd, F_GETFL, 0)) < 0 ||
-        fcntl(osfd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    else if ((flags = _ST_SYS_CALL(fcntl)(osfd, F_GETFL, 0)) < 0 ||
+        _ST_SYS_CALL(fcntl)(osfd, F_SETFL, flags | O_NONBLOCK) < 0) {
       st_netfd_free(fd);
       return NULL;
     }
   }
 
+#ifdef ST_HOOK_SYS
+  fd->snd_timeo = fd->rcv_timeo = ST_UTIME_NO_TIMEOUT;
+  _st_netfd_hook[osfd] = fd;
+#endif
   return fd;
 }
 
@@ -176,7 +192,7 @@ int st_netfd_close(_st_netfd_t *fd)
     return -1;
 
   st_netfd_free(fd);
-  return close(fd->osfd);
+  return _ST_SYS_CALL(close)(fd->osfd);
 }
 
 
@@ -247,13 +263,13 @@ static void _st_netfd_free_aux_data(_st_netfd_t *fd)
   fd->aux_data = NULL;
 }
 
-_st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, int *addrlen,
+_st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, socklen_t *addrlen,
                        st_utime_t timeout)
 {
   int osfd, err;
   _st_netfd_t *newfd;
 
-  while ((osfd = accept(fd->osfd, addr, (socklen_t *)addrlen)) < 0) {
+  while ((osfd = _ST_SYS_CALL(accept)(fd->osfd, addr, addrlen)) < 0) {
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -275,7 +291,7 @@ _st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, int *addrlen,
 
   if (!newfd) {
     err = errno;
-    close(osfd);
+    _ST_SYS_CALL(close)(osfd);
     errno = err;
   }
 
@@ -306,7 +322,7 @@ int st_netfd_serialize_accept(_st_netfd_t *fd)
   }
   if ((p[0] = st_netfd_open(osfd[0])) != NULL &&
       (p[1] = st_netfd_open(osfd[1])) != NULL &&
-      write(osfd[1], " ", 1) == 1) {
+      _ST_SYS_CALL(write)(osfd[1], " ", 1) == 1) {
     fd->aux_data = p;
     return 0;
   }
@@ -316,8 +332,8 @@ int st_netfd_serialize_accept(_st_netfd_t *fd)
     st_netfd_free(p[0]);
   if (p[1])
     st_netfd_free(p[1]);
-  close(osfd[0]);
-  close(osfd[1]);
+  _ST_SYS_CALL(close)(osfd[0]);
+  _ST_SYS_CALL(close)(osfd[1]);
   free(p);
   errno = err;
 
@@ -334,7 +350,7 @@ static void _st_netfd_free_aux_data(_st_netfd_t *fd)
   fd->aux_data = NULL;
 }
 
-_st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, int *addrlen,
+_st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, socklen_t *addrlen,
                        st_utime_t timeout)
 {
   int osfd, err;
@@ -345,7 +361,7 @@ _st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, int *addrlen,
 
   for ( ; ; ) {
     if (p == NULL) {
-      osfd = accept(fd->osfd, addr, (socklen_t *)addrlen);
+      osfd = _ST_SYS_CALL(accept)(fd->osfd, addr, addrlen);
     } else {
       /* Get the lock */
       n = st_read(p[0], &c, 1, timeout);
@@ -353,7 +369,7 @@ _st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, int *addrlen,
         return NULL;
       ST_ASSERT(n == 1);
       /* Got the lock */
-      osfd = accept(fd->osfd, addr, (socklen_t *)addrlen);
+      osfd = _ST_SYS_CALL(accept)(fd->osfd, addr, addrlen);
       /* Unlock */
       err = errno;
       n = st_write(p[1], &c, 1, timeout);
@@ -383,7 +399,7 @@ _st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, int *addrlen,
 
   if (!newfd) {
     err = errno;
-    close(osfd);
+    _ST_SYS_CALL(close)(osfd);
     errno = err;
   }
 
@@ -397,7 +413,7 @@ int st_connect(_st_netfd_t *fd, const struct sockaddr *addr, int addrlen,
 {
   int n, err = 0;
 
-  while (connect(fd->osfd, addr, addrlen) < 0) {
+  while (_ST_SYS_CALL(connect)(fd->osfd, addr, addrlen) < 0) {
     if (errno != EINTR) {
       /*
        * On some platforms, if connect() is interrupted (errno == EINTR)
@@ -434,7 +450,7 @@ ssize_t st_read(_st_netfd_t *fd, void *buf, size_t nbyte, st_utime_t timeout)
 {
   ssize_t n;
 
-  while ((n = read(fd->osfd, buf, nbyte)) < 0) {
+  while ((n = _ST_SYS_CALL(read)(fd->osfd, buf, nbyte)) < 0) {
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -469,7 +485,7 @@ ssize_t st_readv(_st_netfd_t *fd, const struct iovec *iov, int iov_size,
 {
   ssize_t n;
 
-  while ((n = readv(fd->osfd, iov, iov_size)) < 0) {
+  while ((n = _ST_SYS_CALL(readv)(fd->osfd, iov, iov_size)) < 0) {
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -489,9 +505,9 @@ int st_readv_resid(_st_netfd_t *fd, struct iovec **iov, int *iov_size,
 
   while (*iov_size > 0) {
     if (*iov_size == 1)
-      n = read(fd->osfd, (*iov)->iov_base, (*iov)->iov_len);
+      n = _ST_SYS_CALL(read)(fd->osfd, (*iov)->iov_base, (*iov)->iov_len);
     else
-      n = readv(fd->osfd, *iov, *iov_size);
+      n = _ST_SYS_CALL(readv)(fd->osfd, *iov, *iov_size);
     if (n < 0) {
       if (errno == EINTR)
         continue;
@@ -582,7 +598,7 @@ ssize_t st_writev(_st_netfd_t *fd, const struct iovec *iov, int iov_size,
         rv = -1;
       break;
     }
-    if ((n = writev(fd->osfd, tmp_iov, iov_cnt)) < 0) {
+    if ((n = _ST_SYS_CALL(writev)(fd->osfd, tmp_iov, iov_cnt)) < 0) {
       if (errno == EINTR)
         continue;
       if (!_IO_NOT_READY_ERROR) {
@@ -640,9 +656,9 @@ int st_writev_resid(_st_netfd_t *fd, struct iovec **iov, int *iov_size,
 
   while (*iov_size > 0) {
     if (*iov_size == 1)
-      n = write(fd->osfd, (*iov)->iov_base, (*iov)->iov_len);
+      n = _ST_SYS_CALL(write)(fd->osfd, (*iov)->iov_base, (*iov)->iov_len);
     else
-      n = writev(fd->osfd, *iov, *iov_size);
+      n = _ST_SYS_CALL(writev)(fd->osfd, *iov, *iov_size);
     if (n < 0) {
       if (errno == EINTR)
         continue;
@@ -675,12 +691,11 @@ int st_writev_resid(_st_netfd_t *fd, struct iovec **iov, int *iov_size,
 /*
  * Simple I/O functions for UDP.
  */
-int st_recvfrom(_st_netfd_t *fd, void *buf, int len, int flags, struct sockaddr *from,
-                int *fromlen, st_utime_t timeout)
+int st_recv(_st_netfd_t *fd, void *buf, int len, int flags, st_utime_t timeout)
 {
   int n;
 
-  while ((n = recvfrom(fd->osfd, buf, len, flags, from, (socklen_t *)fromlen))
+  while ((n = _ST_SYS_CALL(recv)(fd->osfd, buf, len, flags))
          < 0) {
     if (errno == EINTR)
       continue;
@@ -695,12 +710,32 @@ int st_recvfrom(_st_netfd_t *fd, void *buf, int len, int flags, struct sockaddr 
 }
 
 
-int st_sendto(_st_netfd_t *fd, const void *msg, int len,
+int st_recvfrom(_st_netfd_t *fd, void *buf, int len, int flags, struct sockaddr *from,
+                socklen_t *fromlen, st_utime_t timeout)
+{
+  int n;
+
+  while ((n = _ST_SYS_CALL(recvfrom)(fd->osfd, buf, len, flags, from, fromlen))
+         < 0) {
+    if (errno == EINTR)
+      continue;
+    if (!_IO_NOT_READY_ERROR)
+      return -1;
+    /* Wait until the socket becomes readable */
+    if (st_netfd_poll(fd, POLLIN, timeout) < 0)
+      return -1;
+  }
+
+  return n;
+}
+
+
+int st_sendto(_st_netfd_t *fd, const void *msg, int len, int flags,
               const struct sockaddr *to, int tolen, st_utime_t timeout)
 {
   int n;
 
-  while ((n = sendto(fd->osfd, msg, len, 0, to, tolen)) < 0) {
+  while ((n = _ST_SYS_CALL(sendto)(fd->osfd, msg, len, flags, to, tolen)) < 0) {
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -719,7 +754,7 @@ int st_recvmsg(_st_netfd_t *fd, struct msghdr *msg, int flags,
 {
   int n;
 
-  while ((n = recvmsg(fd->osfd, msg, flags)) < 0) {
+  while ((n = _ST_SYS_CALL(recvmsg)(fd->osfd, msg, flags)) < 0) {
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -732,13 +767,12 @@ int st_recvmsg(_st_netfd_t *fd, struct msghdr *msg, int flags,
   return n;
 }
 
-
-int st_sendmsg(_st_netfd_t *fd, const struct msghdr *msg, int flags,
-               st_utime_t timeout)
+int st_send(_st_netfd_t *fd, const void *buf, size_t len, int flags,
+           st_utime_t timeout)
 {
   int n;
 
-  while ((n = sendmsg(fd->osfd, msg, flags)) < 0) {
+  while ((n = _ST_SYS_CALL(send)(fd->osfd, buf, len, flags)) < 0) {
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -751,7 +785,43 @@ int st_sendmsg(_st_netfd_t *fd, const struct msghdr *msg, int flags,
   return n;
 }
 
+int st_sendmsg(_st_netfd_t *fd, const struct msghdr *msg, int flags,
+               st_utime_t timeout)
+{
+  int n;
 
+  while ((n = _ST_SYS_CALL(sendmsg)(fd->osfd, msg, flags)) < 0) {
+    if (errno == EINTR)
+      continue;
+    if (!_IO_NOT_READY_ERROR)
+      return -1;
+    /* Wait until the socket becomes writable */
+    if (st_netfd_poll(fd, POLLOUT, timeout) < 0)
+      return -1;
+  }
+
+  return n;
+}
+
+int st_socket(int domain, int type, int protocol)
+{
+  int osfd, err;
+  _st_netfd_t *newfd;
+
+  while ((osfd = _ST_SYS_CALL(socket)(domain, type, protocol)) < 0) {
+    if (errno != EINTR)
+      return -1;
+  }
+
+  newfd = _st_netfd_new(osfd, 1, 1);
+  if (!newfd) {
+    err = errno;
+    _ST_SYS_CALL(close)(osfd);
+    errno = err;
+  }
+
+  return osfd;
+}
 
 /*
  * To open FIFOs or other special files.
@@ -769,7 +839,7 @@ _st_netfd_t *st_open(const char *path, int oflags, mode_t mode)
   newfd = _st_netfd_new(osfd, 0, 0);
   if (!newfd) {
     err = errno;
-    close(osfd);
+    _ST_SYS_CALL(close)(osfd);
     errno = err;
   }
 
