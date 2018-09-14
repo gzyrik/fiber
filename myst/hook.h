@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <stdarg.h>
+#define __USE_GNU
 #include <dlfcn.h>
+#include <fcntl.h>
 static _st_netfd_t** _st_netfd_hook;
-_st_netfd_t* st_netfd(int osfd)
+static _st_netfd_t* _st_netfd(int osfd)
 {
   if (osfd > -1 && osfd < _st_osfd_limit)
     return _st_netfd_hook[osfd];
@@ -38,10 +40,11 @@ _st_netfd_t* st_netfd(int osfd)
   X(int,fclose,FILE*)
 
 #if defined(__linux__)
+struct hostent;
 #define _ST_HOOK_LIST _ST_HOOK_LIST0 \
-  X(int,gethostbyname_r,const char *__restrict __name, struct hostent *__restrict __result_buf, char *__restrict __buf, size_t __buflen, struct hostent **__restrict __result, int *__restrict __h_errnop)\
-  X(int,gethostbyname2_r,const char *name, int af, struct hostent *ret, char *buf, size_t buflen, struct hostent **result, int *h_errnop)\
-  X(int,gethostbyaddr_r,const void *addr, socklen_t len, int type, struct hostent *ret, char *buf, size_t buflen, struct hostent **result, int *h_errnop)
+  X(int,gethostbyname_r,const char*__restrict, struct hostent*__restrict, char*__restrict, size_t, struct hostent**__restrict, int*__restrict)\
+  X(int,gethostbyname2_r,const char*, int, struct hostent*, char*, size_t , struct hostent**, int *)\
+  X(int,gethostbyaddr_r,const void*, socklen_t, int type, struct hostent*, char*, size_t, struct hostent**, int *)
 #else
 #define _ST_HOOK_LIST _ST_HOOK_LIST0
 #endif
@@ -49,6 +52,15 @@ _st_netfd_t* st_netfd(int osfd)
 #define X(ret, name, ...) static ret (*name##_f)(__VA_ARGS__);
 _ST_HOOK_LIST
 #undef X
+
+#if defined(__linux__)
+#define X(ret, name, ...) __attribute__((weak)) extern ret __##name(__VA_ARGS__);
+_ST_HOOK_LIST
+__attribute__((weak)) extern int __libc_poll(struct pollfd*, nfds_t, int );
+__attribute__((weak)) extern int __select(int, fd_set*, fd_set*, fd_set*, struct timeval*);
+__attribute__((weak)) extern int __epoll_wait_nocancel(int, struct epoll_event*, int, int);
+#undef X
+#endif
 
 int (*select_f)(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
 int (*poll_f)(struct pollfd *fds, nfds_t nfds, int timeout);
@@ -152,7 +164,7 @@ int dup3(int oldfd, int newfd, int flags)
   _st_netfd_t* fd;
   if (oldfd != newfd) return 0;
 
-  fd = st_netfd(newfd);
+  fd = _st_netfd(newfd);
   if (fd) st_netfd_close(fd);
 
   while ((err =dup3_f(oldfd, newfd, flags)) < 0) {
@@ -170,13 +182,14 @@ int dup3(int oldfd, int newfd, int flags)
 }
 int close(int sockfd)
 {
-    _st_netfd_t* fd = st_netfd(sockfd);
+    _st_netfd_t* fd = _st_netfd(sockfd);
     return fd ? st_netfd_close(fd) : close_f(sockfd);
 }
 int fclose(FILE* fp)
 {
-    _st_netfd_t* fd = st_netfd(fileno(fp));
-    return fd ? st_netfd_close(fd) : fclose_f(fp);
+    _st_netfd_t* fd = _st_netfd(fileno(fp));
+    if (fd) st_netfd_close(fd);
+    return fclose_f(fp);
 }
 int __close(int fd) {return close(fd);}
 int dup2(int oldfd, int newfd){return dup3(oldfd, newfd, 0);}
@@ -184,7 +197,7 @@ int pipe(int pipefd[2]) {return pipe2(pipefd, 0);}
 
 //read hook
 #define _ST_HOOK(hook, sockfd, ...) \
-  _st_netfd_t* fd = st_netfd(sockfd); \
+  _st_netfd_t* fd = _st_netfd(sockfd); \
 return fd ? st_##hook(fd, ##__VA_ARGS__, fd->rcv_timeo) : hook##_f(sockfd, ##__VA_ARGS__)
 ssize_t read(int sockfd, void *buf, size_t nbyte) {_ST_HOOK (read, sockfd, buf, nbyte);}
 ssize_t readv(int sockfd, const struct iovec *iov, int iov_size){_ST_HOOK(readv, sockfd, iov, iov_size);}
@@ -193,7 +206,7 @@ ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
 ssize_t recv(int sockfd, void *buf, size_t len, int flags){_ST_HOOK(recv, sockfd, buf, len, flags);}
 ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags){_ST_HOOK(recvmsg, sockfd, msg, flags);}
 int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen){
-  _st_netfd_t* fd = st_netfd(sockfd);
+  _st_netfd_t* fd = _st_netfd(sockfd);
   if (fd) {
     fd = st_accept(fd, addr, addrlen, fd->rcv_timeo);
     return fd ? fd->osfd : -1;
@@ -204,7 +217,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen){
 
 //write hook
 #define _ST_HOOK(hook, sockfd, ...) \
-  _st_netfd_t* fd = st_netfd(sockfd); \
+  _st_netfd_t* fd = _st_netfd(sockfd); \
 return fd ? st_##hook(fd, ##__VA_ARGS__, fd->snd_timeo) : hook##_f(sockfd, ##__VA_ARGS__)
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {_ST_HOOK(connect, sockfd, addr, addrlen);}
 ssize_t write(int sockfd, const void *buf, size_t nbyte){_ST_HOOK(write, sockfd, buf, nbyte);}
@@ -225,7 +238,7 @@ int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t
 {
     int err = setsockopt_f(sockfd, level, optname, optval, optlen);
     if (err == 0 && level == SOL_SOCKET && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)) {
-        _st_netfd_t* fd = st_netfd(sockfd);
+        _st_netfd_t* fd = _st_netfd(sockfd);
         if (fd) {
             struct timeval* tv = (struct timeval*)optval;
             st_utime_t us = tv->tv_sec * 1000000 + tv->tv_usec;
@@ -257,7 +270,7 @@ int fcntl(int __fd, int __cmd, ...)
         }
     case F_SETFD:
     case F_SETOWN:
-#if defined(__linux__)
+#if defined(F_SETSIG)
     case F_SETSIG:
     case F_SETLEASE:
     case F_NOTIFY:
@@ -285,7 +298,7 @@ int fcntl(int __fd, int __cmd, ...)
             return fcntl_f(__fd, __cmd, arg);
         }
 
-#if defined(__linux__)
+#if defined(F_GETOWN_EX)
     case F_GETOWN_EX:
     case F_SETOWN_EX:
         {
@@ -301,7 +314,7 @@ int fcntl(int __fd, int __cmd, ...)
         }
     case F_GETFD:
     case F_GETOWN:
-#if defined(__linux__)
+#if defined(F_GETSIG)
     case F_GETSIG:
     case F_GETLEASE:
 #endif

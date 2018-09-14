@@ -65,7 +65,7 @@ LIBST       = $(OBJDIR)/libst.a
 HEADER      = $(INCDIR)/st.h
 
 LIBRESOLV   =
-EXTRALIBS   =
+EXTRALIBS   = -ldl
 
 ifeq ($(OS),)
 EXAMPLES    = unknown
@@ -88,7 +88,7 @@ endif
 
 ifeq (SOLARIS, $(findstring SOLARIS, $(OS)))
 LIBRESOLV   = -lresolv
-EXTRALIBS   = -lsocket -lnsl
+EXTRALIBS   += -lsocket -lnsl
 endif
 
 #

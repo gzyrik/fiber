@@ -138,6 +138,13 @@ static _st_netfd_t *_st_netfd_new(int osfd, int nonblock, int is_socket)
   _st_netfd_t *fd;
   int flags = 1;
 
+#ifdef ST_HOOK_SYS
+  if (osfd < 0 || osfd > _st_osfd_limit)
+      return NULL;
+  if (_st_netfd_hook[osfd] != NULL)
+      return _st_netfd_hook[osfd];
+#endif
+
   if ((*_st_eventsys->fd_new)(osfd) < 0)
     return NULL;
 
