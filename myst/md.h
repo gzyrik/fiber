@@ -119,7 +119,26 @@
 #define MD_ACCEPT_NB_INHERITED
 #define MD_ALWAYS_UNSERIALIZED_ACCEPT
 #define MD_HAVE_SOCKLEN_T
+/*
+ * since macOS Mojave Version 10.14, i386 is removed from
+ * the Xcode build setting
+ */
+#if defined(__amd64__) || defined(__x86_64__)
+extern int st_md_cxt_save(jmp_buf env);
+extern void st_md_cxt_restore(jmp_buf env, int val);
+#define MD_SETJMP(env) st_md_cxt_save(env)
+#define MD_LONGJMP(env, val) st_md_cxt_restore(env, val)
+#define MD_JB_SP 6
+#define MD_GET_SP(_t) *((long *)&((_t)->context[MD_JB_SP]))
 
+#define MD_INIT_CONTEXT(_thread, _sp, _main) \
+  ST_BEGIN_MACRO                             \
+  if (MD_SETJMP((_thread)->context))         \
+    _main();                                 \
+  MD_GET_SP(_thread) = (long) (_sp);         \
+  ST_END_MACRO
+
+#else
 #define MD_SETJMP(env) _setjmp(env)
 #define MD_LONGJMP(env, val) _longjmp(env, val)
 
@@ -139,6 +158,7 @@
     _main();                                   \
   *((long *)&((_thread)->context[MD_JB_SP])) = (long) (_sp); \
   ST_END_MACRO
+#endif
 
 #define MD_GET_UTIME()            \
   struct timeval tv;              \

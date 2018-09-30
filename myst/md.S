@@ -358,6 +358,23 @@ _st_md_cxt_restore:
 
 #elif defined(__amd64__) || defined(__x86_64__)
 
+#if defined (DARWIN)
+/*
+ * Internal jmp_buf layout from setjmp.h:
+ * _JBLEN is number of ints required to save the following:
+ * rflags, rip, rbp, rsp, rbx, r12, r13, r14, r15... these are 8 bytes each
+ * mxcsr, fp control word, sigmask... these are 4 bytes each
+ * add 16 ints for future expansion needs...
+ */
+#define JB_RBX  4
+#define JB_RBP  2
+#define JB_R12  5
+#define JB_R13  6
+#define JB_R14  7
+#define JB_R15  8
+#define JB_RSP  3
+#define JB_PC   1
+#else
 /*
  * Internal __jmp_buf layout
  */
@@ -369,13 +386,16 @@ _st_md_cxt_restore:
 #define JB_R15  5
 #define JB_RSP  6
 #define JB_PC   7
+#endif
 
         .file "md.S"
         .text
 
         /* _st_md_cxt_save(__jmp_buf env) */
 .globl _st_md_cxt_save
+#if !defined (DARWIN)
         .type _st_md_cxt_save, @function
+#endif
         .align 16
 _st_md_cxt_save:
         /*
@@ -395,14 +415,18 @@ _st_md_cxt_save:
         movq %rax, (JB_PC*8)(%rdi)
         xorq %rax, %rax
         ret
+#if !defined (DARWIN)
         .size _st_md_cxt_save, .-_st_md_cxt_save
+#endif
 
 
 /****************************************************************/
 
         /* _st_md_cxt_restore(__jmp_buf env, int val) */
 .globl _st_md_cxt_restore
+#if !defined (DARWIN)
         .type _st_md_cxt_restore, @function
+#endif
         .align 16
 _st_md_cxt_restore:
         /*
@@ -423,7 +447,9 @@ _st_md_cxt_restore:
         movq (JB_RSP*8)(%rdi), %rsp
         /* Jump to saved PC */
         jmpq *%rdx
+#if !defined (DARWIN)
         .size _st_md_cxt_restore, .-_st_md_cxt_restore
+#endif
 
 /****************************************************************/
 

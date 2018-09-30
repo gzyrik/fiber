@@ -58,6 +58,7 @@ typedef struct
     uint32_t filetime;	/* time of last download we started */
     AVal filename;	/* name of last download */
     char *connect;
+    st_thread_t thread;
 
 } STREAMING_SERVER;
 static void spawn_dumper(int argc, AVal *av, char *cmd){
@@ -338,12 +339,29 @@ static int countAMF(AMFObject *obj, int *argc)
     }
     return len;
 }
+static void* rtmp_send_thread(void *rtmp)
+{
+    RTMP* r = (RTMP*)rtmp;
+    FILE* fp = fopen("file.flv", "rb");
+    fseek(fp, 0, SEEK_END);
+    int flv_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    char *flv_buf = malloc(flv_size);
+    fread(flv_buf, 1, flv_size, fp);
+    RTMP_Write(r, flv_buf, flv_size);
+    fclose(fp);
+clean:
+    RTMP_SendCtrl(r, 1, 1, 0);
+    SendPlayStop(r);
+    RTMP_Close(r);
+    return NULL;
+}
 
-static int HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, unsigned offset)
+static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, unsigned offset)
 {
     const char *body;
     unsigned int nBodySize;
-    int ret = 0, nRes;
+    int nRes;
 
     body = packet->m_body + offset;
     nBodySize = packet->m_nBodySize - offset;
@@ -352,7 +370,7 @@ static int HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, 
     {
         RTMP_Log(RTMP_LOGWARNING, "%s, Sanity failed. no string method in invoke packet",
                 __FUNCTION__);
-        return 0;
+        return;
     }
 
     AMFObject obj;
@@ -360,7 +378,7 @@ static int HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, 
     if (nRes < 0)
     {
         RTMP_Log(RTMP_LOGERROR, "%s, error decoding invoke packet", __FUNCTION__);
-        return 0;
+        return;
     }
 
     AMF_Dump(&obj);
@@ -474,7 +492,7 @@ static int HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, 
         RTMPPacket pc = {0};
         AMFProp_GetString(AMF_GetProp(&obj, NULL, 3), &r->Link.playpath);
         if (!r->Link.playpath.av_len)
-            return 0;
+            return;
         /*
            r->Link.seekTime = AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 4));
            if (obj.o_num > 5)
@@ -628,24 +646,11 @@ static int HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, 
         pc.m_body = server->connect;
         server->connect = NULL;
         RTMPPacket_Free(&pc);
-        ret = 1;
         RTMP_SendCtrl(r, 0, 1, 0);
         SendPlayStart(r);
-        {
-            FILE* fp = fopen("file.flv", "rb");
-            fseek(fp, 0, SEEK_END);
-            int flv_size = ftell(fp);
-            fseek(fp, 0, SEEK_SET);
-            char *flv_buf = malloc(flv_size);
-            fread(flv_buf, 1, flv_size, fp);
-            RTMP_Write(r, flv_buf, flv_size);
-            fclose(fp);
-        }
-        RTMP_SendCtrl(r, 1, 1, 0);
-        SendPlayStop(r);
+        server->thread = st_thread_create(rtmp_send_thread, (void*)r, TRUE, 0);
     }
     AMF_Reset(&obj);
-    return ret;
 }
 static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packet)
 {
@@ -703,8 +708,7 @@ static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packe
 
             obj.Dump(); */
 
-            if (HandleInvoke(server, rtmp, packet, 1))
-                RTMP_Close(rtmp);
+            HandleInvoke(server, rtmp, packet, 1);
             break;
         }
     case RTMP_PACKET_TYPE_INFO:
@@ -718,8 +722,7 @@ static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packe
                 packet->m_nBodySize);
         //RTMP_LogHex(packet.m_body, packet.m_nBodySize);
 
-        if (HandleInvoke(server, rtmp, packet, 0))
-            RTMP_Close(rtmp);
+        HandleInvoke(server, rtmp, packet, 0);
         break;
 
     case RTMP_PACKET_TYPE_FLASH_VIDEO:
@@ -734,10 +737,11 @@ static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packe
 }
 void* rtmp_service_thread(void*sockfd)
 {
-    STREAMING_SERVER server;
-    RTMPPacket packet = { 0 };
+    STREAMING_SERVER server = {0};
+    RTMPPacket packet = {0};
     RTMP rtmp;
     RTMP_Init(&rtmp);
+    void *retvalp;
     rtmp.m_sb.sb_socket = (ssize_t)sockfd;
     if (!RTMP_Serve(&rtmp)) {
         RTMP_Log(RTMP_LOGERROR, "Handshake failed");
@@ -751,7 +755,9 @@ void* rtmp_service_thread(void*sockfd)
     }
 cleanup:
     RTMP_LogPrintf("Closing connection... ");
+    st_thread_join(server.thread, &retvalp);
     RTMP_Close(&rtmp);
+    RTMP_LogPrintf("Closed connection");
     return NULL;
 }
 int main()

@@ -139,8 +139,9 @@ CFLAGS      += -arch ppc
 LDFLAGS     += -arch ppc
 endif
 ifeq ($(INTEL), yes)
-CFLAGS      += -arch i386 -arch x86_64
-LDFLAGS     += -arch i386 -arch x86_64
+EXTRA_OBJS  = $(TARGETDIR)/md.o
+CFLAGS      += -arch x86_64
+LDFLAGS     += -arch x86_64
 endif
 LDFLAGS     += -dynamiclib -install_name /sw/lib/libst.$(MAJOR).$(DSO_SUFFIX) -compatibility_version $(MAJOR) -current_version $(VERSION)
 OTHER_FLAGS = -Wall
@@ -233,7 +234,7 @@ endif
 ifeq ($(BUILD), OPT)
 OTHER_FLAGS += -O
 else
-OTHER_FLAGS += -g
+OTHER_FLAGS += -g -O0
 DEFINES     += -DDEBUG
 endif
 
