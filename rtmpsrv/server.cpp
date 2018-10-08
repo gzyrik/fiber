@@ -6,9 +6,9 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include "librtmp/rtmp.h"
-#include "librtmp/log.h"
-#include "../myst/public.h"
+#include <librtmp/rtmp.h>
+#include <librtmp/log.h>
+#include <st.h>
 #define SAVC(x) static const AVal av_##x = AVC(#x)
 
 SAVC(app);
@@ -45,7 +45,7 @@ static const AVal av_NetStream_Play_Stop = AVC("NetStream.Play.Stop");
 static const AVal av_Stopped_playing = AVC("Stopped playing");
 static const AVal av_NetStream_Authenticate_UsherToken = AVC("NetStream.Authenticate.UsherToken");
 #undef AVC
-#define STR2AVAL(av,str)	av.av_val = str; av.av_len = strlen(av.av_val)
+#define STR2AVAL(av,str)	av.av_val = (char*)str; av.av_len = strlen(av.av_val)
 #define DUPTIME	5000	/* interval we disallow duplicate requests, in msec */
 
 typedef struct
@@ -197,7 +197,7 @@ static void AVreplace(AVal *src, const AVal *orig, const AVal *repl)
     if (!n)
         return;
 
-    dest = malloc(src->av_len + 1 + (repl->av_len - orig->av_len) * n);
+    dest = (char*)malloc(src->av_len + 1 + (repl->av_len - orig->av_len) * n);
 
     sptr = src->av_val;
     dptr = dest;
@@ -346,7 +346,7 @@ static void* rtmp_send_thread(void *rtmp)
     fseek(fp, 0, SEEK_END);
     int flv_size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
-    char *flv_buf = malloc(flv_size);
+    char *flv_buf = (char*)malloc(flv_size);
     fread(flv_buf, 1, flv_size, fp);
     RTMP_Write(r, flv_buf, flv_size);
     fclose(fp);
@@ -409,7 +409,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
                 r->Link.app = pval;
                 pval.av_val = NULL;
                 if (!r->Link.app.av_val)
-                    r->Link.app.av_val = "";
+                    r->Link.app.av_val = (char*)"";
                 server->arglen += 6 + pval.av_len;
                 server->argc += 2;
             }
@@ -459,7 +459,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
         {
             int i = obj.o_num - 3;
             r->Link.extras.o_num = i;
-            r->Link.extras.o_props = malloc(i*sizeof(AMFObjectProperty));
+            r->Link.extras.o_props = (AMFObjectProperty*)malloc(i*sizeof(AMFObjectProperty));
             memcpy(r->Link.extras.o_props, obj.o_props+3, i*sizeof(AMFObjectProperty));
             obj.o_num = 3;
             server->arglen += countAMF(&r->Link.extras, &server->argc);
@@ -504,7 +504,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
                 sizeof("rtmpdump") + r->Link.playpath.av_len + 12;
             server->argc += 5;
 
-            cmd = malloc(len + server->argc * sizeof(AVal));
+            cmd = (char*)malloc(len + server->argc * sizeof(AVal));
             ptr = cmd;
             argv = (AVal *)(cmd + len);
             argv[0].av_val = cmd;
@@ -574,7 +574,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
 
             av = r->Link.playpath;
             /* strip trailing URL parameters */
-            q = memchr(av.av_val, '?', av.av_len);
+            q = (char*)memchr(av.av_val, '?', av.av_len);
             if (q)
             {
                 if (q == av.av_val)
@@ -602,7 +602,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
                 av.av_val++;
                 av.av_len--;
             }
-            file = malloc(av.av_len+5);
+            file = (char*)malloc(av.av_len+5);
 
             memcpy(file, av.av_val, av.av_len);
             file[av.av_len] = '\0';
