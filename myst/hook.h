@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <stdarg.h>
 #define __USE_GNU
 #include <dlfcn.h>
@@ -341,87 +342,62 @@ int ioctl(int fd, unsigned long int request, ...)
 }
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout)
 {
-  int i, n, npfds, timeout_ms = -1;
-  short* pfd_map;
+  int i, npfds, n;
+  struct pollfd pollfds4[4];
   struct pollfd* pfds;
-  static struct timeval zero_tv = {0, 0};
-  struct {fd_set* fset; int evt;} sets[3]={
-    {readfds, POLLIN},
-    {writefds, POLLOUT},
-    {exceptfds, 0}
-  };
-
-  if (timeout)
-    timeout_ms = timeout->tv_sec * 1000 + timeout->tv_usec / 1000;
-  if (nfds > FD_SETSIZE) nfds = FD_SETSIZE;
-
-  // 执行一次非阻塞的select, 检测异常或无效fd.
-  fd_set rfs, wfs, efs;
-  FD_ZERO(&rfs);
-  FD_ZERO(&wfs);
-  FD_ZERO(&efs);
-  if (readfds) rfs = *readfds;
-  if (writefds) wfs = *writefds;
-  if (exceptfds) efs = *exceptfds;
-  n = select_f(nfds, (readfds ? &rfs : NULL), (writefds ? &wfs : NULL),
-      (exceptfds ? &efs : NULL), &zero_tv);
-  if (n != 0) {
-    if (readfds) *readfds = rfs;
-    if (writefds) *writefds = wfs;
-    if (exceptfds) *exceptfds = efs;
-    return n;
-  }
-  // -------------------------------------
-  // convert fd_set to pollfd, and clear 3 fd_set.
-  pfd_map = calloc(nfds, sizeof(short));
-  for (i = 0; i < 3; ++i) {
-    fd_set* fds = sets[i].fset;
-    if (!fds) continue;
-    int event = sets[i].evt;
-    for (n = 0; n < nfds; ++n) {
-      if (FD_ISSET(n, fds)) pfd_map[n] |= event;
+  do {// 执行一次非阻塞的select, 检测异常或无效fd.
+    static struct timeval zero_tv = {0, 0};
+    fd_set rfs, wfs, efs;
+    FD_ZERO(&rfs);
+    FD_ZERO(&wfs);
+    FD_ZERO(&efs);
+    if (readfds)   rfs = *readfds;
+    if (writefds)  wfs = *writefds;
+    if (exceptfds) efs = *exceptfds;
+    n = select_f(nfds, (readfds ? &rfs : NULL), (writefds ? &wfs : NULL),
+                 (exceptfds ? &efs : NULL), &zero_tv);
+    if (n != 0) {
+      if (readfds)   *readfds   = rfs;
+      if (writefds)  *writefds  = wfs;
+      if (exceptfds) *exceptfds = efs;
+      return n;
     }
-    FD_ZERO(fds);
-  }
-  pfds = calloc(nfds, sizeof(struct pollfd));
-  for(i=0,npfds=0;i<nfds;++i) {
-    if (pfd_map[i] != 0) {
-      pfds[npfds].fd = i;
-      pfds[npfds].events= pfd_map[i];
-      ++npfds;
+  } while(0);
+  do {// convert fd_set to pollfd, and clear 3 fd_set.
+    for (i = npfds = 0, pfds = pollfds4, n = 4; i < nfds; ++i) {
+      int events = 0;
+      if (readfds && FD_ISSET(i, readfds)) events |= POLLIN;
+      if (writefds && FD_ISSET(i, writefds)) events |= POLLOUT;
+      if (events || (exceptfds && FD_ISSET(i, exceptfds))){
+        if (npfds == n) {
+          n *= 2;
+          if (pfds == pollfds4)
+            pfds = (struct pollfd*)memcpy(malloc(sizeof(struct pollfd)*n), pollfds4, sizeof(pollfds4));
+          else
+            pfds = (struct pollfd*)realloc(pfds, sizeof(struct pollfd)*n);
+        }
+        pfds[npfds].fd = i;
+        pfds[npfds].events = events;
+        ++npfds;
+      }
     }
-  }
-  // -------------------------------------
+  } while(0);
   // poll
-  n = st_poll(pfds, npfds, timeout_ms);
+  n = st_poll(pfds, npfds,
+    timeout ? timeout->tv_sec * 1000 + timeout->tv_usec / 1000 : -1);
   if (n <= 0) goto clean;
   // convert pollfd to fd_set.
-  n = 0;
-  for (i = 0; i < npfds; ++i) {
+  if (readfds) FD_ZERO(readfds);
+  if (writefds) FD_ZERO(writefds);
+  if (exceptfds) FD_ZERO(exceptfds);
+  for (i = n = 0; i < npfds; ++i) {
     struct pollfd *pfd = &pfds[i];
-    if (pfd->revents & POLLIN) {
-      if (readfds) {
-        FD_SET(pfd->fd, readfds);
-        ++n;
-      }
-    }
-
-    if (pfd->revents & POLLOUT) {
-      if (writefds) {
-        FD_SET(pfd->fd, writefds);
-        ++n;
-      }
-    }
-
-    if (pfd->revents & ~(POLLIN | POLLOUT)) {
-      if (exceptfds) {
-        FD_SET(pfd->fd, exceptfds);
-        ++n;
-      }
-    }
+    if (readfds && (pfd->revents & POLLIN))  { FD_SET(pfd->fd, readfds); ++n; }
+    if (writefds && (pfd->revents & POLLOUT)){ FD_SET(pfd->fd, writefds); ++n;}
+    if (exceptfds && (pfd->revents & ~(POLLIN | POLLOUT))){ FD_SET(pfd->fd, exceptfds); ++n; }
   }
 clean:
-  free(pfds);
-  free(pfd_map);
+  if (pfds != pollfds4) free(pfds);
   return n;
 }
+  

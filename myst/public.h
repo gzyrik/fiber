@@ -70,6 +70,13 @@
 #define ST_EVENTSYS_ALT     3
 
 #ifdef __cplusplus
+#include <functional>
+inline static void* st_functor_entry(void* f) {
+    std::function<void*(void)>* func = (std::function<void*(void)>*)f;
+    void* ret = (*func)();
+    delete func;
+    return ret;
+}
 extern "C" {
 #endif
 
@@ -100,6 +107,13 @@ extern int st_thread_join(st_thread_t thread, void **retvalp);
 extern void st_thread_interrupt(st_thread_t thread);
 extern st_thread_t st_thread_create(void *(*start)(void *arg), void *arg,
 				    int joinable, int stack_size);
+#ifdef __cplusplus
+inline st_thread_t st_thread_create2(
+    const std::function<void*()>&func, int joinable=0, int stack_size=0) {
+    return st_thread_create(
+        st_functor_entry, new std::function<void*()>(func), joinable, stack_size);
+}
+#endif
 extern int st_randomize_stacks(int on);
 extern int st_set_utime_function(st_utime_t (*func)(void));
 

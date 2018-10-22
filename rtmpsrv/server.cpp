@@ -9,6 +9,8 @@
 #include <librtmp/rtmp.h>
 #include <librtmp/log.h>
 #include <st.h>
+#define CPPHTTPLIB_ST_SUPPORT
+#include "httplib.h"
 #define SAVC(x) static const AVal av_##x = AVC(#x)
 
 SAVC(app);
@@ -760,16 +762,12 @@ cleanup:
     RTMP_LogPrintf("Closed connection");
     return NULL;
 }
-int main()
+static void* rtmp_service(void*)
 {
     struct sockaddr_in addr;
     int sockfd, tmp=1;
     const short port =1935;
 
-    if (st_init() < 0){
-        perror("st_init");
-        exit(1);
-    }
     RTMP_debuglevel = RTMP_LOGINFO;
     sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char *) &tmp, sizeof(tmp) );
@@ -797,6 +795,30 @@ int main()
         ssize_t clientfd = (ssize_t)accept(sockfd, (struct sockaddr *) &addr, &addrlen);
         if (clientfd >=0) st_thread_create(rtmp_service_thread, (void*)clientfd, 0, 0);
     }
+    return NULL;
+}
+static void* http_service(void*)
+{
+    httplib::Server svr;
+
+    svr.Get("/hi", [](const auto& req, auto& res) {
+        res.set_content("Hello World!", "text/plain");
+    }).Get(R"(/numbers/(\d+))", [&](const auto& req, auto& res) {
+        auto numbers = req.matches[1];
+        res.set_content(numbers, "text/plain");
+    });
+
+    svr.listen("*", 5562);
+    return NULL;
+}
+int main()
+{
+    if (st_init() < 0){
+        perror("st_init");
+        exit(1);
+    }
+    st_thread_create(rtmp_service, NULL, 0, 0);
+    st_thread_create(http_service, NULL, 0, 0);
     st_thread_exit(NULL);
     return 0;
 }
