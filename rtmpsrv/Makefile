@@ -9,4 +9,4 @@ RTMP :
 	@cd $(RTMP_DIR) && $(MAKE)
 
 rtmpsrv : server.cpp RTMP MYST
-	$(CXX) -o $@ $< -O0 -g -std=c++14 -I$(MYST_DIR) -I$(RTMP_DIR) -L$(RTMP_DIR)/librtmp -L$(MYST_DIR) -lrtmp -lst
+	$(CXX) -o $@ $< -O0 -g -std=c++14 -I$(MYST_DIR) -I$(RTMP_DIR) -L$(RTMP_DIR)/librtmp -L$(MYST_DIR) -lrtmp -lst -lz

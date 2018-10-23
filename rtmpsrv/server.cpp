@@ -8,9 +8,10 @@
 #include <arpa/inet.h>
 #include <librtmp/rtmp.h>
 #include <librtmp/log.h>
-#include <st.h>
 #define CPPHTTPLIB_ST_SUPPORT
+#define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
+
 #define SAVC(x) static const AVal av_##x = AVC(#x)
 
 SAVC(app);
@@ -67,33 +68,34 @@ static void spawn_dumper(int argc, AVal *av, char *cmd){
 }
 static int SendPlayStart(RTMP *r)
 {
-  RTMPPacket packet;
-  char pbuf[512], *pend = pbuf+sizeof(pbuf);
+    RTMPPacket packet;
+    char pbuf[512], *pend = pbuf+sizeof(pbuf);
 
-  packet.m_nChannel = 0x03;     // control channel (invoke)
-  packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
-  packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
-  packet.m_nTimeStamp = 0;
-  packet.m_nInfoField2 = 0;
-  packet.m_hasAbsTimestamp = 0;
-  packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
+    packet.m_nChannel = 0x03;     // control channel (invoke)
+    packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
+    packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
+    packet.m_nTimeStamp = 0;
+    packet.m_nInfoField2 = 0;
+    packet.m_hasAbsTimestamp = 0;
+    packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
 
-  char *enc = packet.m_body;
-  enc = AMF_EncodeString(enc, pend, &av_onStatus);
-  enc = AMF_EncodeNumber(enc, pend, 0);
-  *enc++ = AMF_OBJECT;
+    char *enc = packet.m_body;
+    enc = AMF_EncodeString(enc, pend, &av_onStatus);
+    enc = AMF_EncodeNumber(enc, pend, 0);//transaction_id
+    *enc++ = AMF_NULL;//args
+    *enc++ = AMF_OBJECT;
 
-  enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
-  enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Start);
-  enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Started_playing);
-  enc = AMF_EncodeNamedString(enc, pend, &av_details, &r->Link.playpath);
-  enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
-  *enc++ = 0;
-  *enc++ = 0;
-  *enc++ = AMF_OBJECT_END;
+    enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
+    enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Start);
+    enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Started_playing);
+    enc = AMF_EncodeNamedString(enc, pend, &av_details, &r->Link.playpath);
+    enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
+    *enc++ = 0;
+    *enc++ = 0;
+    *enc++ = AMF_OBJECT_END;
 
-  packet.m_nBodySize = enc - packet.m_body;
-  return RTMP_SendPacket(r, &packet, FALSE);
+    packet.m_nBodySize = enc - packet.m_body;
+    return RTMP_SendPacket(r, &packet, FALSE);
 }
 static int SendPlayStop(RTMP *r)
 {
@@ -110,7 +112,8 @@ static int SendPlayStop(RTMP *r)
 
     char *enc = packet.m_body;
     enc = AMF_EncodeString(enc, pend, &av_onStatus);
-    enc = AMF_EncodeNumber(enc, pend, 0);
+    enc = AMF_EncodeNumber(enc, pend, 0);//transaction_id
+    *enc++ = AMF_NULL;//args
     *enc++ = AMF_OBJECT;
 
     enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
@@ -282,26 +285,26 @@ static int SendConnectResult(RTMP *r, double txn)
 
 static int SendResultNumber(RTMP *r, double txn, double ID)
 {
-  RTMPPacket packet;
-  char pbuf[256], *pend = pbuf+sizeof(pbuf);
+    RTMPPacket packet;
+    char pbuf[256], *pend = pbuf+sizeof(pbuf);
 
-  packet.m_nChannel = 0x03;     // control channel (invoke)
-  packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
-  packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
-  packet.m_nTimeStamp = 0;
-  packet.m_nInfoField2 = 0;
-  packet.m_hasAbsTimestamp = 0;
-  packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
+    packet.m_nChannel = 0x03;     // control channel (invoke)
+    packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
+    packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
+    packet.m_nTimeStamp = 0;
+    packet.m_nInfoField2 = 0;
+    packet.m_hasAbsTimestamp = 0;
+    packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
 
-  char *enc = packet.m_body;
-  enc = AMF_EncodeString(enc, pend, &av__result);
-  enc = AMF_EncodeNumber(enc, pend, txn);
-  *enc++ = AMF_NULL;
-  enc = AMF_EncodeNumber(enc, pend, ID);
+    char *enc = packet.m_body;
+    enc = AMF_EncodeString(enc, pend, &av__result);
+    enc = AMF_EncodeNumber(enc, pend, txn);//transaction_id
+    *enc++ = AMF_NULL;//args
+    enc = AMF_EncodeNumber(enc, pend, ID);//data
 
-  packet.m_nBodySize = enc - packet.m_body;
+    packet.m_nBodySize = enc - packet.m_body;
 
-  return RTMP_SendPacket(r, &packet, FALSE);
+    return RTMP_SendPacket(r, &packet, FALSE);
 }
 
 static int countAMF(AMFObject *obj, int *argc)
@@ -341,7 +344,7 @@ static int countAMF(AMFObject *obj, int *argc)
     }
     return len;
 }
-static void* rtmp_send_thread(void *rtmp)
+static void* rtmp_play_thread(void *rtmp)
 {
     RTMP* r = (RTMP*)rtmp;
     FILE* fp = fopen("file.flv", "rb");
@@ -371,7 +374,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
     if (body[0] != 0x02)		// make sure it is a string method name we start with
     {
         RTMP_Log(RTMP_LOGWARNING, "%s, Sanity failed. no string method in invoke packet",
-                __FUNCTION__);
+                 __FUNCTION__);
         return;
     }
 
@@ -571,7 +574,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
             argv[argc++].av_len = 2;
             argv[argc].av_val = ptr + 5;
             ptr += sprintf(ptr, " -y \"%.*s\"",
-                    r->Link.playpath.av_len, r->Link.playpath.av_val);
+                           r->Link.playpath.av_len, r->Link.playpath.av_val);
             argv[argc++].av_len = r->Link.playpath.av_len;
 
             av = r->Link.playpath;
@@ -650,14 +653,14 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
         RTMPPacket_Free(&pc);
         RTMP_SendCtrl(r, 0, 1, 0);
         SendPlayStart(r);
-        server->thread = st_thread_create(rtmp_send_thread, (void*)r, TRUE, 0);
+        server->thread = st_thread_create(rtmp_play_thread, (void*)r, TRUE, 0);
     }
     AMF_Reset(&obj);
 }
 static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packet)
 {
     RTMP_Log(RTMP_LOGINFO, "%s, received packet type %02X, size %u bytes", __FUNCTION__,
-            packet->m_packetType, packet->m_nBodySize);
+             packet->m_packetType, packet->m_nBodySize);
 
     switch (packet->m_packetType)
     {
@@ -697,7 +700,7 @@ static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packe
     case RTMP_PACKET_TYPE_FLEX_MESSAGE:
         {
             RTMP_Log(RTMP_LOGDEBUG, "%s, flex message, size %u bytes, not fully supported",
-                    __FUNCTION__, packet->m_nBodySize);
+                     __FUNCTION__, packet->m_nBodySize);
             //RTMP_LogHex(packet.m_body, packet.m_nBodySize);
 
             // some DEBUG code
@@ -721,7 +724,7 @@ static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packe
 
     case RTMP_PACKET_TYPE_INVOKE:
         RTMP_Log(RTMP_LOGDEBUG, "%s, received: invoke %u bytes", __FUNCTION__,
-                packet->m_nBodySize);
+                 packet->m_nBodySize);
         //RTMP_LogHex(packet.m_body, packet.m_nBodySize);
 
         HandleInvoke(server, rtmp, packet, 0);
@@ -731,13 +734,13 @@ static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packe
         break;
     default:
         RTMP_Log(RTMP_LOGDEBUG, "%s, unknown packet type received: 0x%02x", __FUNCTION__,
-                packet->m_packetType);
+                 packet->m_packetType);
 #ifdef _DEBUG
         RTMP_LogHex(RTMP_LOGDEBUG, packet->m_body, packet->m_nBodySize);
 #endif
     }
 }
-void* rtmp_service_thread(void*sockfd)
+static void* rtmp_client_thread(void*sockfd)
 {
     STREAMING_SERVER server = {0};
     RTMPPacket packet = {0};
@@ -779,7 +782,7 @@ static void* rtmp_service(void*)
     if (bind(sockfd, (struct sockaddr *) &addr, sizeof(struct sockaddr_in)) == -1)
     {
         RTMP_Log(RTMP_LOGERROR, "%s, TCP bind failed for port number: %d", __FUNCTION__,
-                port);
+                 port);
         exit(1);
     }
 
@@ -790,10 +793,10 @@ static void* rtmp_service(void*)
         exit(1);
     }
 
-    while(1) {
+    while (1) {
         socklen_t addrlen = sizeof(struct sockaddr_in);
         ssize_t clientfd = (ssize_t)accept(sockfd, (struct sockaddr *) &addr, &addrlen);
-        if (clientfd >=0) st_thread_create(rtmp_service_thread, (void*)clientfd, 0, 0);
+        if (clientfd >=0) st_thread_create(rtmp_client_thread, (void*)clientfd, 0, 0);
     }
     return NULL;
 }

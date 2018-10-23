@@ -3108,7 +3108,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
     {
       AMFObject obj2;
       AVal code, level;
-      AMFProp_GetObject(AMF_GetProp(&obj, NULL, 2), &obj2);
+      AMFProp_GetObject(AMF_GetProp(&obj, NULL, 3), &obj2);
       AMFProp_GetString(AMF_GetProp(&obj2, &av_code, -1), &code);
       AMFProp_GetString(AMF_GetProp(&obj2, &av_level, -1), &level);
 
