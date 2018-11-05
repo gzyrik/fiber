@@ -234,7 +234,14 @@ extern "C"
     int num;
   } RTMP_METHOD;
 
-  typedef struct RTMP
+  typedef struct RTMP RTMP;
+  typedef struct RTMP_METABUF
+  {
+    void* abuf, *vbuf;
+    void (*free)(RTMP* r);
+  } RTMP_METABUF;
+
+  struct RTMP
   {
     int m_inChunkSize;
     int m_outChunkSize;
@@ -280,7 +287,8 @@ extern "C"
     RTMPPacket m_write;
     RTMPSockBuf m_sb;
     RTMP_LNK Link;
-  } RTMP;
+    RTMP_METABUF m_mbuf;
+  };
 
   int RTMP_ParseURL(const char *url, int *protocol, AVal *host,
 		     unsigned int *port, AVal *playpath, AVal *app);
@@ -370,6 +378,13 @@ extern "C"
 /* hashswf.c */
   int RTMP_HashSWF(const char *url, unsigned int *size, unsigned char *hash,
 		   int age);
+
+/* h264aac.c */
+  int RTMP_WriteMeta(RTMP *r, const char* desc,
+      double width, double height, double fps, double videoKbps,
+      double sampleRate, double sampleSize, double channels, double audioKbps);
+  int RTMP_WriteNalu(RTMP *r, const char *buf, int size, unsigned timeStamp);
+  int RTMP_WriteAdts(RTMP *r, const char *buf, int size, unsigned timeStamp);
 
 #ifdef __cplusplus
 };

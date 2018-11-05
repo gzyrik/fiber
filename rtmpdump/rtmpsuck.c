@@ -116,7 +116,7 @@ FILE *netstackdump_read = NULL;
 
 #define BUFFERTIME	(4*60*60*1000)	/* 4 hours */
 
-#define SAVC(x) static const AVal av_##x = AVC(#x)
+//#define SAVC(x) static const AVal av_##x = AVC(#x)
 
 SAVC(app);
 SAVC(connect);

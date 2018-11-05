@@ -61,6 +61,11 @@ extern "C"
   } AVal;
 #define AVC(str)	{(char*)str,sizeof(str)-1}
 #define AVMATCH(a1,a2)	((a1)->av_len == (a2)->av_len && !memcmp((a1)->av_val,(a2)->av_val,(a1)->av_len))
+#ifdef _MSC_VER
+#define SAVC(x)	__declspec(selectany) const AVal av_##x = AVC(#x)
+#else
+#define SAVC(x)	const AVal __attribute__((weak)) av_##x = AVC(#x)
+#endif
 
   struct AMFObjectProperty;
 

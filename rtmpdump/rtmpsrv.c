@@ -144,7 +144,7 @@ FILE *netstackdump = NULL;
 FILE *netstackdump_read = NULL;
 #endif
 
-#define SAVC(x) static const AVal av_##x = AVC(#x)
+//#define SAVC(x) static const AVal av_##x = AVC(#x)
 
 SAVC(app);
 SAVC(connect);

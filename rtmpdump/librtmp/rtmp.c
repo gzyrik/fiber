@@ -189,7 +189,7 @@ int
 RTMPPacket_Alloc(RTMPPacket *p, uint32_t nSize)
 {
   char *ptr;
-  if (nSize > SIZE_MAX - RTMP_MAX_HEADER_SIZE)
+  if (nSize > UINT32_MAX - RTMP_MAX_HEADER_SIZE)
     return FALSE;
   ptr = calloc(1, nSize + RTMP_MAX_HEADER_SIZE);
   if (!ptr)
@@ -1556,8 +1556,6 @@ WriteN(RTMP *r, const char *buffer, int n)
   return n == 0;
 }
 
-#define SAVC(x)	static const AVal av_##x = AVC(#x)
-
 SAVC(app);
 SAVC(connect);
 SAVC(flashVer);
@@ -1902,7 +1900,7 @@ SendFCUnpublish(RTMP *r)
 
 SAVC(publish);
 SAVC(live);
-SAVC(record);
+//SAVC(record);
 
 static int
 SendPublish(RTMP *r)
@@ -2885,7 +2883,7 @@ SAVC(_error);
 SAVC(close);
 SAVC(code);
 SAVC(level);
-SAVC(description);
+//SAVC(description);
 SAVC(onStatus);
 SAVC(playlist_ready);
 static const AVal av_NetStream_Failed = AVC("NetStream.Failed");
@@ -2904,8 +2902,7 @@ AVC("NetStream.Play.PublishNotify");
 static const AVal av_NetStream_Play_UnpublishNotify =
 AVC("NetStream.Play.UnpublishNotify");
 static const AVal av_NetStream_Publish_Start = AVC("NetStream.Publish.Start");
-static const AVal av_NetConnection_Connect_Rejected =
-AVC("NetConnection.Connect.Rejected");
+//static const AVal av_NetConnection_Connect_Rejected = AVC("NetConnection.Connect.Rejected");
 
 /* Returns 0 for OK/Failed/error, 1 for 'Stop or Complete' */
 static int
@@ -4246,6 +4243,8 @@ CloseInternal(RTMP *r, int reconnect)
       r->Link.rc4keyOut = NULL;
     }
 #endif
+  if (r->m_mbuf.free)
+      r->m_mbuf.free(r);
 }
 
 int
@@ -5089,7 +5088,7 @@ fail:
   return total;
 }
 
-static const AVal av_setDataFrame = AVC("@setDataFrame");
+const AVal av_setDataFrame = AVC("@setDataFrame");
 
 int
 RTMP_Write(RTMP *r, const char *buf, int size)
@@ -5102,78 +5101,78 @@ RTMP_Write(RTMP *r, const char *buf, int size)
   pkt->m_nInfoField2 = r->m_stream_id;
 
   while (s2)
+  {
+    if (!pkt->m_nBytesRead)
     {
-      if (!pkt->m_nBytesRead)
-	{
-	  if (size < 11) {
-	    /* FLV pkt too small */
-	    return 0;
-	  }
+      if (s2 <= 11) /* FLV pkt too small */
+        break;
 
-	  if (buf[0] == 'F' && buf[1] == 'L' && buf[2] == 'V')
-	    {
-	      buf += 13;
-	      s2 -= 13;
-	    }
+      if (buf[0] == 'F' && buf[1] == 'L' && buf[2] == 'V')
+      {
+        if (s2 <= 13+11) /* FLV pkt too small */
+          break;
+        buf += 13;
+        s2 -= 13;
+      }
 
-	  pkt->m_packetType = *buf++;
-	  pkt->m_nBodySize = AMF_DecodeInt24(buf);
-	  buf += 3;
-	  pkt->m_nTimeStamp = AMF_DecodeInt24(buf);
-	  buf += 3;
-	  pkt->m_nTimeStamp |= *buf++ << 24;
-	  buf += 3;
-	  s2 -= 11;
+      pkt->m_packetType = *buf++;
+      pkt->m_nBodySize = AMF_DecodeInt24(buf);
+      buf += 3;
+      pkt->m_nTimeStamp = AMF_DecodeInt24(buf);
+      buf += 3;
+      pkt->m_nTimeStamp |= *buf++ << 24;
+      buf += 3;
+      s2 -= 11;
 
-	  if (((pkt->m_packetType == RTMP_PACKET_TYPE_AUDIO
-                || pkt->m_packetType == RTMP_PACKET_TYPE_VIDEO) &&
-            !pkt->m_nTimeStamp) || pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
-	    {
-	      pkt->m_headerType = RTMP_PACKET_SIZE_LARGE;
-	      if (pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
-		pkt->m_nBodySize += 16;
-	    }
-	  else
-	    {
-	      pkt->m_headerType = RTMP_PACKET_SIZE_MEDIUM;
-	    }
-
-	  if (!RTMPPacket_Alloc(pkt, pkt->m_nBodySize))
-	    {
-	      RTMP_Log(RTMP_LOGDEBUG, "%s, failed to allocate packet", __FUNCTION__);
-	      return FALSE;
-	    }
-	  enc = pkt->m_body;
-	  pend = enc + pkt->m_nBodySize;
-	  if (pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
-	    {
-	      enc = AMF_EncodeString(enc, pend, &av_setDataFrame);
-	      pkt->m_nBytesRead = enc - pkt->m_body;
-	    }
-	}
+      if (((pkt->m_packetType == RTMP_PACKET_TYPE_AUDIO
+            || pkt->m_packetType == RTMP_PACKET_TYPE_VIDEO) &&
+          !pkt->m_nTimeStamp) || pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
+      {
+        pkt->m_headerType = RTMP_PACKET_SIZE_LARGE;
+        if (pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
+          pkt->m_nBodySize += 16;
+      }
       else
-	{
-	  enc = pkt->m_body + pkt->m_nBytesRead;
-	}
-      num = pkt->m_nBodySize - pkt->m_nBytesRead;
-      if (num > s2)
-	num = s2;
-      memcpy(enc, buf, num);
-      pkt->m_nBytesRead += num;
-      s2 -= num;
-      buf += num;
-      if (pkt->m_nBytesRead == pkt->m_nBodySize)
-	{
-	  ret = RTMP_SendPacket(r, pkt, FALSE);
-	  RTMPPacket_Free(pkt);
-	  pkt->m_nBytesRead = 0;
-	  if (!ret)
-	    return -1;
-	  buf += 4;
-	  s2 -= 4;
-	  if (s2 < 0)
-	    break;
-	}
+      {
+        pkt->m_headerType = RTMP_PACKET_SIZE_MEDIUM;
+      }
+
+      if (!RTMPPacket_Alloc(pkt, pkt->m_nBodySize))
+      {
+        RTMP_Log(RTMP_LOGDEBUG, "%s, failed to allocate packet", __FUNCTION__);
+        return -1;
+      }
+      enc = pkt->m_body;
+      pend = enc + pkt->m_nBodySize;
+      if (pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
+      {
+        enc = AMF_EncodeString(enc, pend, &av_setDataFrame);
+        pkt->m_nBytesRead = enc - pkt->m_body;
+      }
     }
-  return size+s2;
+    else
+    {
+      enc = pkt->m_body + pkt->m_nBytesRead;
+    }
+    num = pkt->m_nBodySize - pkt->m_nBytesRead;
+    if (num > s2)
+      num = s2;
+    memcpy(enc, buf, num);
+    pkt->m_nBytesRead += num;
+    s2 -= num;
+    buf += num;
+    if (pkt->m_nBytesRead == pkt->m_nBodySize)
+    {
+      ret = RTMP_SendPacket(r, pkt, FALSE);
+      RTMPPacket_Free(pkt);
+      pkt->m_nBytesRead = 0;
+      if (!ret)
+        return -1;
+      buf += 4;
+      if (s2 < 4)
+        break;
+      s2 -= 4; /* skip back-pointers */
+    }
+  }
+  return size-s2;
 }

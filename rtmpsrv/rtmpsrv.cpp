@@ -12,7 +12,7 @@
 #define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
 
-#define SAVC(x) static const AVal av_##x = AVC(#x)
+//#define SAVC(x) static const AVal av_##x = AVC(#x)
 
 SAVC(app);
 SAVC(connect);
