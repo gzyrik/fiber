@@ -71,7 +71,7 @@ TLS_CTX RTMP_TLS_ctx;
 
 static const int packetSize[] = { 12, 8, 4, 1 };
 
-int RTMP_ctrlC;
+bool RTMP_ctrlC;
 
 const char RTMPProtocolStrings[][7] = {
   "RTMP",
@@ -185,7 +185,7 @@ RTMPPacket_Reset(RTMPPacket *p)
   p->m_nBytesRead = 0;
 }
 
-int
+bool
 RTMPPacket_Alloc(RTMPPacket *p, uint32_t nSize)
 {
   char *ptr;
@@ -754,7 +754,7 @@ int RTMP_SetOpt(RTMP *r, const AVal *opt, AVal *arg)
   return TRUE;
 }
 
-int RTMP_SetupURL(RTMP *r, char *url)
+int RTMP_SetupURL(RTMP *r, const char *url)
 {
   AVal opt, arg;
   char *p1, *p2, *ptr = strchr(url, ' ');
@@ -818,7 +818,7 @@ int RTMP_SetupURL(RTMP *r, char *url)
 
   if (!r->Link.tcUrl.av_len)
     {
-      r->Link.tcUrl.av_val = url;
+      r->Link.tcUrl.av_val = (char*)url;
       if (r->Link.app.av_len)
         {
           if (r->Link.app.av_val < url + len)
@@ -1381,7 +1381,7 @@ RTMP_ClientPacket(RTMP *r, RTMPPacket *packet)
   return bHasMediaPacket;
 }
 
-#ifdef _DEBUG
+#if defined(RTMP_NETSTACK_DUMP)
 extern FILE *netstackdump;
 extern FILE *netstackdump_read;
 #endif
@@ -1469,7 +1469,7 @@ ReadN(RTMP *r, char *buffer, int n)
 	        return FALSE;
 	}
       /*RTMP_Log(RTMP_LOGDEBUG, "%s: %d bytes\n", __FUNCTION__, nBytes); */
-#ifdef _DEBUG
+#if defined(RTMP_NETSTACK_DUMP)
       fwrite(ptr, 1, nBytes, netstackdump_read);
 #endif
 
@@ -1776,7 +1776,7 @@ SendFCSubscribe(RTMP *r, AVal *subscribepath)
 }
 
 /* Justin.tv specific authentication */
-static const AVal av_NetStream_Authenticate_UsherToken = AVC("NetStream.Authenticate.UsherToken");
+SAVC2(NetStream_Authenticate_UsherToken, "NetStream.Authenticate.UsherToken");
 
 static int
 SendUsherToken(RTMP *r, AVal *usherToken)
@@ -1900,7 +1900,7 @@ SendFCUnpublish(RTMP *r)
 
 SAVC(publish);
 SAVC(live);
-//SAVC(record);
+SAVC(record);
 
 static int
 SendPublish(RTMP *r)
@@ -2493,8 +2493,8 @@ typedef struct md5_ctx	MD5_CTX;
 #else
 #endif
 
-static const AVal av_authmod_adobe = AVC("authmod=adobe");
-static const AVal av_authmod_llnw  = AVC("authmod=llnw");
+SAVC2(authmod_adobe, "authmod=adobe");
+SAVC2(authmod_llnw, "authmod=llnw");
 
 static void hexenc(unsigned char *inbuf, int len, char *dst)
 {
@@ -2883,26 +2883,22 @@ SAVC(_error);
 SAVC(close);
 SAVC(code);
 SAVC(level);
-//SAVC(description);
+SAVC(description);
 SAVC(onStatus);
 SAVC(playlist_ready);
-static const AVal av_NetStream_Failed = AVC("NetStream.Failed");
-static const AVal av_NetStream_Play_Failed = AVC("NetStream.Play.Failed");
-static const AVal av_NetStream_Play_StreamNotFound =
-AVC("NetStream.Play.StreamNotFound");
-static const AVal av_NetConnection_Connect_InvalidApp =
-AVC("NetConnection.Connect.InvalidApp");
-static const AVal av_NetStream_Play_Start = AVC("NetStream.Play.Start");
-static const AVal av_NetStream_Play_Complete = AVC("NetStream.Play.Complete");
-static const AVal av_NetStream_Play_Stop = AVC("NetStream.Play.Stop");
-static const AVal av_NetStream_Seek_Notify = AVC("NetStream.Seek.Notify");
-static const AVal av_NetStream_Pause_Notify = AVC("NetStream.Pause.Notify");
-static const AVal av_NetStream_Play_PublishNotify =
-AVC("NetStream.Play.PublishNotify");
-static const AVal av_NetStream_Play_UnpublishNotify =
-AVC("NetStream.Play.UnpublishNotify");
-static const AVal av_NetStream_Publish_Start = AVC("NetStream.Publish.Start");
-//static const AVal av_NetConnection_Connect_Rejected = AVC("NetConnection.Connect.Rejected");
+SAVC2(NetStream_Failed, "NetStream.Failed");
+SAVC2(NetStream_Play_Failed, "NetStream.Play.Failed");
+SAVC2(NetStream_Play_StreamNotFound,"NetStream.Play.StreamNotFound");
+SAVC2(NetConnection_Connect_InvalidApp, "NetConnection.Connect.InvalidApp");
+SAVC2(NetStream_Play_Start, "NetStream.Play.Start");
+SAVC2(NetStream_Play_Complete, "NetStream.Play.Complete");
+SAVC2(NetStream_Play_Stop, "NetStream.Play.Stop");
+SAVC2(NetStream_Seek_Notify, "NetStream.Seek.Notify");
+SAVC2(NetStream_Pause_Notify, "NetStream.Pause.Notify");
+SAVC2(NetStream_Play_PublishNotify, "NetStream.Play.PublishNotify");
+SAVC2(NetStream_Play_UnpublishNotify, "NetStream.Play.UnpublishNotify");
+SAVC2(NetStream_Publish_Start, "NetStream.Publish.Start");
+SAVC2(NetConnection_Connect_Rejected, "NetConnection.Connect.Rejected");
 
 /* Returns 0 for OK/Failed/error, 1 for 'Stop or Complete' */
 static int
@@ -4297,7 +4293,7 @@ RTMPSockBuf_Send(RTMPSockBuf *sb, const char *buf, int len)
 {
   int rc;
 
-#ifdef _DEBUG
+#if defined(RTMP_NETSTACK_DUMP)
   fwrite(buf, 1, len, netstackdump);
 #endif
 

@@ -26,10 +26,10 @@
  */
 
 #include <stdint.h>
-
+#include <stdbool.h>
 #ifndef TRUE
-#define TRUE	1
-#define FALSE	0
+#define TRUE	true
+#define FALSE	false
 #endif
 
 #ifdef __cplusplus
@@ -64,7 +64,12 @@ extern "C"
 #ifdef _MSC_VER
 #define SAVC(x)	__declspec(selectany) const AVal av_##x = AVC(#x)
 #else
-#define SAVC(x)	const AVal __attribute__((weak)) av_##x = AVC(#x)
+#ifdef __cplusplus
+#define SAVC2(x,v)	extern const AVal __attribute__((weak)) av_##x = AVC(v)
+#else
+#define SAVC2(x,v)	const AVal __attribute__((weak)) av_##x = AVC(v)
+#endif
+#define SAVC(x)	 SAVC2(x,#x)
 #endif
 
   struct AMFObjectProperty;

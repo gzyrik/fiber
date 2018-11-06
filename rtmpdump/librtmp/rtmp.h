@@ -67,7 +67,7 @@ extern "C"
 
   extern const char RTMPProtocolStringsLower[][7];
   extern const AVal RTMP_DefaultFlashVer;
-  extern int RTMP_ctrlC;
+  extern bool RTMP_ctrlC;
 
   uint32_t RTMP_GetTime(void);
 
@@ -114,7 +114,7 @@ extern "C"
   {
     uint8_t m_headerType;
     uint8_t m_packetType;
-    uint8_t m_hasAbsTimestamp;	/* timestamp absolute or relative? */
+    bool m_hasAbsTimestamp;	/* timestamp absolute or relative? */
     int m_nChannel;
     uint32_t m_nTimeStamp;	/* timestamp */
     int32_t m_nInfoField2;	/* last 4 bytes in a long header */
@@ -136,7 +136,7 @@ extern "C"
 
   void RTMPPacket_Reset(RTMPPacket *p);
   void RTMPPacket_Dump(RTMPPacket *p);
-  int RTMPPacket_Alloc(RTMPPacket *p, uint32_t nSize);
+  bool RTMPPacket_Alloc(RTMPPacket *p, uint32_t nSize);
   void RTMPPacket_Free(RTMPPacket *p);
 
 #define RTMPPacket_IsReady(a)	((a)->m_nBytesRead == (a)->m_nBodySize)
@@ -238,6 +238,7 @@ extern "C"
   typedef struct RTMP_METABUF
   {
     void* abuf, *vbuf;
+    unsigned startStamp;
     void (*free)(RTMP* r);
   } RTMP_METABUF;
 
@@ -298,7 +299,7 @@ extern "C"
   void RTMP_UpdateBufferMS(RTMP *r);
 
   int RTMP_SetOpt(RTMP *r, const AVal *opt, AVal *arg);
-  int RTMP_SetupURL(RTMP *r, char *url);
+  int RTMP_SetupURL(RTMP *r, const char *url);
   void RTMP_SetupStream(RTMP *r, int protocol,
 			AVal *hostname,
 			unsigned int port,

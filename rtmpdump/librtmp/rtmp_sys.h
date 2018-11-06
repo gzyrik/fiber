@@ -26,17 +26,18 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
-
+#include <sys/types.h>
 #ifdef _MSC_VER	/* MSVC */
-#define snprintf _snprintf
+//#define snprintf _snprintf
 #define strcasecmp stricmp
 #define strncasecmp strnicmp
-#define vsnprintf _vsnprintf
+//#define vsnprintf _vsnprintf
 #endif
 
 #define GetSockError()	WSAGetLastError()
 #define SetSockError(e)	WSASetLastError(e)
 #define setsockopt(a,b,c,d,e)	(setsockopt)(a,b,c,(const char *)d,(int)e)
+#undef EWOULDBLOCK
 #define EWOULDBLOCK	WSAETIMEDOUT	/* we don't use nonblocking, but we do use timeouts */
 #define sleep(n)	Sleep(n*1000)
 #define msleep(n)	Sleep(n)

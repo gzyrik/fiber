@@ -1,5 +1,6 @@
 #include "rtmp.h"
 #include <string.h>
+#include <stdlib.h>
 SAVC(onMetaData);
 SAVC(duration);
 SAVC(width);
@@ -20,7 +21,7 @@ SAVC(fileSize);
 extern const AVal av_setDataFrame;
 struct H264Buf
 {
-  unsigned timestamp;
+  unsigned lastStamp;
 #define MAX_SPS_SIZE 50
 #define MAX_PPS_SIZE 50
   unsigned spsSize;
@@ -29,7 +30,7 @@ struct H264Buf
   uint8_t sps[MAX_SPS_SIZE];
   uint8_t pps[MAX_PPS_SIZE];
   uint8_t head[RTMP_MAX_HEADER_SIZE];
-  uint8_t body[1];
+  uint8_t body[4];
 };
 struct AacBuf
 {
@@ -37,8 +38,17 @@ struct AacBuf
   int bFirstAAC;
   unsigned bodySize;
   uint8_t head[RTMP_MAX_HEADER_SIZE];
-  uint8_t body[1];
+  uint8_t body[4];
 };
+static void free_mbuf(RTMP* r)
+{
+  if (r->m_mbuf.vbuf) free(r->m_mbuf.vbuf);
+  if (r->m_mbuf.abuf) free(r->m_mbuf.abuf);
+  r->m_mbuf.vbuf = NULL;
+  r->m_mbuf.abuf = NULL;
+  r->m_mbuf.startStamp = 0;
+  r->m_mbuf.free = free_mbuf;
+}
 int RTMP_WriteMeta(RTMP *r, const char* desc,
   double width, double height, double fps, double videoKbps,
   double sampleRate, double sampleSize, double channels, double audioKbps)
@@ -71,7 +81,7 @@ int RTMP_WriteMeta(RTMP *r, const char* desc,
   enc = AMF_EncodeNamedString(enc, pend, &av_audiocodecid,    &av_mp4a);
   enc = AMF_EncodeNamedNumber(enc, pend, &av_audiodatarate,   audioKbps); //ex. 128kb\s
   enc = AMF_EncodeNamedNumber(enc, pend, &av_audiosamplerate, sampleRate); //ex. 44100
-  enc = AMF_EncodeNamedNumber(enc, pend, &av_audiosamplesize, sampleSize);
+  enc = AMF_EncodeNamedNumber(enc, pend, &av_audiosamplesize, sampleSize); //ex. 16
   enc = AMF_EncodeNamedNumber(enc, pend, &av_audiochannels,   channels);
   enc = AMF_EncodeNamedBoolean(enc, pend, &av_stereo,         FALSE);
   encoder.av_val = (char*)desc; encoder.av_len = strlen(desc);
@@ -81,7 +91,12 @@ int RTMP_WriteMeta(RTMP *r, const char* desc,
   *enc++ = AMF_OBJECT_END;
 
   packet.m_nBodySize = enc - packet.m_body;
-  return RTMP_SendPacket(r, &packet, FALSE);
+  if (!RTMP_SendPacket(r, &packet, FALSE))
+    return FALSE;
+  free_mbuf(r);
+  r->m_mbuf.vbuf = calloc(1, sizeof(struct H264Buf)+width*height*3/2);
+  r->m_mbuf.abuf = calloc(1, sizeof(struct AacBuf)+channels*sampleSize/8*sampleRate*60/1000);//60ms
+  return TRUE;
 }
 
 static int FileAVCData(RTMP *r, const char *data, unsigned size)
@@ -166,7 +181,7 @@ static int FillAVCSequence(uint8_t* body,
   i +=  pps_len;
   return i;
 }
-static int SendPacket(RTMP *r, int bIsAudio, uint8_t *body, unsigned bodySize,unsigned nTimestamp)
+static int SendPacket(RTMP *r, int bIsAudio, uint8_t *body, unsigned bodySize, uint32_t nTimestamp)
 {
   if (!bodySize) return TRUE;
   RTMPPacket packet;
@@ -185,12 +200,15 @@ int RTMP_WriteNalu(RTMP *r, const char *buf, int size, unsigned timestamp)
   struct H264Buf* avc1= (struct H264Buf*)(r->m_mbuf.vbuf);
   if(avc1 == NULL || buf == NULL || size <= 0)
     return FALSE;
+  if (r->m_mbuf.startStamp == 0)
+    r->m_mbuf.startStamp = timestamp;
 
-  if (avc1->timestamp != timestamp)
+  timestamp -= r->m_mbuf.startStamp;
+  if (avc1->lastStamp != timestamp)
   {
-    if (!SendPacket(r, FALSE, avc1->body, avc1->bodySize, avc1->timestamp))
+    if (!SendPacket(r, FALSE, avc1->body, avc1->bodySize, avc1->lastStamp))
       return FALSE;
-    avc1->timestamp = timestamp;
+    avc1->lastStamp = timestamp;
     avc1->bodySize = 0;
   }
 
@@ -223,7 +241,10 @@ int RTMP_WriteAdts(RTMP *r, const char *buf, int size, unsigned timestamp)
   struct AacBuf* aac= (struct AacBuf*)(r->m_mbuf.abuf);
   if(aac == NULL || buf == NULL || size < AAC_HEAD_SIZE)
     return FALSE;
+  if (r->m_mbuf.startStamp == 0)
+    r->m_mbuf.startStamp = timestamp;
 
+  timestamp -= r->m_mbuf.startStamp;
   body = aac->body;
   if (aac->bFirstAAC){
     const int profile = ((buf[2]&0xc0)>>6)+1;

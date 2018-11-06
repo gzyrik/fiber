@@ -30,6 +30,7 @@ SAVC(_result);
 SAVC(createStream);
 SAVC(getStreamLength);
 SAVC(play);
+SAVC(publish);
 SAVC(fmsVer);
 SAVC(mode);
 SAVC(level);
@@ -40,20 +41,24 @@ SAVC(onStatus);
 SAVC(status);
 SAVC(details);
 SAVC(clientid);
-static const AVal av_dquote = AVC("\"");
-static const AVal av_escdquote = AVC("\\\"");
-static const AVal av_NetStream_Play_Start = AVC("NetStream.Play.Start");
-static const AVal av_Started_playing = AVC("Started playing");
-static const AVal av_NetStream_Play_Stop = AVC("NetStream.Play.Stop");
-static const AVal av_Stopped_playing = AVC("Stopped playing");
-static const AVal av_NetStream_Authenticate_UsherToken = AVC("NetStream.Authenticate.UsherToken");
+SAVC2(dquote,"\"");
+SAVC2(escdquote,"\\\"");
+SAVC2(NetStream_Play_Start, "NetStream.Play.Start");
+SAVC2(Started_playing, "Started playing");
+SAVC2(Started_publishing, "Started publishing");
+SAVC2(NetStream_Play_Stop, "NetStream.Play.Stop");
+SAVC2(Stopped_playing, "Stopped playing");
+SAVC2(NetStream_Authenticate_UsherToken, "NetStream.Authenticate.UsherToken");
+SAVC2(NetStream_Publish_Start, "NetStream.Publish.Start");
 #undef AVC
 #define STR2AVAL(av,str)	av.av_val = (char*)str; av.av_len = strlen(av.av_val)
 #define DUPTIME	5000	/* interval we disallow duplicate requests, in msec */
 
 typedef struct
 {
-    int socket;
+    RTMP rtmp;
+    st_thread_t thread;
+
     int state;
     int streamID;
     int arglen;
@@ -61,74 +66,7 @@ typedef struct
     uint32_t filetime;	/* time of last download we started */
     AVal filename;	/* name of last download */
     char *connect;
-    st_thread_t thread;
-
 } STREAMING_SERVER;
-static void spawn_dumper(int argc, AVal *av, char *cmd){
-}
-static int SendPlayStart(RTMP *r)
-{
-    RTMPPacket packet;
-    char pbuf[512], *pend = pbuf+sizeof(pbuf);
-
-    packet.m_nChannel = 0x03;     // control channel (invoke)
-    packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
-    packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
-    packet.m_nTimeStamp = 0;
-    packet.m_nInfoField2 = 0;
-    packet.m_hasAbsTimestamp = 0;
-    packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
-
-    char *enc = packet.m_body;
-    enc = AMF_EncodeString(enc, pend, &av_onStatus);
-    enc = AMF_EncodeNumber(enc, pend, 0);//transaction_id
-    *enc++ = AMF_NULL;//args
-    *enc++ = AMF_OBJECT;
-
-    enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
-    enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Start);
-    enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Started_playing);
-    enc = AMF_EncodeNamedString(enc, pend, &av_details, &r->Link.playpath);
-    enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
-    *enc++ = 0;
-    *enc++ = 0;
-    *enc++ = AMF_OBJECT_END;
-
-    packet.m_nBodySize = enc - packet.m_body;
-    return RTMP_SendPacket(r, &packet, FALSE);
-}
-static int SendPlayStop(RTMP *r)
-{
-    RTMPPacket packet;
-    char pbuf[512], *pend = pbuf+sizeof(pbuf);
-
-    packet.m_nChannel = 0x03;     // control channel (invoke)
-    packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
-    packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
-    packet.m_nTimeStamp = 0;
-    packet.m_nInfoField2 = 0;
-    packet.m_hasAbsTimestamp = 0;
-    packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
-
-    char *enc = packet.m_body;
-    enc = AMF_EncodeString(enc, pend, &av_onStatus);
-    enc = AMF_EncodeNumber(enc, pend, 0);//transaction_id
-    *enc++ = AMF_NULL;//args
-    *enc++ = AMF_OBJECT;
-
-    enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
-    enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Stop);
-    enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Stopped_playing);
-    enc = AMF_EncodeNamedString(enc, pend, &av_details, &r->Link.playpath);
-    enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
-    *enc++ = 0;
-    *enc++ = 0;
-    *enc++ = AMF_OBJECT_END;
-
-    packet.m_nBodySize = enc - packet.m_body;
-    return RTMP_SendPacket(r, &packet, FALSE);
-}
-
 static char * dumpAMF(AMFObject *obj, char *ptr, AVal *argv, int *argc)
 {
     int i, ac = *argc;
@@ -184,6 +122,250 @@ static char * dumpAMF(AMFObject *obj, char *ptr, AVal *argv, int *argc)
     }
     *argc = ac;
     return ptr;
+}
+static bool spawn_pusher(STREAMING_SERVER* server, RTMP * r)
+{
+    char *file, *p, *q, *cmd, *ptr;
+    AVal *argv, av;
+    int len, argc;
+    uint32_t now;
+
+    len = server->arglen + r->Link.playpath.av_len + 4 +
+        sizeof("rtmpdump") + r->Link.playpath.av_len + 12;
+    server->argc += 5;
+
+    cmd = (char*)malloc(len + server->argc * sizeof(AVal));
+    ptr = cmd;
+    argv = (AVal *)(cmd + len);
+    argv[0].av_val = cmd;
+    argv[0].av_len = sizeof("rtmpdump")-1;
+    ptr += sprintf(ptr, "rtmpdump");
+    argc = 1;
+
+    argv[argc].av_val = ptr + 1;
+    argv[argc++].av_len = 2;
+    argv[argc].av_val = ptr + 5;
+    ptr += sprintf(ptr," -r \"%s\"", r->Link.tcUrl.av_val);
+    argv[argc++].av_len = r->Link.tcUrl.av_len;
+
+    if (r->Link.app.av_val)
+    {
+        argv[argc].av_val = ptr + 1;
+        argv[argc++].av_len = 2;
+        argv[argc].av_val = ptr + 5;
+        ptr += sprintf(ptr, " -a \"%s\"", r->Link.app.av_val);
+        argv[argc++].av_len = r->Link.app.av_len;
+    }
+    if (r->Link.flashVer.av_val)
+    {
+        argv[argc].av_val = ptr + 1;
+        argv[argc++].av_len = 2;
+        argv[argc].av_val = ptr + 5;
+        ptr += sprintf(ptr, " -f \"%s\"", r->Link.flashVer.av_val);
+        argv[argc++].av_len = r->Link.flashVer.av_len;
+    }
+    if (r->Link.swfUrl.av_val)
+    {
+        argv[argc].av_val = ptr + 1;
+        argv[argc++].av_len = 2;
+        argv[argc].av_val = ptr + 5;
+        ptr += sprintf(ptr, " -W \"%s\"", r->Link.swfUrl.av_val);
+        argv[argc++].av_len = r->Link.swfUrl.av_len;
+    }
+    if (r->Link.pageUrl.av_val)
+    {
+        argv[argc].av_val = ptr + 1;
+        argv[argc++].av_len = 2;
+        argv[argc].av_val = ptr + 5;
+        ptr += sprintf(ptr, " -p \"%s\"", r->Link.pageUrl.av_val);
+        argv[argc++].av_len = r->Link.pageUrl.av_len;
+    }
+    if (r->Link.usherToken.av_val)
+    {
+        argv[argc].av_val = ptr + 1;
+        argv[argc++].av_len = 2;
+        argv[argc].av_val = ptr + 5;
+        ptr += sprintf(ptr, " -j \"%s\"", r->Link.usherToken.av_val);
+        argv[argc++].av_len = r->Link.usherToken.av_len;
+        free(r->Link.usherToken.av_val);
+        r->Link.usherToken.av_val = NULL;
+        r->Link.usherToken.av_len = 0;
+    }
+    if (r->Link.extras.o_num) {
+        ptr = dumpAMF(&r->Link.extras, ptr, argv, &argc);
+        AMF_Reset(&r->Link.extras);
+    }
+    argv[argc].av_val = ptr + 1;
+    argv[argc++].av_len = 2;
+    argv[argc].av_val = ptr + 5;
+    ptr += sprintf(ptr, " -y \"%.*s\"",
+        r->Link.playpath.av_len, r->Link.playpath.av_val);
+    argv[argc++].av_len = r->Link.playpath.av_len;
+
+    av = r->Link.playpath;
+    /* strip trailing URL parameters */
+    q = (char*)memchr(av.av_val, '?', av.av_len);
+    if (q)
+    {
+        if (q == av.av_val)
+        {
+            av.av_val++;
+            av.av_len--;
+        }
+        else
+        {
+            av.av_len = q - av.av_val;
+        }
+    }
+    /* strip leading slash components */
+    for (p=av.av_val+av.av_len-1; p>=av.av_val; p--)
+        if (*p == '/')
+        {
+            p++;
+            av.av_len -= p - av.av_val;
+            av.av_val = p;
+            break;
+        }
+    /* skip leading dot */
+    if (av.av_val[0] == '.')
+    {
+        av.av_val++;
+        av.av_len--;
+    }
+    file = (char*)malloc(av.av_len+5);
+
+    memcpy(file, av.av_val, av.av_len);
+    file[av.av_len] = '\0';
+    for (p=file; *p; p++)
+        if (*p == ':')
+            *p = '_';
+
+    /* Add extension if none present */
+    if (file[av.av_len - 4] != '.')
+    {
+        av.av_len += 4;
+    }
+    /* Always use flv extension, regardless of original */
+    if (strcmp(file+av.av_len-4, ".flv"))
+    {
+        strcpy(file+av.av_len-4, ".flv");
+    }
+    argv[argc].av_val = ptr + 1;
+    argv[argc++].av_len = 2;
+    argv[argc].av_val = file;
+    argv[argc].av_len = av.av_len;
+    ptr += sprintf(ptr, " -o %s", file);
+    now = RTMP_GetTime();
+    if (now - server->filetime < DUPTIME && AVMATCH(&argv[argc], &server->filename))
+    {
+        printf("Duplicate request, skipping.\n");
+        free(file);
+        free(cmd);
+        return false;
+    }
+    else
+    {
+        printf("\n%s\n\n", cmd);
+        fflush(stdout);
+        server->filetime = now;
+        free(server->filename.av_val);
+        server->filename = argv[argc++];
+        //spawn(argc, argv, cmd);
+        free(cmd);
+        return true;
+    }
+}
+static int SendPlayStart(RTMP *r)
+{
+    RTMPPacket packet;
+    char pbuf[512], *pend = pbuf+sizeof(pbuf);
+
+    packet.m_nChannel = 0x03;     // control channel (invoke)
+    packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
+    packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
+    packet.m_nTimeStamp = 0;
+    packet.m_nInfoField2 = 0;
+    packet.m_hasAbsTimestamp = 0;
+    packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
+
+    char *enc = packet.m_body;
+    enc = AMF_EncodeString(enc, pend, &av_onStatus);
+    enc = AMF_EncodeNumber(enc, pend, 0);//transaction_id
+    *enc++ = AMF_NULL;//args
+    *enc++ = AMF_OBJECT;
+
+    enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
+    enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Start);
+    enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Started_playing);
+    enc = AMF_EncodeNamedString(enc, pend, &av_details, &r->Link.playpath);
+    enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
+    *enc++ = 0;
+    *enc++ = 0;
+    *enc++ = AMF_OBJECT_END;
+
+    packet.m_nBodySize = enc - packet.m_body;
+    return RTMP_SendPacket(r, &packet, false);
+}
+static int SendPlayStop(RTMP *r)
+{
+    RTMPPacket packet;
+    char pbuf[512], *pend = pbuf+sizeof(pbuf);
+
+    packet.m_nChannel = 0x03;     // control channel (invoke)
+    packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
+    packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
+    packet.m_nTimeStamp = 0;
+    packet.m_nInfoField2 = 0;
+    packet.m_hasAbsTimestamp = 0;
+    packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
+
+    char *enc = packet.m_body;
+    enc = AMF_EncodeString(enc, pend, &av_onStatus);
+    enc = AMF_EncodeNumber(enc, pend, 0);//transaction_id
+    *enc++ = AMF_NULL;//args
+    *enc++ = AMF_OBJECT;
+
+    enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
+    enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Stop);
+    enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Stopped_playing);
+    enc = AMF_EncodeNamedString(enc, pend, &av_details, &r->Link.playpath);
+    enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
+    *enc++ = 0;
+    *enc++ = 0;
+    *enc++ = AMF_OBJECT_END;
+
+    packet.m_nBodySize = enc - packet.m_body;
+    return RTMP_SendPacket(r, &packet, false);
+}
+static int SendPublishStart(RTMP *r)
+{
+    RTMPPacket packet;
+    char pbuf[512], *pend = pbuf+sizeof(pbuf);
+
+    packet.m_nChannel = 0x03;     // control channel (invoke)
+    packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
+    packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
+    packet.m_nTimeStamp = 0;
+    packet.m_nInfoField2 = 0;
+    packet.m_hasAbsTimestamp = 0;
+    packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
+
+    char *enc = packet.m_body;
+    enc = AMF_EncodeString(enc, pend, &av_onStatus);
+    enc = AMF_EncodeNumber(enc, pend, 0);//transaction_id
+    *enc++ = AMF_NULL;//args
+    *enc++ = AMF_OBJECT;
+
+    enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
+    enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Publish_Start);
+    enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Started_publishing);
+    enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
+    *enc++ = 0;
+    *enc++ = 0;
+    *enc++ = AMF_OBJECT_END;
+
+    packet.m_nBodySize = enc - packet.m_body;
+    return RTMP_SendPacket(r, &packet, false);
 }
 static void AVreplace(AVal *src, const AVal *orig, const AVal *repl)
 {
@@ -280,7 +462,7 @@ static int SendConnectResult(RTMP *r, double txn)
 
     packet.m_nBodySize = enc - packet.m_body;
 
-    return RTMP_SendPacket(r, &packet, FALSE);
+    return RTMP_SendPacket(r, &packet, false);
 }
 
 static int SendResultNumber(RTMP *r, double txn, double ID)
@@ -304,7 +486,7 @@ static int SendResultNumber(RTMP *r, double txn, double ID)
 
     packet.m_nBodySize = enc - packet.m_body;
 
-    return RTMP_SendPacket(r, &packet, FALSE);
+    return RTMP_SendPacket(r, &packet, false);
 }
 
 static int countAMF(AMFObject *obj, int *argc)
@@ -344,9 +526,12 @@ static int countAMF(AMFObject *obj, int *argc)
     }
     return len;
 }
-static void* rtmp_play_thread(void *rtmp)
+static void* rtmp_play_thread(void *server)
 {
-    RTMP* r = (RTMP*)rtmp;
+    RTMP* r = &(static_cast<STREAMING_SERVER*>(server)->rtmp);
+    RTMP_SendCtrl(r, 0, 1, 0);
+    SendPlayStart(r);
+
     FILE* fp = fopen("file.flv", "rb");
     fseek(fp, 0, SEEK_END);
     int flv_size = ftell(fp);
@@ -355,9 +540,19 @@ static void* rtmp_play_thread(void *rtmp)
     fread(flv_buf, 1, flv_size, fp);
     RTMP_Write(r, flv_buf, flv_size);
     fclose(fp);
+    free(flv_buf);
 clean:
     RTMP_SendCtrl(r, 1, 1, 0);
     SendPlayStop(r);
+    RTMP_Close(r);
+    return NULL;
+}
+
+static void* rtmp_publish_thread(void *server)
+{
+    RTMP* r = &(static_cast<STREAMING_SERVER*>(server)->rtmp);
+    RTMP_SendCtrl(r, 0, 1, 0);
+    SendPublishStart(r);
     RTMP_Close(r);
     return NULL;
 }
@@ -379,7 +574,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
     }
 
     AMFObject obj;
-    nRes = AMF_Decode(&obj, body, nBodySize, FALSE);
+    nRes = AMF_Decode(&obj, body, nBodySize, false);
     if (nRes < 0)
     {
         RTMP_Log(RTMP_LOGERROR, "%s, error decoding invoke packet", __FUNCTION__);
@@ -488,172 +683,26 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
         server->argc += 2;
         r->Link.usherToken = usherToken;
     }
+    else if (AVMATCH(&method, &av_publish))
+    {
+        server->thread = st_thread_create(rtmp_publish_thread, (void*)server, true, 0);
+    }
     else if (AVMATCH(&method, &av_play))
     {
-        char *file, *p, *q, *cmd, *ptr;
-        AVal *argv, av;
-        int len, argc;
-        uint32_t now;
         RTMPPacket pc = {0};
         AMFProp_GetString(AMF_GetProp(&obj, NULL, 3), &r->Link.playpath);
-        if (!r->Link.playpath.av_len)
-            return;
-        /*
-           r->Link.seekTime = AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 4));
-           if (obj.o_num > 5)
-           r->Link.length = AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 5));
-           */
-        if (r->Link.tcUrl.av_len)
-        {
-            len = server->arglen + r->Link.playpath.av_len + 4 +
-                sizeof("rtmpdump") + r->Link.playpath.av_len + 12;
-            server->argc += 5;
-
-            cmd = (char*)malloc(len + server->argc * sizeof(AVal));
-            ptr = cmd;
-            argv = (AVal *)(cmd + len);
-            argv[0].av_val = cmd;
-            argv[0].av_len = sizeof("rtmpdump")-1;
-            ptr += sprintf(ptr, "rtmpdump");
-            argc = 1;
-
-            argv[argc].av_val = ptr + 1;
-            argv[argc++].av_len = 2;
-            argv[argc].av_val = ptr + 5;
-            ptr += sprintf(ptr," -r \"%s\"", r->Link.tcUrl.av_val);
-            argv[argc++].av_len = r->Link.tcUrl.av_len;
-
-            if (r->Link.app.av_val)
-            {
-                argv[argc].av_val = ptr + 1;
-                argv[argc++].av_len = 2;
-                argv[argc].av_val = ptr + 5;
-                ptr += sprintf(ptr, " -a \"%s\"", r->Link.app.av_val);
-                argv[argc++].av_len = r->Link.app.av_len;
-            }
-            if (r->Link.flashVer.av_val)
-            {
-                argv[argc].av_val = ptr + 1;
-                argv[argc++].av_len = 2;
-                argv[argc].av_val = ptr + 5;
-                ptr += sprintf(ptr, " -f \"%s\"", r->Link.flashVer.av_val);
-                argv[argc++].av_len = r->Link.flashVer.av_len;
-            }
-            if (r->Link.swfUrl.av_val)
-            {
-                argv[argc].av_val = ptr + 1;
-                argv[argc++].av_len = 2;
-                argv[argc].av_val = ptr + 5;
-                ptr += sprintf(ptr, " -W \"%s\"", r->Link.swfUrl.av_val);
-                argv[argc++].av_len = r->Link.swfUrl.av_len;
-            }
-            if (r->Link.pageUrl.av_val)
-            {
-                argv[argc].av_val = ptr + 1;
-                argv[argc++].av_len = 2;
-                argv[argc].av_val = ptr + 5;
-                ptr += sprintf(ptr, " -p \"%s\"", r->Link.pageUrl.av_val);
-                argv[argc++].av_len = r->Link.pageUrl.av_len;
-            }
-            if (r->Link.usherToken.av_val)
-            {
-                argv[argc].av_val = ptr + 1;
-                argv[argc++].av_len = 2;
-                argv[argc].av_val = ptr + 5;
-                ptr += sprintf(ptr, " -j \"%s\"", r->Link.usherToken.av_val);
-                argv[argc++].av_len = r->Link.usherToken.av_len;
-                free(r->Link.usherToken.av_val);
-                r->Link.usherToken.av_val = NULL;
-                r->Link.usherToken.av_len = 0;
-            }
-            if (r->Link.extras.o_num) {
-                ptr = dumpAMF(&r->Link.extras, ptr, argv, &argc);
-                AMF_Reset(&r->Link.extras);
-            }
-            argv[argc].av_val = ptr + 1;
-            argv[argc++].av_len = 2;
-            argv[argc].av_val = ptr + 5;
-            ptr += sprintf(ptr, " -y \"%.*s\"",
-                           r->Link.playpath.av_len, r->Link.playpath.av_val);
-            argv[argc++].av_len = r->Link.playpath.av_len;
-
-            av = r->Link.playpath;
-            /* strip trailing URL parameters */
-            q = (char*)memchr(av.av_val, '?', av.av_len);
-            if (q)
-            {
-                if (q == av.av_val)
-                {
-                    av.av_val++;
-                    av.av_len--;
-                }
-                else
-                {
-                    av.av_len = q - av.av_val;
-                }
-            }
-            /* strip leading slash components */
-            for (p=av.av_val+av.av_len-1; p>=av.av_val; p--)
-                if (*p == '/')
-                {
-                    p++;
-                    av.av_len -= p - av.av_val;
-                    av.av_val = p;
-                    break;
-                }
-            /* skip leading dot */
-            if (av.av_val[0] == '.')
-            {
-                av.av_val++;
-                av.av_len--;
-            }
-            file = (char*)malloc(av.av_len+5);
-
-            memcpy(file, av.av_val, av.av_len);
-            file[av.av_len] = '\0';
-            for (p=file; *p; p++)
-                if (*p == ':')
-                    *p = '_';
-
-            /* Add extension if none present */
-            if (file[av.av_len - 4] != '.')
-            {
-                av.av_len += 4;
-            }
-            /* Always use flv extension, regardless of original */
-            if (strcmp(file+av.av_len-4, ".flv"))
-            {
-                strcpy(file+av.av_len-4, ".flv");
-            }
-            argv[argc].av_val = ptr + 1;
-            argv[argc++].av_len = 2;
-            argv[argc].av_val = file;
-            argv[argc].av_len = av.av_len;
-            ptr += sprintf(ptr, " -o %s", file);
-            now = RTMP_GetTime();
-            if (now - server->filetime < DUPTIME && AVMATCH(&argv[argc], &server->filename))
-            {
-                printf("Duplicate request, skipping.\n");
-                free(file);
-            }
-            else
-            {
-                printf("\n%s\n\n", cmd);
-                fflush(stdout);
-                server->filetime = now;
-                free(server->filename.av_val);
-                server->filename = argv[argc++];
-                spawn_dumper(argc, argv, cmd);
-            }
-
-            free(cmd);
-        }
         pc.m_body = server->connect;
         server->connect = NULL;
+        if (r->Link.playpath.av_len)
+        {
+            if (obj.o_num > 4)
+                r->Link.seekTime = AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 4));
+            if (obj.o_num > 5)
+                r->Link.stopTime = r->Link.seekTime + AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 5));
+            if (spawn_pusher(server, r))
+                server->thread = st_thread_create(rtmp_play_thread, (void*)server, true, 0);
+        }
         RTMPPacket_Free(&pc);
-        RTMP_SendCtrl(r, 0, 1, 0);
-        SendPlayStart(r);
-        server->thread = st_thread_create(rtmp_play_thread, (void*)r, TRUE, 0);
     }
     AMF_Reset(&obj);
 }
@@ -744,24 +793,25 @@ static void* rtmp_client_thread(void*sockfd)
 {
     STREAMING_SERVER server = {0};
     RTMPPacket packet = {0};
-    RTMP rtmp;
-    RTMP_Init(&rtmp);
-    void *retvalp;
-    rtmp.m_sb.sb_socket = (ssize_t)sockfd;
-    if (!RTMP_Serve(&rtmp)) {
+    RTMP *r = &server.rtmp;
+    RTMP_Init(r);
+    r->m_sb.sb_socket = (ssize_t)sockfd;
+
+    if (!RTMP_Serve(r)) {
         RTMP_Log(RTMP_LOGERROR, "Handshake failed");
         goto cleanup;
     }
-    while (RTMP_IsConnected(&rtmp) && RTMP_ReadPacket(&rtmp, &packet)) {
+    while (RTMP_IsConnected(r) && RTMP_ReadPacket(r, &packet)) {
         if (!RTMPPacket_IsReady(&packet))
             continue;
-        HandlePacket(&server, &rtmp, &packet);
+        HandlePacket(&server, r, &packet);
         RTMPPacket_Free(&packet);
     }
 cleanup:
     RTMP_LogPrintf("Closing connection... ");
-    st_thread_join(server.thread, &retvalp);
-    RTMP_Close(&rtmp);
+    if (server.thread)
+        st_thread_join(server.thread, NULL);
+    RTMP_Close(r);
     RTMP_LogPrintf("Closed connection");
     return NULL;
 }
