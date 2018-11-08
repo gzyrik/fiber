@@ -136,7 +136,7 @@ extern "C"
 
   void RTMPPacket_Reset(RTMPPacket *p);
   void RTMPPacket_Dump(RTMPPacket *p);
-  bool RTMPPacket_Alloc(RTMPPacket *p, uint32_t nSize);
+  bool RTMPPacket_Alloc(RTMPPacket *p, uint32_t bobySize);
   void RTMPPacket_Free(RTMPPacket *p);
 
 #define RTMPPacket_IsReady(a)	((a)->m_nBytesRead == (a)->m_nBodySize)

@@ -11,6 +11,10 @@
 #define CPPHTTPLIB_ST_SUPPORT
 #define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
+void Hub_SetPublisher(const std::string& playpath, int32_t streamId, RTMP* r);
+void HUB_AddPlayer(const std::string& playpath, RTMP* r);
+void HUB_RemoveClient(RTMP* r);
+void HUB_PublishPacket(RTMPPacket* packet);
 
 //#define SAVC(x) static const AVal av_##x = AVC(#x)
 
@@ -56,11 +60,7 @@ SAVC2(NetStream_Publish_Start, "NetStream.Publish.Start");
 
 typedef struct
 {
-    RTMP rtmp;
-    st_thread_t thread;
-
     int state;
-    int streamID;
     int arglen;
     int argc;
     uint32_t filetime;	/* time of last download we started */
@@ -123,15 +123,15 @@ static char * dumpAMF(AMFObject *obj, char *ptr, AVal *argv, int *argc)
     *argc = ac;
     return ptr;
 }
-static bool spawn_pusher(STREAMING_SERVER* server, RTMP * r)
+static bool spawn_pusher(STREAMING_SERVER* server, RTMP * r, AVal* playpath)
 {
     char *file, *p, *q, *cmd, *ptr;
     AVal *argv, av;
     int len, argc;
     uint32_t now;
 
-    len = server->arglen + r->Link.playpath.av_len + 4 +
-        sizeof("rtmpdump") + r->Link.playpath.av_len + 12;
+    len = server->arglen + playpath->av_len + 4 +
+        sizeof("rtmpdump") + playpath->av_len + 12;
     server->argc += 5;
 
     cmd = (char*)malloc(len + server->argc * sizeof(AVal));
@@ -199,10 +199,10 @@ static bool spawn_pusher(STREAMING_SERVER* server, RTMP * r)
     argv[argc++].av_len = 2;
     argv[argc].av_val = ptr + 5;
     ptr += sprintf(ptr, " -y \"%.*s\"",
-        r->Link.playpath.av_len, r->Link.playpath.av_val);
-    argv[argc++].av_len = r->Link.playpath.av_len;
+        playpath->av_len, playpath->av_val);
+    argv[argc++].av_len = playpath->av_len;
 
-    av = r->Link.playpath;
+    av = *playpath;
     /* strip trailing URL parameters */
     q = (char*)memchr(av.av_val, '?', av.av_len);
     if (q)
@@ -275,7 +275,7 @@ static bool spawn_pusher(STREAMING_SERVER* server, RTMP * r)
         return true;
     }
 }
-static int SendPlayStart(RTMP *r)
+static int SendPlayStart(RTMP *r, AVal* playpath)
 {
     RTMPPacket packet;
     char pbuf[512], *pend = pbuf+sizeof(pbuf);
@@ -297,7 +297,7 @@ static int SendPlayStart(RTMP *r)
     enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
     enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Start);
     enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Started_playing);
-    enc = AMF_EncodeNamedString(enc, pend, &av_details, &r->Link.playpath);
+    enc = AMF_EncodeNamedString(enc, pend, &av_details, playpath);
     enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
     *enc++ = 0;
     *enc++ = 0;
@@ -306,7 +306,7 @@ static int SendPlayStart(RTMP *r)
     packet.m_nBodySize = enc - packet.m_body;
     return RTMP_SendPacket(r, &packet, false);
 }
-static int SendPlayStop(RTMP *r)
+static int SendPlayStop(RTMP *r, AVal* playpath)
 {
     RTMPPacket packet;
     char pbuf[512], *pend = pbuf+sizeof(pbuf);
@@ -328,7 +328,7 @@ static int SendPlayStop(RTMP *r)
     enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
     enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Stop);
     enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Stopped_playing);
-    enc = AMF_EncodeNamedString(enc, pend, &av_details, &r->Link.playpath);
+    enc = AMF_EncodeNamedString(enc, pend, &av_details, playpath);
     enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
     *enc++ = 0;
     *enc++ = 0;
@@ -526,37 +526,6 @@ static int countAMF(AMFObject *obj, int *argc)
     }
     return len;
 }
-static void* rtmp_play_thread(void *server)
-{
-    RTMP* r = &(static_cast<STREAMING_SERVER*>(server)->rtmp);
-    RTMP_SendCtrl(r, 0, 1, 0);
-    SendPlayStart(r);
-
-    FILE* fp = fopen("file.flv", "rb");
-    fseek(fp, 0, SEEK_END);
-    int flv_size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    char *flv_buf = (char*)malloc(flv_size);
-    fread(flv_buf, 1, flv_size, fp);
-    RTMP_Write(r, flv_buf, flv_size);
-    fclose(fp);
-    free(flv_buf);
-clean:
-    RTMP_SendCtrl(r, 1, 1, 0);
-    SendPlayStop(r);
-    RTMP_Close(r);
-    return NULL;
-}
-
-static void* rtmp_publish_thread(void *server)
-{
-    RTMP* r = &(static_cast<STREAMING_SERVER*>(server)->rtmp);
-    RTMP_SendCtrl(r, 0, 1, 0);
-    SendPublishStart(r);
-    RTMP_Close(r);
-    return NULL;
-}
-
 static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, unsigned offset)
 {
     const char *body;
@@ -668,7 +637,8 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
     }
     else if (AVMATCH(&method, &av_createStream))
     {
-        SendResultNumber(r, txn, ++server->streamID);
+        static int32_t streamID = 0;
+        SendResultNumber(r, txn, ++streamID);
     }
     else if (AVMATCH(&method, &av_getStreamLength))
     {
@@ -685,22 +655,25 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
     }
     else if (AVMATCH(&method, &av_publish))
     {
-        server->thread = st_thread_create(rtmp_publish_thread, (void*)server, true, 0);
+        AVal playpath;
+        AMFProp_GetString(AMF_GetProp(&obj, NULL, 3), &playpath);
+        Hub_SetPublisher(std::string(playpath.av_val, playpath.av_len), packet->m_nInfoField2, r);
+        SendPublishStart(r);
     }
     else if (AVMATCH(&method, &av_play))
     {
+        AVal playpath;
         RTMPPacket pc = {0};
-        AMFProp_GetString(AMF_GetProp(&obj, NULL, 3), &r->Link.playpath);
+        AMFProp_GetString(AMF_GetProp(&obj, NULL, 3), &playpath);
         pc.m_body = server->connect;
         server->connect = NULL;
-        if (r->Link.playpath.av_len)
-        {
-            if (obj.o_num > 4)
-                r->Link.seekTime = AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 4));
-            if (obj.o_num > 5)
-                r->Link.stopTime = r->Link.seekTime + AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 5));
-            if (spawn_pusher(server, r))
-                server->thread = st_thread_create(rtmp_play_thread, (void*)server, true, 0);
+        if (obj.o_num > 4)
+            r->Link.seekTime = AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 4));
+        if (obj.o_num > 5)
+            r->Link.stopTime = r->Link.seekTime + AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 5));
+        if (spawn_pusher(server, r, &playpath)){
+            SendPlayStart(r, &playpath);
+            HUB_AddPlayer(std::string(playpath.av_val, playpath.av_len), r);
         }
         RTMPPacket_Free(&pc);
     }
@@ -733,11 +706,11 @@ static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packe
         break;
 
     case RTMP_PACKET_TYPE_AUDIO:
-        //RTMP_Log(RTMP_LOGDEBUG, "%s, received: audio %lu bytes", __FUNCTION__, packet.m_nBodySize);
+        HUB_PublishPacket(packet);
         break;
 
     case RTMP_PACKET_TYPE_VIDEO:
-        //RTMP_Log(RTMP_LOGDEBUG, "%s, received: video %lu bytes", __FUNCTION__, packet.m_nBodySize);
+        HUB_PublishPacket(packet);
         break;
 
     case RTMP_PACKET_TYPE_FLEX_STREAM_SEND:
@@ -766,6 +739,7 @@ static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packe
             break;
         }
     case RTMP_PACKET_TYPE_INFO:
+        HUB_PublishPacket(packet);
         break;
 
     case RTMP_PACKET_TYPE_SHARED_OBJECT:
@@ -793,25 +767,24 @@ static void* rtmp_client_thread(void*sockfd)
 {
     STREAMING_SERVER server = {0};
     RTMPPacket packet = {0};
-    RTMP *r = &server.rtmp;
-    RTMP_Init(r);
-    r->m_sb.sb_socket = (ssize_t)sockfd;
+    RTMP rtmp;
+    RTMP_Init(&rtmp);
+    rtmp.m_sb.sb_socket = (ssize_t)sockfd;
 
-    if (!RTMP_Serve(r)) {
+    if (!RTMP_Serve(&rtmp)) {
         RTMP_Log(RTMP_LOGERROR, "Handshake failed");
         goto cleanup;
     }
-    while (RTMP_IsConnected(r) && RTMP_ReadPacket(r, &packet)) {
+    while (RTMP_IsConnected(&rtmp) && RTMP_ReadPacket(&rtmp, &packet)) {
         if (!RTMPPacket_IsReady(&packet))
             continue;
-        HandlePacket(&server, r, &packet);
+        HandlePacket(&server, &rtmp, &packet);
         RTMPPacket_Free(&packet);
     }
 cleanup:
     RTMP_LogPrintf("Closing connection... ");
-    if (server.thread)
-        st_thread_join(server.thread, NULL);
-    RTMP_Close(r);
+    HUB_RemoveClient(&rtmp);
+    RTMP_Close(&rtmp);
     RTMP_LogPrintf("Closed connection");
     return NULL;
 }

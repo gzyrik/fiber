@@ -18,7 +18,7 @@ SAVC(avc1);
 SAVC(mp4a);
 SAVC(encoder);
 SAVC(fileSize);
-extern const AVal av_setDataFrame;
+SAVC2(setDataFrame, "@setDataFrame");
 struct H264Buf
 {
   unsigned lastStamp;

@@ -186,12 +186,12 @@ RTMPPacket_Reset(RTMPPacket *p)
 }
 
 bool
-RTMPPacket_Alloc(RTMPPacket *p, uint32_t nSize)
+RTMPPacket_Alloc(RTMPPacket *p, uint32_t bobySize)
 {
   char *ptr;
-  if (nSize > UINT32_MAX - RTMP_MAX_HEADER_SIZE)
+  if (bobySize > UINT32_MAX - RTMP_MAX_HEADER_SIZE)
     return FALSE;
-  ptr = calloc(1, nSize + RTMP_MAX_HEADER_SIZE);
+  ptr = calloc(1, bobySize + RTMP_MAX_HEADER_SIZE);
   if (!ptr)
     return FALSE;
   p->m_body = ptr + RTMP_MAX_HEADER_SIZE;
@@ -5084,7 +5084,7 @@ fail:
   return total;
 }
 
-const AVal av_setDataFrame = AVC("@setDataFrame");
+SAVC2(setDataFrame, "@setDataFrame");
 
 int
 RTMP_Write(RTMP *r, const char *buf, int size)

@@ -9,8 +9,8 @@ RTMP :
 	@cd $(RTMP_DIR) && $(MAKE)
 
 CXXFLAGS += -O0 -g -std=c++14 -I$(MYST_DIR) -I$(RTMP_DIR) -L$(RTMP_DIR)/librtmp -L$(MYST_DIR) -lrtmp
-rtmpsrv : rtmpsrv.cpp RTMP MYST
-	$(CXX) -o $@ $< $(CXXFLAGS) -lst -lz
+rtmpsrv : rtmpsrv.cpp rtmphub.cpp RTMP MYST
+	$(CXX) -o $@ $(filter %.cpp,$^) $(CXXFLAGS) -lst -lz
 
 rtmpush : rtmpush.cpp RTMP MYST
 	$(CXX) -o $@ $< $(CXXFLAGS)
