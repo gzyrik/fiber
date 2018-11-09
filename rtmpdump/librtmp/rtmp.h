@@ -117,7 +117,7 @@ extern "C"
     bool m_hasAbsTimestamp;	/* timestamp absolute or relative? */
     int m_nChannel;
     uint32_t m_nTimeStamp;	/* timestamp */
-    int32_t m_nInfoField2;	/* last 4 bytes in a long header */
+    int32_t m_nInfoField2;	/* last 4 bytes in a long header, is streamID */
     uint32_t m_nBodySize;
     uint32_t m_nBytesRead;
     RTMPChunk *m_chunk;
@@ -325,8 +325,8 @@ extern "C"
   int RTMP_Serve(RTMP *r);
   int RTMP_TLS_Accept(RTMP *r, void *ctx);
 
-  int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet);
-  int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue);
+  bool RTMP_ReadPacket(RTMP *r, RTMPPacket *packet);
+  bool RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue);
   int RTMP_SendChunk(RTMP *r, RTMPChunk *chunk);
   int RTMP_IsConnected(RTMP *r);
   int RTMP_Socket(RTMP *r);
@@ -351,6 +351,19 @@ extern "C"
 
   int RTMP_LibVersion(void);
   void RTMP_UserInterrupt(void);	/* user typed Ctrl-C */
+
+
+  /**
+   * The server sends this event to notify the client
+   * that a stream has become functional and can be
+   * used for communication. By default, this event
+   * is sent on ID 0 after the application connect
+   * command is successfully received from the
+   * client. The event data is 4-byte and represents
+   * the stream ID of the stream that became
+   * functional.
+   */
+#define RTMP_CTRL_STREAM_BEGIN   0x00
 
   int RTMP_SendCtrl(RTMP *r, short nType, unsigned int nObject,
 		     unsigned int nTime);

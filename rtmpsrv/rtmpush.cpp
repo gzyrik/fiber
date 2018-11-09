@@ -2,7 +2,8 @@
 #include <stdio.h>
 #include <librtmp/rtmp.h>
 #include <librtmp/log.h>
-
+#include <unistd.h>
+//TODO: fork process to it
 int main(int argc, char* argv[])
 {
     char* file= argv[1];
@@ -28,5 +29,6 @@ int main(int argc, char* argv[])
         return -1;
     fclose(fp);
     free(flv_buf);
+    while(true) sleep(1);
     RTMP_Close(&rtmp);
 }

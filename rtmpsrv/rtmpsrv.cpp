@@ -11,8 +11,8 @@
 #define CPPHTTPLIB_ST_SUPPORT
 #define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
-void Hub_SetPublisher(const std::string& playpath, int32_t streamId, RTMP* r);
-void HUB_AddPlayer(const std::string& playpath, RTMP* r);
+void Hub_SetPublisher(const std::string& playpath, RTMP* r, int32_t streamId, bool live);
+void HUB_AddPlayer(const std::string& playpath, RTMP* r, int32_t streamId, double seekMs, double lenMs);
 void HUB_RemoveClient(RTMP* r);
 void HUB_PublishPacket(RTMPPacket* packet);
 
@@ -35,6 +35,7 @@ SAVC(createStream);
 SAVC(getStreamLength);
 SAVC(play);
 SAVC(publish);
+SAVC(live);
 SAVC(fmsVer);
 SAVC(mode);
 SAVC(level);
@@ -306,10 +307,11 @@ static int SendPlayStart(RTMP *r, AVal* playpath)
     packet.m_nBodySize = enc - packet.m_body;
     return RTMP_SendPacket(r, &packet, false);
 }
-static int SendPlayStop(RTMP *r, AVal* playpath)
+bool SendPlayStop(RTMP *r, const std::string& playpath)
 {
     RTMPPacket packet;
     char pbuf[512], *pend = pbuf+sizeof(pbuf);
+    AVal av_playpath={(char*)playpath.data(), (int)playpath.length()};
 
     packet.m_nChannel = 0x03;     // control channel (invoke)
     packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
@@ -328,7 +330,7 @@ static int SendPlayStop(RTMP *r, AVal* playpath)
     enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
     enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Stop);
     enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Stopped_playing);
-    enc = AMF_EncodeNamedString(enc, pend, &av_details, playpath);
+    enc = AMF_EncodeNamedString(enc, pend, &av_details, &av_playpath);
     enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
     *enc++ = 0;
     *enc++ = 0;
@@ -655,26 +657,32 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
     }
     else if (AVMATCH(&method, &av_publish))
     {
-        AVal playpath;
+        AVal playpath, live={0};
         AMFProp_GetString(AMF_GetProp(&obj, NULL, 3), &playpath);
-        Hub_SetPublisher(std::string(playpath.av_val, playpath.av_len), packet->m_nInfoField2, r);
+        if (obj.o_num > 4)
+            AMFProp_GetString(AMF_GetProp(&obj, NULL, 4), &live);
+        Hub_SetPublisher(std::string(playpath.av_val, playpath.av_len),
+            r, packet->m_nInfoField2, AVMATCH(&live, &av_live));
         SendPublishStart(r);
     }
     else if (AVMATCH(&method, &av_play))
     {
         AVal playpath;
-        RTMPPacket pc = {0};
+        double seekMs=-1000, lenMs=-1;
         AMFProp_GetString(AMF_GetProp(&obj, NULL, 3), &playpath);
+        if (obj.o_num > 4)
+            seekMs = AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 4));
+        if (obj.o_num > 5)
+            lenMs = AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 5));
+        if (spawn_pusher(server, r, &playpath)){
+            RTMP_SendCtrl(r, RTMP_CTRL_STREAM_BEGIN, packet->m_nInfoField2, 0);
+            SendPlayStart(r, &playpath);
+            HUB_AddPlayer(std::string(playpath.av_val, playpath.av_len), 
+                r, packet->m_nInfoField2, seekMs, lenMs);
+        }
+        RTMPPacket pc = {0};
         pc.m_body = server->connect;
         server->connect = NULL;
-        if (obj.o_num > 4)
-            r->Link.seekTime = AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 4));
-        if (obj.o_num > 5)
-            r->Link.stopTime = r->Link.seekTime + AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 5));
-        if (spawn_pusher(server, r, &playpath)){
-            SendPlayStart(r, &playpath);
-            HUB_AddPlayer(std::string(playpath.av_val, playpath.av_len), r);
-        }
         RTMPPacket_Free(&pc);
     }
     AMF_Reset(&obj);
