@@ -261,7 +261,7 @@ private:
 class Client {
 public:
     Client(
-        const char* host,
+        const std::string& host,
         int port = 80,
         size_t timeout_sec = 300);
 
@@ -343,7 +343,7 @@ private:
 class SSLClient : public Client {
 public:
     SSLClient(
-        const char* host,
+        const std::string& host,
         int port = 80,
         size_t timeout_sec = 300);
 
@@ -1875,7 +1875,7 @@ inline bool Server::read_and_close_socket(socket_t sock)
 
 // HTTP client implementation
 inline Client::Client(
-    const char* host, int port, size_t timeout_sec)
+    const std::string& host, int port, size_t timeout_sec)
     : host_(host)
     , port_(port)
     , timeout_sec_(timeout_sec)
@@ -2329,7 +2329,7 @@ inline bool SSLServer::read_and_close_socket(socket_t sock)
 }
 
 // SSL HTTP client implementation
-inline SSLClient::SSLClient(const char* host, int port, size_t timeout_sec)
+inline SSLClient::SSLClient(const std::string& host, int port, size_t timeout_sec)
     : Client(host, port, timeout_sec)
 {
     ctx_ = SSL_CTX_new(SSLv23_client_method());

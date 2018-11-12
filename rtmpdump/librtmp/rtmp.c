@@ -754,7 +754,7 @@ int RTMP_SetOpt(RTMP *r, const AVal *opt, AVal *arg)
   return TRUE;
 }
 
-int RTMP_SetupURL(RTMP *r, const char *url)
+int RTMP_SetupURL(RTMP *r, char *url)
 {
   AVal opt, arg;
   char *p1, *p2, *ptr = strchr(url, ' ');
@@ -796,7 +796,7 @@ int RTMP_SetupURL(RTMP *r, const char *url)
     /* unescape */
     port = arg.av_len;
     for (p1=p2; port >0;) {
-      if (*p1 == '\\') {
+      if (*p1 == '%') {
 	unsigned int c;
 	if (port < 3)
 	  return FALSE;
@@ -5126,8 +5126,10 @@ RTMP_Write(RTMP *r, const char *buf, int size)
           !pkt->m_nTimeStamp) || pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
       {
         pkt->m_headerType = RTMP_PACKET_SIZE_LARGE;
+        /*
         if (pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
           pkt->m_nBodySize += 16;
+        */
       }
       else
       {
@@ -5141,11 +5143,13 @@ RTMP_Write(RTMP *r, const char *buf, int size)
       }
       enc = pkt->m_body;
       pend = enc + pkt->m_nBodySize;
+      /*
       if (pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
       {
         enc = AMF_EncodeString(enc, pend, &av_setDataFrame);
         pkt->m_nBytesRead = enc - pkt->m_body;
       }
+      */
     }
     else
     {
