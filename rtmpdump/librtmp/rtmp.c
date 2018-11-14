@@ -818,7 +818,7 @@ int RTMP_SetupURL(RTMP *r, char *url)
 
   if (!r->Link.tcUrl.av_len)
     {
-      r->Link.tcUrl.av_val = (char*)url;
+      r->Link.tcUrl.av_val = url;
       if (r->Link.app.av_len)
         {
           if (r->Link.app.av_val < url + len)
@@ -2898,6 +2898,8 @@ SAVC2(NetStream_Pause_Notify, "NetStream.Pause.Notify");
 SAVC2(NetStream_Play_PublishNotify, "NetStream.Play.PublishNotify");
 SAVC2(NetStream_Play_UnpublishNotify, "NetStream.Play.UnpublishNotify");
 SAVC2(NetStream_Publish_Start, "NetStream.Publish.Start");
+SAVC2(NetStream_Publish_Rejected,"NetStream.Publish.Rejected");
+SAVC2(NetStream_Publish_Denied,"NetStream.Publish.Denied");
 SAVC2(NetConnection_Connect_Rejected, "NetConnection.Connect.Rejected");
 
 /* Returns 0 for OK/Failed/error, 1 for 'Stop or Complete' */
@@ -3100,16 +3102,19 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
   else if (AVMATCH(&method, &av_onStatus))
     {
       AMFObject obj2;
-      AVal code, level;
+      AVal code, level, description;
       AMFProp_GetObject(AMF_GetProp(&obj, NULL, 3), &obj2);
       AMFProp_GetString(AMF_GetProp(&obj2, &av_code, -1), &code);
       AMFProp_GetString(AMF_GetProp(&obj2, &av_level, -1), &level);
+      AMFProp_GetString(AMF_GetProp(&obj2, &av_description, -1), &description);
 
       RTMP_Log(RTMP_LOGDEBUG, "%s, onStatus: %s", __FUNCTION__, code.av_val);
       if (AVMATCH(&code, &av_NetStream_Failed)
 	  || AVMATCH(&code, &av_NetStream_Play_Failed)
 	  || AVMATCH(&code, &av_NetStream_Play_StreamNotFound)
-	  || AVMATCH(&code, &av_NetConnection_Connect_InvalidApp))
+	  || AVMATCH(&code, &av_NetConnection_Connect_InvalidApp)
+      || AVMATCH(&code, &av_NetStream_Publish_Rejected)
+      || AVMATCH(&code, &av_NetStream_Publish_Denied))
 	{
 	  r->m_stream_id = -1;
 	  RTMP_Close(r);
@@ -3555,8 +3560,8 @@ RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
 
   if (ReadN(r, (char *)hbuf, 1) == 0)
     {
-      RTMP_Log(RTMP_LOGERROR, "%s, failed to read RTMP packet header", __FUNCTION__);
-      return FALSE;
+      RTMP_Log(RTMP_LOGDEBUG, "%s, failed to read RTMP packet header", __FUNCTION__);
+      return RTMP_IsTimedout(r);
     }
 
   packet->m_headerType = (hbuf[0] & 0xc0) >> 6;
@@ -4273,16 +4278,17 @@ RTMPSockBuf_Fill(RTMPSockBuf *sb)
       else
 	{
 	  int sockerr = GetSockError();
-	  RTMP_Log(RTMP_LOGDEBUG, "%s, recv returned %d. GetSockError(): %d (%s)",
-	      __FUNCTION__, nBytes, sockerr, strerror(sockerr));
 	  if (sockerr == EINTR && !RTMP_ctrlC)
 	    continue;
 
-	  if (sockerr == EWOULDBLOCK || sockerr == EAGAIN)
+	  if (sockerr == EWOULDBLOCK || sockerr == EAGAIN || sockerr == ETIME)
 	    {
 	      sb->sb_timedout = TRUE;
 	      nBytes = 0;
 	    }
+	  RTMP_Log(nBytes?RTMP_LOGERROR:RTMP_LOGDEBUG, "%s, recv returned %d. GetSockError(): %d (%s)",
+	      __FUNCTION__, nBytes, sockerr, strerror(sockerr));
+
 	}
       break;
     }

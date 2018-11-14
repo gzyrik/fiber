@@ -1728,7 +1728,7 @@ inline bool Server::listen_internal()
             }
         }).detach();
 #else
-        st_async([=]{ read_and_close_socket(sock); });
+        st_async([=]{ read_and_close_socket(sock); return nullptr; });
 #endif
     }
 #ifndef CPPHTTPLIB_ST_SUPPORT

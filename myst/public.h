@@ -191,11 +191,6 @@ inline static void* __st_functor(void* f) {
     return ret;
 }
 inline st_thread_t st_async(
-    const std::function<void()>&func, int stack_size=0) {
-    return st_thread_create(__st_functor,
-        new std::function<void*()>([=]{func();return nullptr;}), false, stack_size);
-}
-inline st_thread_t st_async(
     const std::function<void*()>&func, bool joinable=false, int stack_size=0) {
     return st_thread_create(__st_functor,
         new std::function<void*()>(func), joinable, stack_size);

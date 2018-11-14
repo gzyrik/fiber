@@ -32,6 +32,7 @@ static _st_netfd_t* _st_netfd(int osfd)
   X(int,usleep,useconds_t)\
   X(int,nanosleep,const struct timespec *req, struct timespec *rem)\
   X(int,setsockopt,int, int, int, const void*, socklen_t)\
+  X(int,getsockopt,int, int, int, void*, socklen_t*)\
   X(int,close,int)\
   X(int,fcntl,int, int, ...)\
   X(int,ioctl,int, unsigned long int, ...)\
@@ -238,7 +239,9 @@ int nanosleep(const struct timespec *req, struct timespec *rem){return -1;}
 int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen)
 {
     int err = setsockopt_f(sockfd, level, optname, optval, optlen);
-    if (err == 0 && level == SOL_SOCKET && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)) {
+    if (err == 0 && level == SOL_SOCKET
+        && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
+        && optlen == sizeof(struct timeval)) {
         _st_netfd_t* fd = _st_netfd(sockfd);
         if (fd) {
             struct timeval* tv = (struct timeval*)optval;
@@ -250,6 +253,22 @@ int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t
         }
     }
     return err;
+}
+int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen)
+{
+    if (level == SOL_SOCKET
+        && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
+        && *optlen == sizeof(struct timeval)) {
+        _st_netfd_t* fd = _st_netfd(sockfd);
+        if (fd) {
+            st_utime_t us = (optname == SO_RCVTIMEO ? fd->rcv_timeo : fd->snd_timeo);
+            struct timeval* tv = (struct timeval*)optval;
+            tv->tv_sec  = us /1000000;
+            tv->tv_usec = us - tv->tv_sec *1000000;
+            return 0;
+        }
+    }
+    return getsockopt_f(sockfd, level, optname, optval, optlen);
 }
 int fcntl(int __fd, int __cmd, ...)
 {

@@ -4,6 +4,7 @@
 #include <librtmp/log.h>
 #include <vector>
 #include <string>
+#include <cstring>
 #include <unordered_map>
 bool SendPlayStop(RTMP *r, AVal* playpath);
 struct PlayStatus {
