@@ -14,12 +14,14 @@
 #define CPPHTTPLIB_ST_SUPPORT
 #define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
-void Hub_SetPublisher(const std::string& playpath, RTMP* r, int32_t streamId, bool live);
+void HUB_SetPublisher(const std::string& playpath, RTMP* r, int32_t streamId, bool live);
 void HUB_AddPlayer(const std::string& playpath, RTMP* r, int32_t streamId, double seekMs, double lenMs);
 void HUB_RemoveClient(RTMP* r);
+bool HUB_IsLive(const std::string& playpath);
 void HUB_PublishPacket(RTMPPacket* packet);
-typedef std::pair<std::string, int> SRC_ADDR;
 static int _httpPort = 5562, _rtmpPort = 1935;
+typedef std::pair<std::string, int> SRC_ADDR;
+//rtmp url regex to sockaddr
 static std::unordered_map<std::string, SRC_ADDR> _sourceAddrs;
 //#define SAVC(x) static const AVal av_##x = AVC(#x)
 
@@ -658,7 +660,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
         AMFProp_GetString(AMF_GetProp(&obj, NULL, 3), &playpath);
         if (obj.o_num > 4)
             AMFProp_GetString(AMF_GetProp(&obj, NULL, 4), &live);
-        Hub_SetPublisher(std::string(playpath.av_val, playpath.av_len),
+        HUB_SetPublisher(std::string(playpath.av_val, playpath.av_len),
             r, packet->m_nInfoField2, AVMATCH(&live, &av_live));
         SendPublishStart(r);
     }
@@ -683,7 +685,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
 
             httplib::Client cli(src_addr.first, src_addr.second);
             auto res = cli.Post("/publish", body, "text/plain");
-            if (res->status != 201)
+            if (!res || res->status >= 400)
                 RTMP_Close(r);
         }
         RTMPPacket pc = {0};
@@ -931,9 +933,15 @@ static void OnPublishPost(const httplib::Request& req, httplib::Response& res)
         if (!RTMP_SetupURL(rtmp, (char*)url.c_str())) ERR_BREAK(400);
 
         std::string file(rtmp->Link.playpath.av_val, rtmp->Link.playpath.av_len);
-        file.append(".flv");
+        if (HUB_IsLive(file)) {
+            RTMP_Close(rtmp);
+            RTMP_Free(rtmp);
+            res.status = 200;
+            return;
+        }
 
         char buf[13];
+        file.append(".flv");
         if (!(fp = fopen(file.c_str(), "rb"))) ERR_BREAK(404);
         if (fread(buf, 1, 13, fp) != 13
             || buf[0] != 'F' || buf[1] != 'L' || buf[2] != 'V')
@@ -969,7 +977,14 @@ int main()
     st_thread_t server = nullptr;
     httplib::Server http;
     //RTMP_debuglevel = RTMP_LOGINFO;
-    http.Post("/server", [&](const auto& req, auto& res) {
+    http.Get("/", [&](const auto& req, auto& res){
+        const char * help = 
+            "curl -X POST 127.0.0.1:5562/server -d 1\n"
+            "curl -X DELETE 127.0.0.1:5562/server\n"
+            "./ffmpeg -f avfoundation -framerate 30 -i 0 -vcodec libx264 -f flv rtmp://127.0.0.1/app/xxx"
+            "./rtmpdump  -r rtmp://127.0.0.1/app/xxx -o xxx.flv\n";
+        res.set_content(help, "text/html");
+    }).Post("/server", [&](const auto& req, auto& res) {
         server = OnServerPost(req, res);
     }).Delete("/server",[&](const auto& req, auto& res) {
         if (server) {

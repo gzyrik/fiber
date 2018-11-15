@@ -13,12 +13,13 @@ struct PlayStatus {
   double lenMs;
 };
 struct StreamNode {
-  StreamNode(RTMP* r=nullptr):publisher(r){
+  StreamNode(RTMP* r=nullptr, bool live=false):publisher(r), live(live){
     memset(&meta, 0, sizeof(meta));
   }
   ~StreamNode() {
     clear_gop();
   }
+  bool live;
   RTMP* publisher;
   RTMPPacket meta;
   std::vector<RTMPPacket> gop;
@@ -32,6 +33,11 @@ typedef std::unordered_map<std::string, StreamNode> PathMap;
 typedef std::unordered_map<int32_t, PathMap::iterator> StreamMap;
 static PathMap _paths;
 static StreamMap _streams;
+bool HUB_IsLive(const std::string& playpath)
+{
+    auto iter = _paths.find(playpath);
+    return iter != _paths.end() && iter->second.live;
+}
 static void ErasePath(PathMap::iterator& iter, int32_t streamId = 0)
 {
   _paths.erase(iter);
@@ -49,17 +55,18 @@ static void ErasePath(PathMap::iterator& iter, int32_t streamId = 0)
     ++iter2;
   }
 }
-void Hub_SetPublisher(const std::string& playpath, RTMP* r, int32_t streamId, bool live)
+void HUB_SetPublisher(const std::string& playpath, RTMP* r, int32_t streamId, bool live)
 {
   auto iter = _paths.find(playpath);
   if (iter == _paths.end()) {
     if (!r || !streamId) return;// no exist, remove nothing.
-    _streams[streamId] = _paths.emplace(playpath, r).first;
+    _streams[streamId] = _paths.emplace(playpath, StreamNode(r, live)).first;
   }
   else if (!r)
     ErasePath(iter, streamId);
   else if (streamId) {//set publisher
     iter->second.publisher = r;
+    iter->second.live = live;
     _streams[streamId] = iter;
   }
 }
@@ -98,6 +105,7 @@ void HUB_AddPlayer(const std::string& playpath, RTMP* r, int32_t streamId, doubl
     RTMP_SendPacket(r, &packet, false);
   }
 }
+static const char* enc_setDataFrame="\2\0\r@setDataFrame";//16+'\0';
 void HUB_PublishPacket(RTMPPacket* packet)
 {
   auto iter = _streams.find(packet->m_nInfoField2);
@@ -110,6 +118,10 @@ void HUB_PublishPacket(RTMPPacket* packet)
   {
   case RTMP_PACKET_TYPE_INFO:
     RTMPPacket_Free(&node.meta);
+    if (memcmp(packet->m_body, enc_setDataFrame, 16) == 0) { //skip av_setDataFrame
+        packet->m_nBodySize -= 16;
+        memmove(packet->m_body, packet->m_body+16, packet->m_nBodySize);
+    }
     memcpy(&node.meta, packet, sizeof(RTMPPacket));
     break;
   case RTMP_PACKET_TYPE_AUDIO:

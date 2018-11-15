@@ -4575,8 +4575,9 @@ Read_1_Packet(RTMP *r, char *buf, unsigned int buflen)
 		  if (nRes >= 0)
 		    {
 		      AVal metastring;
-		      AMFProp_GetString(AMF_GetProp(&metaObj, NULL, 0),
-					&metastring);
+		      AMFProp_GetString(AMF_GetProp(&metaObj, NULL, 0), &metastring);
+              if (AVMATCH(&metastring, &av_setDataFrame))
+                  AMFProp_GetString(AMF_GetProp(&metaObj, NULL, 1), &metastring);
 
 		      if (AVMATCH(&metastring, &av_onMetaData))
 			{
@@ -5112,10 +5113,10 @@ RTMP_Write(RTMP *r, const char *buf, int size)
 
       if (buf[0] == 'F' && buf[1] == 'L' && buf[2] == 'V')
       {
-        if (s2 <= 13+11) /* FLV pkt too small */
+        if (s2 <= sizeof(flvHeader)+11) /* FLV pkt too small */
           break;
-        buf += 13;
-        s2 -= 13;
+        buf += sizeof(flvHeader);
+        s2  -= sizeof(flvHeader);
       }
 
       pkt->m_packetType = *buf++;
@@ -5132,10 +5133,8 @@ RTMP_Write(RTMP *r, const char *buf, int size)
           !pkt->m_nTimeStamp) || pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
       {
         pkt->m_headerType = RTMP_PACKET_SIZE_LARGE;
-        /*
         if (pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
-          pkt->m_nBodySize += 16;
-        */
+          pkt->m_nBodySize += 1+2+av_setDataFrame.av_len;
       }
       else
       {
@@ -5149,13 +5148,11 @@ RTMP_Write(RTMP *r, const char *buf, int size)
       }
       enc = pkt->m_body;
       pend = enc + pkt->m_nBodySize;
-      /*
       if (pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
       {
         enc = AMF_EncodeString(enc, pend, &av_setDataFrame);
         pkt->m_nBytesRead = enc - pkt->m_body;
       }
-      */
     }
     else
     {
