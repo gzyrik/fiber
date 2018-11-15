@@ -6,7 +6,7 @@
 #include <string>
 #include <cstring>
 #include <unordered_map>
-bool SendPlayStop(RTMP *r, AVal* playpath);
+bool SendPlayStop(RTMP *r, int32_t streamId, AVal* playpath);
 struct PlayStatus {
   int32_t streamId;
   double seekMs;
@@ -79,7 +79,7 @@ void HUB_RemoveClient(RTMP* r)
       node.publisher = nullptr;
       AVal playpath={(char*)iter->first.data(), (int)iter->first.length()};
       for(auto& p : node.players)
-        SendPlayStop(p.first, &playpath);
+        SendPlayStop(p.first, p.second.streamId, &playpath);
     }
     else
       node.players.erase(r);

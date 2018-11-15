@@ -57,11 +57,14 @@ SAVC(deleteStream);
 SAVC(FCUnpublish);
 SAVC2(dquote,"\"");
 SAVC2(escdquote,"\\\"");
+SAVC2(NetStream_Play_Reset, "NetStream.Play.Reset");
+SAVC2(Playing_resetting, "Playing resetting");
 SAVC2(NetStream_Play_Start, "NetStream.Play.Start");
 SAVC2(Started_playing, "Started playing");
 SAVC2(Started_publishing, "Started publishing");
 SAVC2(NetStream_Play_Stop, "NetStream.Play.Stop");
 SAVC2(Stopped_playing, "Stopped playing");
+SAVC2(NetStream_Data_Start, "NetStream.Data.Start");
 SAVC2(NetStream_Authenticate_UsherToken, "NetStream.Authenticate.UsherToken");
 SAVC2(NetStream_Publish_Start, "NetStream.Publish.Start");
 #undef AVC
@@ -311,7 +314,7 @@ static bool SpawnPublisher(STREAMING_SERVER* server, RTMP * r, AVal* playpath,
         return true;
     }
 }
-static bool InvokeOnStatus(RTMP *r, const std::function<char*(char*,char*)>& func)
+static bool Invoke(RTMP *r, int32_t streamId, const std::function<void(char*&,char*)>& func)
 {
     RTMPPacket packet;
     char pbuf[512], *pend = pbuf+sizeof(pbuf);
@@ -320,52 +323,71 @@ static bool InvokeOnStatus(RTMP *r, const std::function<char*(char*,char*)>& fun
     packet.m_headerType = 1; /* RTMP_PACKET_SIZE_MEDIUM; */
     packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
     packet.m_nTimeStamp = 0;
-    packet.m_nInfoField2 = 0;
+    packet.m_nInfoField2 = streamId;
     packet.m_hasAbsTimestamp = 0;
     packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
 
     char *enc = packet.m_body;
-    enc = AMF_EncodeString(enc, pend, &av_onStatus);
-    enc = AMF_EncodeNumber(enc, pend, 0);//transaction_id
-    *enc++ = AMF_NULL;//args
-    *enc++ = AMF_OBJECT;
-
-    enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
-    enc = func(enc, pend);
-    *enc++ = 0;
-    *enc++ = 0;
-    *enc++ = AMF_OBJECT_END;
+    func(enc, pend);
 
     packet.m_nBodySize = enc - packet.m_body;
     return RTMP_SendPacket(r, &packet, false);
 }
-static bool SendPlayStart(RTMP *r, AVal* playpath)
+static bool InvokeOnStatus(RTMP *r, int32_t streamId, const std::function<void(char*&,char*)>& func)
 {
-    return InvokeOnStatus(r, [playpath](char* enc, char* pend){
+    return Invoke(r, streamId, [&](char* &enc, char* pend){
+        enc = AMF_EncodeString(enc, pend, &av_onStatus);
+        enc = AMF_EncodeNumber(enc, pend, 0);//transaction_id
+        *enc++ = AMF_NULL;//args
+        
+        *enc++ = AMF_OBJECT;
+        enc = AMF_EncodeNamedString(enc, pend, &av_level, &av_status);
+        func(enc, pend);
+        *enc++ = 0;
+        *enc++ = 0;
+        *enc++ = AMF_OBJECT_END;
+    });
+}
+static void SendPlayStart(RTMP *r, int32_t streamId, AVal* playpath)
+{
+    RTMP_SendCtrl(r, RTMP_CTRL_STREAM_BEGIN, streamId, 0);
+    InvokeOnStatus(r, streamId, [playpath](char* &enc, char* pend){
+        enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Reset);
+        enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Playing_resetting);
+        enc = AMF_EncodeNamedString(enc, pend, &av_details, playpath);
+        enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
+    });
+    InvokeOnStatus(r, streamId, [playpath](char* &enc, char* pend){
         enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Start);
         enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Started_playing);
         enc = AMF_EncodeNamedString(enc, pend, &av_details, playpath);
         enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
-        return enc;
+    });
+    Invoke(r, streamId, [](char* &enc, char* pend){
+        enc = AMF_EncodeString(enc, pend, &av_onStatus);
+
+        *enc++ = AMF_OBJECT;
+        enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Data_Start);
+        *enc++ = 0;
+        *enc++ = 0;
+        *enc++ = AMF_OBJECT_END;
     });
 }
-bool SendPlayStop(RTMP *r, AVal* playpath)
+bool SendPlayStop(RTMP *r, int32_t streamId, AVal* playpath)
 {
-    return InvokeOnStatus(r, [playpath](char* enc, char* pend){
+    return InvokeOnStatus(r, streamId, [playpath](char* &enc, char* pend){
         enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Play_Stop);
         enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Stopped_playing);
         enc = AMF_EncodeNamedString(enc, pend, &av_details, playpath);
         enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
-        return enc;
     });
 }
-static int SendPublishStart(RTMP *r)
+static int SendPublishStart(RTMP *r, int32_t streamId)
 {
-    return InvokeOnStatus(r, [](char* enc, char* pend){
+    return InvokeOnStatus(r, streamId, [](char* &enc, char* pend){
         enc = AMF_EncodeNamedString(enc, pend, &av_code, &av_NetStream_Publish_Start);
         enc = AMF_EncodeNamedString(enc, pend, &av_description, &av_Started_publishing);
         enc = AMF_EncodeNamedString(enc, pend, &av_clientid, &av_clientid);
-        return enc;
     });
 }
 static void AVreplace(AVal *src, const AVal *orig, const AVal *repl)
@@ -662,7 +684,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
             AMFProp_GetString(AMF_GetProp(&obj, NULL, 4), &live);
         HUB_SetPublisher(std::string(playpath.av_val, playpath.av_len),
             r, packet->m_nInfoField2, AVMATCH(&live, &av_live));
-        SendPublishStart(r);
+        SendPublishStart(r, packet->m_nInfoField2);
     }
     else if (AVMATCH(&method, &av_play))
     {
@@ -677,8 +699,7 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
         std::string body;
         SRC_ADDR src_addr={"127.0.0.1", _httpPort};
         if (SpawnPublisher(server, r, &playpath, src_addr, body)){
-            RTMP_SendCtrl(r, RTMP_CTRL_STREAM_BEGIN, packet->m_nInfoField2, 0);
-            SendPlayStart(r, &playpath);
+            SendPlayStart(r, packet->m_nInfoField2, &playpath);
 
             HUB_AddPlayer(std::string(playpath.av_val, playpath.av_len), 
                 r, packet->m_nInfoField2, seekMs, lenMs);
@@ -700,6 +721,15 @@ static void HandleInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet,
     }
     AMF_Reset(&obj);
 }
+static void HandleChangeChunkSize(RTMP *r, const RTMPPacket *packet)
+{
+    if (packet->m_nBodySize >= 4)
+    {
+        r->m_inChunkSize = AMF_DecodeInt32(packet->m_body);
+        RTMP_Log(RTMP_LOGDEBUG, "%s, received: chunk size change to %d", __FUNCTION__,
+            r->m_inChunkSize);
+    }
+}
 static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packet)
 {
     RTMP_Log(RTMP_LOGINFO, "%s, received packet type %02X, size %u bytes", __FUNCTION__,
@@ -708,7 +738,7 @@ static void HandlePacket(STREAMING_SERVER *server, RTMP *rtmp, RTMPPacket *packe
     switch (packet->m_packetType)
     {
     case RTMP_PACKET_TYPE_CHUNK_SIZE:
-        //      HandleChangeChunkSize(rtmp, packet);
+        HandleChangeChunkSize(rtmp, packet);
         break;
 
     case RTMP_PACKET_TYPE_BYTES_READ_REPORT:
