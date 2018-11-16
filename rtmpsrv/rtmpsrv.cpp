@@ -839,7 +839,6 @@ static void* rtmp_client_thread(int sockfd, std::vector<st_thread_t>& join)
 cleanup:
     RTMP_LogPrintf("Closing connection... ");
     HUB_RemoveClient(&rtmp);
-    RTMPPacket_Free(&packet);
     RTMP_Close(&rtmp);
     RTMP_LogPrintf("Closed connection");
     join.emplace_back(st_thread_self());
@@ -887,6 +886,7 @@ static void* rtmp_publish(RTMP* rtmp, FILE* fp)
     do {
         if (fread(buf, 1, 11, fp) != 11)
             break;
+        const int pktType = buf[0];
         uint32_t ts = AMF_DecodeInt24(buf+4);
         ts |= uint32_t(buf[7]) << 24;
 
@@ -894,15 +894,18 @@ static void* rtmp_publish(RTMP* rtmp, FILE* fp)
         const uint32_t diff = (ts - startTs) - (RTMP_GetTime() -re);
         if (diff > 300 && diff < 3000) st_usleep(diff*1000);
 
-        const size_t pktSize = AMF_DecodeInt24(buf+1) + 11;
+        const size_t bodySize = AMF_DecodeInt24(buf+1), pktSize = bodySize + 11;
         if (bufSize < pktSize)
             buf = (char*)realloc(buf, bufSize = pktSize);
-        if (fseek(fp, -11, SEEK_CUR) != 0)
+        if (fread(buf+11, 1, bodySize, fp) != bodySize)
             break;
-        if (fread(buf, 1, pktSize, fp) != pktSize)
-            break;
-        if (RTMP_Write(rtmp, buf, pktSize) != pktSize)
-            break;
+        if (pktType == RTMP_PACKET_TYPE_AUDIO
+            || pktType == RTMP_PACKET_TYPE_VIDEO
+            || pktType == RTMP_PACKET_TYPE_INFO)
+        {
+            if (RTMP_Write(rtmp, buf, pktSize) != pktSize)
+                break;
+        }
         if (fseek(fp, 4, SEEK_CUR) != 0)
             break;
     } while(_rtmpPort && !feof(fp));
@@ -1006,7 +1009,7 @@ int main()
     }
     st_thread_t server = nullptr;
     httplib::Server http;
-    //RTMP_debuglevel = RTMP_LOGINFO;
+    RTMP_debuglevel = RTMP_LOGWARNING;
     http.Get("/", [&](const auto& req, auto& res){
         const char * help = 
             "curl -X POST 127.0.0.1:5562/server -d 1\n"

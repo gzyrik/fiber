@@ -352,21 +352,93 @@ extern "C"
   int RTMP_LibVersion(void);
   void RTMP_UserInterrupt(void);	/* user typed Ctrl-C */
 
+  enum RTMPCtrlType {
+      /**
+       * The server sends this event to notify the client
+       * that a stream has become functional and can be
+       * used for communication. By default, this event
+       * is sent on ID 0 after the application connect
+       * command is successfully received from the
+       * client. The event data is 4-byte and represents
+       * the stream ID of the stream that became
+       * functional.
+       */
+      RTMP_CTRL_STREAM_BEGIN = 0x00,
 
-  /**
-   * The server sends this event to notify the client
-   * that a stream has become functional and can be
-   * used for communication. By default, this event
-   * is sent on ID 0 after the application connect
-   * command is successfully received from the
-   * client. The event data is 4-byte and represents
-   * the stream ID of the stream that became
-   * functional.
-   */
-#define RTMP_CTRL_STREAM_BEGIN   0x00
+      /**
+       * The server sends this event to notify the client
+       * that the playback of data is over as requested
+       * on this stream. No more data is sent without
+       * issuing additional commands. The client discards
+       * the messages received for the stream. The
+       * 4 bytes of event data represent the ID of the
+       * stream on which playback has ended.
+       */
+      RTMP_CTRL_STREAM_EOF = 0x01,
 
-  int RTMP_SendCtrl(RTMP *r, short nType, unsigned int nObject,
-		     unsigned int nTime);
+      /**
+       * The server sends this event to notify the client
+       * that there is no more data on the stream. If the
+       * server does not detect any message for a time
+       * period, it can notify the subscribed clients
+       * that the stream is dry. The 4 bytes of event
+       * data represent the stream ID of the dry stream.
+       */
+      RTMP_CTRL_STREAM_DRY = 0x02,
+
+      /**
+       * The client sends this event to inform the server
+       * of the buffer size (in milliseconds) that is
+       * used to buffer any data coming over a stream.
+       * This event is sent before the server starts
+       * processing the stream. The first 4 bytes of the
+       * event data represent the stream ID and the next
+       * 4 bytes represent the buffer length, in
+       * milliseconds. 8bytes event-data.
+       */
+      RTMP_CTRL_SET_BUFFER_MS = 0x03,
+
+      /**
+       * The server sends this event to notify the client
+       * that the stream is a recorded stream. The
+       * 4 bytes event data represent the stream ID of
+       * the recorded stream.
+       */
+      RTMP_CTRL_STREAM_IS_RECORDED = 0x04,
+
+      /**
+       * The server sends this event to test whether the
+       * client is reachable. Event data is a 4-byte
+       * timestamp, representing the local server time
+       * when the server dispatched the command. The
+       * client responds with kMsgPingResponse on
+       * receiving kMsgPingRequest.
+       */
+      RTMP_CTRL_PING = 0x06,
+
+      /**
+       * The client sends this event to the server in
+       * response to the ping request. The event data is
+       * a 4-byte timestamp, which was received with the
+       * kMsgPingRequest request.
+       */
+      RTMP_CTRL_PONG = 0x07,
+
+      /**
+       * SWF verify request
+       * For PCUC size=3, for example the payload is "00 1A 01",
+       * it's a FMS control event, where the event type is 0x001a and event data is 0x01,
+       * please notice that the event data is only 1 byte for this event.
+       */
+      RTMP_CTRL_SWF_VERIFY = 0x1A,
+
+      /**
+       * SWF verify response
+       */
+      RTMP_CTRL_SWF_HMAC_SHA256= 0x1B,
+  };
+
+  bool RTMP_SendCtrl(RTMP *r, enum RTMPCtrlType nType, unsigned nObject, unsigned nTime);
 
   /* caller probably doesn't know current timestamp, should
    * just use RTMP_Pause instead
@@ -384,6 +456,7 @@ extern "C"
   int RTMP_SendCreateStream(RTMP *r);
   int RTMP_SendSeek(RTMP *r, int dTime);
   int RTMP_SendServerBW(RTMP *r);
+  bool RTMP_SendChunkSize(RTMP *r);
   int RTMP_SendClientBW(RTMP *r);
   void RTMP_DropRequest(RTMP *r, int i, int freeit);
   int RTMP_Read(RTMP *r, char *buf, int size);

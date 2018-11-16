@@ -68,6 +68,12 @@ void HUB_SetPublisher(const std::string& playpath, RTMP* r, int32_t streamId, bo
     iter->second.publisher = r;
     iter->second.live = live;
     _streams[streamId] = iter;
+    for(auto& i : iter->second.players) {
+      if (i.first->m_outChunkSize != r->m_inChunkSize){
+        i.first->m_outChunkSize = r->m_inChunkSize;
+        RTMP_SendChunkSize(i.first);
+      }
+    }
   }
 }
 void HUB_RemoveClient(RTMP* r)
@@ -98,6 +104,10 @@ void HUB_AddPlayer(const std::string& playpath, RTMP* r, int32_t streamId, doubl
   p.seekMs = seekMs;
   p.lenMs = lenMs;
   if (node.meta.m_nBodySize  == 0) return;
+  if (r->m_outChunkSize != node.publisher->m_inChunkSize) {
+    r->m_outChunkSize = node.publisher->m_inChunkSize;
+    RTMP_SendChunkSize(r);
+  }
   node.meta.m_nInfoField2 = streamId;
   RTMP_SendPacket(r, &node.meta, false);
   for(auto& packet : node.gop){
@@ -105,7 +115,7 @@ void HUB_AddPlayer(const std::string& playpath, RTMP* r, int32_t streamId, doubl
     RTMP_SendPacket(r, &packet, false);
   }
 }
-static const char* enc_setDataFrame="\2\0\r@setDataFrame";//16+'\0';
+
 void HUB_PublishPacket(RTMPPacket* packet)
 {
   auto iter = _streams.find(packet->m_nInfoField2);
@@ -118,10 +128,6 @@ void HUB_PublishPacket(RTMPPacket* packet)
   {
   case RTMP_PACKET_TYPE_INFO:
     RTMPPacket_Free(&node.meta);
-    if (memcmp(packet->m_body, enc_setDataFrame, 16) == 0) { //skip av_setDataFrame
-        packet->m_nBodySize -= 16;
-        memmove(packet->m_body, packet->m_body+16, packet->m_nBodySize);
-    }
     memcpy(&node.meta, packet, sizeof(RTMPPacket));
     break;
   case RTMP_PACKET_TYPE_AUDIO:
