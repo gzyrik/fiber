@@ -958,7 +958,7 @@ static void OnPublishPost(const httplib::Request& req, httplib::Response& res)
         std::string url;{
             std::ostringstream oss;
             oss << "rtmp://" << req.get_header_value("REMOTE_ADDR")
-                << ':' << _rtmpPort << req.body;
+                << ':' << _rtmpPort << ' ' << req.body;
             url = oss.str();
         }
         if (!(rtmp = RTMP_Alloc())) ERR_BREAK(503);

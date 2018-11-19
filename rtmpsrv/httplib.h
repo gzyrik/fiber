@@ -221,7 +221,7 @@ public:
     void stop();
 
 protected:
-    bool process_request(Stream& strm, bool last_connection, bool& connection_close);
+    bool process_request(Stream& strm, size_t& keep_alive_count, bool& connection_close);
 
     size_t keep_alive_max_count_;
 
@@ -506,26 +506,25 @@ inline bool read_and_close_socket(socket_t sock, size_t keep_alive_max_count, T 
     bool ret = false;
 
     if (keep_alive_max_count > 0) {
-        auto count = keep_alive_max_count;
-        while (count > 0 &&
+        auto keep_alive_count = keep_alive_max_count;
+        while (keep_alive_count > 0 &&
                detail::select_read(sock,
                    CPPHTTPLIB_KEEPALIVE_TIMEOUT_SECOND,
                    CPPHTTPLIB_KEEPALIVE_TIMEOUT_USECOND) > 0) {
+            keep_alive_count--;
             SocketStream strm(sock);
-            auto last_connection = count == 1;
-            auto connection_close = false;
+            auto connection_close = (keep_alive_count == 0);
 
-            ret = callback(strm, last_connection, connection_close);
+            ret = callback(strm, keep_alive_count, connection_close);
             if (!ret || connection_close) {
                 break;
             }
-
-            count--;
         }
     } else {
         SocketStream strm(sock);
-        auto dummy_connection_close = false;
-        ret = callback(strm, true, dummy_connection_close);
+        size_t dummy_keep_alive_count = 0;
+        auto dummy_connection_close = true;
+        ret = callback(strm, dummy_keep_alive_count, dummy_connection_close);
     }
 
     close_socket(sock);
@@ -1238,7 +1237,7 @@ inline void compress(std::string& content)
     deflateEnd(&strm);
 }
 
-inline void decompress(std::string& content)
+inline bool decompress(std::string& content)
 {
     z_stream strm;
     strm.zalloc = Z_NULL;
@@ -1250,7 +1249,7 @@ inline void decompress(std::string& content)
     // to decompress will be formatted with a gzip wrapper.
     auto ret = inflateInit2(&strm, 16 + 15);
     if (ret != Z_OK) {
-        return;
+        return false;
     }
 
     strm.avail_in = content.size();
@@ -1270,6 +1269,7 @@ inline void decompress(std::string& content)
     content.swap(decompressed);
 
     inflateEnd(&strm);
+    return true;
 }
 #endif
 
@@ -1781,7 +1781,7 @@ inline bool Server::dispatch_request(Request& req, Response& res, Handlers& hand
     return false;
 }
 
-inline bool Server::process_request(Stream& strm, bool last_connection, bool& connection_close)
+inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool& connection_close)
 {
     const auto bufsiz = 2048;
     char buf[bufsiz];
@@ -1801,15 +1801,19 @@ inline bool Server::process_request(Stream& strm, bool last_connection, bool& co
     // Request line and headers
     if (!parse_request_line(reader.ptr(), req) || !detail::read_headers(strm, req.headers)) {
         res.status = 400;
-        write_response(strm, last_connection, req, res);
+        write_response(strm, connection_close, req, res);
         return true;
     }
 
     auto ret = true;
-    if (req.get_header_value("Connection") == "close") {
-        // ret = false;
+    const auto& req_connection = req.get_header_value("Connection");
+    if (req_connection == "close") 
         connection_close = true;
+    else if (req_connection== "keep-alive") {
+        connection_close = false;
+        keep_alive_count++;
     }
+    else
 
     req.set_header("REMOTE_ADDR", strm.get_remote_addr().c_str());
 
@@ -1817,7 +1821,7 @@ inline bool Server::process_request(Stream& strm, bool last_connection, bool& co
     if (req.method == "POST" || req.method == "PUT") {
         if (!detail::read_content(strm, req)) {
             res.status = 400;
-            write_response(strm, last_connection, req, res);
+            write_response(strm, connection_close, req, res);
             return ret;
         }
 
@@ -1828,7 +1832,7 @@ inline bool Server::process_request(Stream& strm, bool last_connection, bool& co
             detail::decompress(req.body);
 #else
             res.status = 415;
-            write_response(strm, last_connection, req, res);
+            write_response(strm, connection_close, req, res);
             return ret;
 #endif
         }
@@ -1840,7 +1844,7 @@ inline bool Server::process_request(Stream& strm, bool last_connection, bool& co
             if (!detail::parse_multipart_boundary(content_type, boundary) ||
                 !detail::parse_multipart_formdata(boundary, req.body, req.files)) {
                 res.status = 400;
-                write_response(strm, last_connection, req, res);
+                write_response(strm, connection_close, req, res);
                 return ret;
             }
         }
@@ -1850,11 +1854,18 @@ inline bool Server::process_request(Stream& strm, bool last_connection, bool& co
         if (res.status == -1) {
             res.status = 200;
         }
+        const auto& res_connection = res.get_header_value("Connection");
+        if (res_connection == "close") 
+            connection_close = true;
+        else if (res_connection== "keep-alive") {
+            connection_close = false;
+            keep_alive_count++;
+        }
     } else {
         res.status = 404;
     }
 
-    write_response(strm, last_connection, req, res);
+    write_response(strm, connection_close, req, res);
     return ret;
 }
 
@@ -1868,8 +1879,8 @@ inline bool Server::read_and_close_socket(socket_t sock)
     return detail::read_and_close_socket(
         sock,
         keep_alive_max_count_,
-        [this](Stream& strm, bool last_connection, bool& connection_close) {
-            return process_request(strm, last_connection, connection_close);
+        [this](Stream& strm, size_t& keep_alive_count, bool& connection_close) {
+            return process_request(strm, keep_alive_count, connection_close);
         });
 }
 
@@ -2017,7 +2028,7 @@ inline bool Client::process_request(Stream& strm, Request& req, Response& res, b
 
         if (res.get_header_value("Content-Encoding") == "gzip") {
 #ifdef CPPHTTPLIB_ZLIB_SUPPORT
-            detail::decompress(res.body);
+            if (!detail::decompress(res.body)) return false;
 #else
             return false;
 #endif
@@ -2032,7 +2043,7 @@ inline bool Client::read_and_close_socket(socket_t sock, Request& req, Response&
     return detail::read_and_close_socket(
         sock,
         0,
-        [&](Stream& strm, bool /*last_connection*/, bool& connection_close) {
+        [&](Stream& strm, size_t& keep_alive_count, bool& connection_close) {
             return process_request(strm, req, res, connection_close);
         });
 }
@@ -2205,26 +2216,25 @@ inline bool read_and_close_socket_ssl(
     bool ret = false;
 
     if (keep_alive_max_count > 0) {
-        auto count = keep_alive_max_count;
-        while (count > 0 &&
+        auto keep_alive_count = keep_alive_max_count;
+        while (keep_alive_count > 0 &&
                detail::select_read(sock,
                    CPPHTTPLIB_KEEPALIVE_TIMEOUT_SECOND,
                    CPPHTTPLIB_KEEPALIVE_TIMEOUT_USECOND) > 0) {
+            keep_alive_count--;
             SSLSocketStream strm(sock, ssl);
-            auto last_connection = count == 1;
-            auto connection_close = false;
+            auto connection_close = (keep_alive_count == 0);
 
-            ret = callback(strm, last_connection, connection_close);
+            ret = callback(strm, keep_alive_count, connection_close);
             if (!ret || connection_close) {
                 break;
             }
-
-            count--;
         }
     } else {
         SSLSocketStream strm(sock, ssl);
-        auto dummy_connection_close = false;
-        ret = callback(strm, true, dummy_connection_close);
+        size_t dummy_keep_alive_count = 0;
+        auto dummy_connection_close = true;
+        ret = callback(strm, keep_alive_count, dummy_connection_close);
     }
 
     SSL_shutdown(ssl);

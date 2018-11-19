@@ -362,7 +362,7 @@ int ioctl(int fd, unsigned long int request, ...)
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout)
 {
   int i, npfds, n;
-  struct pollfd pollfds4[4];
+  struct pollfd pollfds[4];
   struct pollfd* pfds;
   do {// 执行一次非阻塞的select, 检测异常或无效fd.
     static struct timeval zero_tv = {0, 0};
@@ -383,15 +383,15 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
     }
   } while(0);
   do {// convert fd_set to pollfd, and clear 3 fd_set.
-    for (i = npfds = 0, pfds = pollfds4, n = 4; i < nfds; ++i) {
+    for (i = npfds = 0, pfds = pollfds, n = sizeof(pollfds)/sizeof(struct pollfd); i < nfds; ++i) {
       int events = 0;
-      if (readfds && FD_ISSET(i, readfds)) events |= POLLIN;
+      if (readfds && FD_ISSET(i, readfds))   events |= POLLIN;
       if (writefds && FD_ISSET(i, writefds)) events |= POLLOUT;
       if (events || (exceptfds && FD_ISSET(i, exceptfds))){
         if (npfds == n) {
           n *= 2;
-          if (pfds == pollfds4)
-            pfds = (struct pollfd*)memcpy(malloc(sizeof(struct pollfd)*n), pollfds4, sizeof(pollfds4));
+          if (pfds == pollfds)
+            pfds = (struct pollfd*)memcpy(malloc(sizeof(struct pollfd)*n), pollfds, sizeof(pollfds));
           else
             pfds = (struct pollfd*)realloc(pfds, sizeof(struct pollfd)*n);
         }
@@ -411,12 +411,12 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
   if (exceptfds) FD_ZERO(exceptfds);
   for (i = n = 0; i < npfds; ++i) {
     struct pollfd *pfd = &pfds[i];
-    if (readfds && (pfd->revents & POLLIN))  { FD_SET(pfd->fd, readfds); ++n; }
+    if (readfds && (pfd->revents & POLLIN))  { FD_SET(pfd->fd, readfds);  ++n; }
     if (writefds && (pfd->revents & POLLOUT)){ FD_SET(pfd->fd, writefds); ++n;}
     if (exceptfds && (pfd->revents & ~(POLLIN | POLLOUT))){ FD_SET(pfd->fd, exceptfds); ++n; }
   }
 clean:
-  if (pfds != pollfds4) free(pfds);
+  if (pfds != pollfds) free(pfds);
   return n;
 }
   

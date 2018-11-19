@@ -762,7 +762,7 @@ int RTMP_SetupURL(RTMP *r, char *url)
   unsigned int port = 0;
 
   if (ptr)
-    *ptr = '\0';
+    *ptr++ = '\0';
 
   len = strlen(url);
   ret = RTMP_ParseURL(url, &r->Link.protocol, &r->Link.hostname,
@@ -772,23 +772,20 @@ int RTMP_SetupURL(RTMP *r, char *url)
   r->Link.port = port;
   r->Link.playpath = r->Link.playpath0;
 
-  while (ptr) {
-    *ptr++ = '\0';
-    p1 = ptr;
-    p2 = strchr(p1, '=');
+  while (ptr && *ptr) {
+    /* skip repeated spaces */
+    while (*ptr && isspace(*ptr)) *ptr++ = '\0';
+    p2 = strchr(ptr, '=');
     if (!p2)
       break;
-    opt.av_val = p1;
-    opt.av_len = p2 - p1;
+    opt.av_val = ptr;
+    opt.av_len = p2 - ptr;
     *p2++ = '\0';
     arg.av_val = p2;
     ptr = strchr(p2, ' ');
     if (ptr) {
-      *ptr = '\0';
       arg.av_len = ptr - p2;
-      /* skip repeated spaces */
-      while(ptr[1] == ' ')
-      	*ptr++ = '\0';
+      *ptr++ = '\0';
     } else {
       arg.av_len = strlen(p2);
     }
@@ -797,16 +794,16 @@ int RTMP_SetupURL(RTMP *r, char *url)
     port = arg.av_len;
     for (p1=p2; port >0;) {
       if (*p1 == '%') {
-	unsigned int c;
-	if (port < 3)
-	  return FALSE;
-	sscanf(p1+1, "%02x", &c);
-	*p2++ = c;
-	port -= 3;
-	p1 += 3;
+        unsigned int c;
+        if (port < 3)
+          return FALSE;
+        sscanf(p1+1, "%02x", &c);
+        *p2++ = c;
+        port -= 3;
+        p1 += 3;
       } else {
-	*p2++ = *p1++;
-	port--;
+        *p2++ = *p1++;
+        port--;
       }
     }
     arg.av_len = p2 - arg.av_val;
