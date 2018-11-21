@@ -1813,7 +1813,6 @@ inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool
         connection_close = false;
         keep_alive_count++;
     }
-    else
 
     req.set_header("REMOTE_ADDR", strm.get_remote_addr().c_str());
 

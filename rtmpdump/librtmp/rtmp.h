@@ -32,7 +32,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stddef.h>
-
+#include <stdio.h>
 #include "amf.h"
 
 #ifdef __cplusplus
@@ -228,19 +228,9 @@ extern "C"
     uint32_t nIgnoredFlvFrameCounter;
   } RTMP_READ;
 
-  typedef struct RTMP_METHOD
-  {
-    AVal name;
-    int num;
-  } RTMP_METHOD;
-
+  typedef struct RTMP_METHOD RTMP_METHOD;
   typedef struct RTMP RTMP;
-  typedef struct RTMP_METABUF
-  {
-    void* abuf, *vbuf;
-    unsigned startStamp;
-    void (*free)(RTMP* r);
-  } RTMP_METABUF;
+  typedef struct RTMP_METABUF RTMP_METABUF;
 
   struct RTMP
   {
@@ -288,7 +278,7 @@ extern "C"
     RTMPPacket m_write;
     RTMPSockBuf m_sb;
     RTMP_LNK Link;
-    RTMP_METABUF m_mbuf;
+    RTMP_METABUF *m_mbuf;
   };
 
   int RTMP_ParseURL(const char *url, int *protocol, AVal *host,
@@ -318,16 +308,13 @@ extern "C"
 			int dStart,
 			int dStop, int bLiveStream, long int timeout);
 
-  int RTMP_Connect(RTMP *r, RTMPPacket *cp);
-  struct sockaddr;
-  int RTMP_Connect0(RTMP *r, struct sockaddr *svc);
-  int RTMP_Connect1(RTMP *r, RTMPPacket *cp);
-  int RTMP_Serve(RTMP *r);
-  int RTMP_TLS_Accept(RTMP *r, void *ctx);
+  bool RTMP_Connect(RTMP *r, RTMPPacket *cp);
+  bool RTMP_Serve(RTMP *r, int sockfd, void *sslCtx);
 
   bool RTMP_ReadPacket(RTMP *r, RTMPPacket *packet);
   bool RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue);
   int RTMP_SendChunk(RTMP *r, RTMPChunk *chunk);
+
   int RTMP_IsConnected(RTMP *r);
   int RTMP_Socket(RTMP *r);
   int RTMP_IsTimedout(RTMP *r);
@@ -342,8 +329,8 @@ extern "C"
 
   void RTMP_Init(RTMP *r);
   void RTMP_Close(RTMP *r);
-  RTMP *RTMP_Alloc(void);
-  void RTMP_Free(RTMP *r);
+  //RTMP *RTMP_Alloc();
+  //void RTMP_Free(RTMP *r);
   void RTMP_EnableWrite(RTMP *r);
 
   void *RTMP_TLS_AllocServerContext(const char* cert, const char* key);
@@ -446,25 +433,23 @@ extern "C"
   int RTMP_SendPause(RTMP *r, int DoPause, int dTime);
   int RTMP_Pause(RTMP *r, int DoPause);
 
-  int RTMP_FindFirstMatchingProperty(AMFObject *obj, const AVal *name,
-				      AMFObjectProperty * p);
-
-  int RTMPSockBuf_Fill(RTMPSockBuf *sb);
-  int RTMPSockBuf_Send(RTMPSockBuf *sb, const char *buf, int len);
-  int RTMPSockBuf_Close(RTMPSockBuf *sb);
-
   int RTMP_SendCreateStream(RTMP *r);
   int RTMP_SendSeek(RTMP *r, int dTime);
   int RTMP_SendServerBW(RTMP *r);
   bool RTMP_SendChunkSize(RTMP *r);
   int RTMP_SendClientBW(RTMP *r);
   void RTMP_DropRequest(RTMP *r, int i, int freeit);
+
+/* rtmpread.c prepare for read */
+  bool RTMP_ResetRead(RTMP *r, FILE *flvFile, int nSkipKeyFrames);
+  uint32_t RTMP_GetReadTS(RTMP *r);
+  int RTMP_GetReadStatus(RTMP *r);
   int RTMP_Read(RTMP *r, char *buf, int size);
+
   int RTMP_Write(RTMP *r, const char *buf, int size);
 
 /* hashswf.c */
-  int RTMP_HashSWF(const char *url, unsigned int *size, unsigned char *hash,
-		   int age);
+  int RTMP_HashSWF(const char *url, unsigned int *size, unsigned char *hash, int age);
 
 /* h264aac.c */
   int RTMP_WriteMeta(RTMP *r, const char* desc,

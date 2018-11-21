@@ -26,9 +26,7 @@
 #include <ctype.h>
 #include <time.h>
 
-#include "rtmp_sys.h"
-#include "log.h"
-#include "http.h"
+#include "rtmp_prv.h"
 
 #ifdef CRYPTO
 #ifdef USE_POLARSSL

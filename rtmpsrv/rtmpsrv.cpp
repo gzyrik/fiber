@@ -821,9 +821,8 @@ static void* rtmp_client_thread(int sockfd, std::vector<st_thread_t>& join)
 
     RTMP rtmp;
     RTMP_Init(&rtmp);
-    rtmp.m_sb.sb_socket = (int)(ssize_t)sockfd;
 
-    if (!RTMP_Serve(&rtmp)) {
+    if (!RTMP_Serve(&rtmp, (int)(ssize_t)sockfd, NULL)) {
         RTMP_Log(RTMP_LOGERROR, "Handshake failed");
         goto cleanup;
     }
@@ -912,7 +911,7 @@ static void* rtmp_publish(RTMP* rtmp, FILE* fp)
 clean:
     fclose(fp);
     RTMP_Close(rtmp);
-    RTMP_Free(rtmp);
+    delete rtmp;
     if (buf) free(buf);
     return nullptr;
 }
@@ -955,23 +954,19 @@ static void OnPublishPost(const httplib::Request& req, httplib::Response& res)
     FILE* fp=nullptr;
     RTMP* rtmp=nullptr;
     do {
+        assert(req.has_header("REMOTE_ADDR"));
         std::string url;{
             std::ostringstream oss;
             oss << "rtmp://" << req.get_header_value("REMOTE_ADDR")
                 << ':' << _rtmpPort << ' ' << req.body;
             url = oss.str();
         }
-        if (!(rtmp = RTMP_Alloc())) ERR_BREAK(503);
+        if (!(rtmp = new RTMP)) ERR_BREAK(503);
         RTMP_Init(rtmp);
         if (!RTMP_SetupURL(rtmp, (char*)url.c_str())) ERR_BREAK(400);
 
         std::string file(rtmp->Link.playpath.av_val, rtmp->Link.playpath.av_len);
-        if (HUB_IsLive(file)) {
-            RTMP_Close(rtmp);
-            RTMP_Free(rtmp);
-            res.status = 200;
-            return;
-        }
+        if (HUB_IsLive(file)) ERR_BREAK(200);
 
         char buf[13];
         file.append(".flv");
@@ -991,7 +986,7 @@ static void OnPublishPost(const httplib::Request& req, httplib::Response& res)
     if (fp) fclose(fp);
     if (rtmp) {
         RTMP_Close(rtmp);
-        RTMP_Free(rtmp);
+        delete rtmp;
     }
 }
 #undef ERR_BREAK
@@ -1014,7 +1009,7 @@ int main()
         const char * help = 
             "curl -X POST 127.0.0.1:5562/server -d 1\n"
             "curl -X DELETE 127.0.0.1:5562/server\n"
-            "./ffmpeg -f avfoundation -framerate 30 -i 0 -vcodec libx264 -f flv rtmp://127.0.0.1/app/xxx"
+            "./ffmpeg -f avfoundation -framerate 30 -i 0 -vcodec libx264 -f flv rtmp://127.0.0.1/app/xxx\n"
             "./rtmpdump  -r rtmp://127.0.0.1/app/xxx -o xxx.flv\n";
         res.set_content(help, "text/html");
     }).Post("/server", [&](const auto& req, auto& res) {

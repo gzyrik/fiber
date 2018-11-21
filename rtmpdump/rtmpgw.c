@@ -573,7 +573,7 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
 
   rtmp.Link.extras = req.extras;
   rtmp.Link.token = req.token;
-  rtmp.m_read.timestamp = dSeek;
+  //rtmp.m_read.timestamp = dSeek;
 
   RTMP_LogPrintf("Connecting ... port: %d, app: %s\n", req.rtmpport, req.app.av_val);
   if (!RTMP_Connect(&rtmp, NULL))
@@ -611,17 +611,17 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
 	      if (duration > 0)
 		{
 		  percent =
-		    ((double) (dSeek + rtmp.m_read.timestamp)) / (duration *
+		    (double) (dSeek + RTMP_GetReadTS(&rtmp)) / (duration *
 							   1000.0) * 100.0;
 		  percent = ((double) (int) (percent * 10.0)) / 10.0;
 		  RTMP_LogStatus("\r%.3f KB / %.2f sec (%.1f%%)",
 			    (double) size / 1024.0,
-			    (double) (rtmp.m_read.timestamp) / 1000.0, percent);
+			    (double) RTMP_GetReadTS(&rtmp) / 1000.0, percent);
 		}
 	      else
 		{
 		  RTMP_LogStatus("\r%.3f KB / %.2f sec", (double) size / 1024.0,
-			    (double) (rtmp.m_read.timestamp) / 1000.0);
+			    (double) RTMP_GetReadTS(&rtmp) / 1000.0);
 		}
 	    }
 #ifdef _DEBUG

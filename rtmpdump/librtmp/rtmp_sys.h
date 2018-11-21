@@ -37,7 +37,9 @@
 #define GetSockError()	WSAGetLastError()
 #define SetSockError(e)	WSASetLastError(e)
 #define setsockopt(a,b,c,d,e)	(setsockopt)(a,b,c,(const char *)d,(int)e)
+#ifdef EWOULDBLOCK
 #undef EWOULDBLOCK
+#endif
 #define EWOULDBLOCK	WSAETIMEDOUT	/* we don't use nonblocking, but we do use timeouts */
 #define sleep(n)	Sleep(n*1000)
 #define msleep(n)	Sleep(n)
@@ -57,6 +59,9 @@
 #define closesocket(s)	close(s)
 #define msleep(n)	usleep(n*1000)
 #define SET_RCVTIMEO(tv,s)	struct timeval tv = {s,0}
+#ifndef INVALID_SOCKET
+#define INVALID_SOCKET -1
+#endif
 #endif
 
 #include "rtmp.h"

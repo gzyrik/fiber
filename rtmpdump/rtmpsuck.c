@@ -761,8 +761,7 @@ TFTYPE doServe(void *arg)	// server socket and state (our listening socket)
     {
       RTMP_Init(&server->rs);
       RTMP_Init(&server->rc);
-      server->rs.m_sb.sb_socket = sockfd;
-      if (!RTMP_Serve(&server->rs))
+      if (!RTMP_Serve(&server->rs, sockfd, NULL))
         {
           RTMP_Log(RTMP_LOGERROR, "Handshake failed");
           goto cleanup;
