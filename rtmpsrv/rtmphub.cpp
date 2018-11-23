@@ -55,8 +55,9 @@ static void ErasePath(PathMap::iterator& iter, int32_t streamId = 0)
     ++iter2;
   }
 }
-void HUB_SetPublisher(const std::string& playpath, RTMP* r, int32_t streamId, bool live)
+void HUB_SetPublisher(RTMP* r, int32_t streamId, bool live)
 {
+  const std::string playpath(r->Link.playpath.av_val, r->Link.playpath.av_len);
   auto iter = _paths.find(playpath);
   if (iter == _paths.end()) {
     if (!r || !streamId) return;// no exist, remove nothing.
@@ -85,7 +86,7 @@ void HUB_RemoveClient(RTMP* r)
       node.publisher = nullptr;
       AVal playpath={(char*)iter->first.data(), (int)iter->first.length()};
       for(auto& p : node.players)
-        SendPlayStop(p.first, p.second.streamId, &playpath);
+        RTMP_SendPlayStop(p.first, &playpath);
     }
     else
       node.players.erase(r);
@@ -96,8 +97,9 @@ void HUB_RemoveClient(RTMP* r)
   }
 }
 
-void HUB_AddPlayer(const std::string& playpath, RTMP* r, int32_t streamId, double seekMs, double lenMs)
+void HUB_AddPlayer(RTMP* r, int32_t streamId, double seekMs, double lenMs)
 {
+  const std::string playpath(r->Link.playpath.av_val, r->Link.playpath.av_len);
   auto& node = _paths[playpath];
   auto& p = node.players[r];
   p.streamId = streamId;

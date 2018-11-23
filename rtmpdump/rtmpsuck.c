@@ -427,7 +427,7 @@ ServeInvoke(STREAMING_SERVER *server, int which, RTMPPacket *pack, const char *b
               for (server->f_cur = server->f_head; server->f_cur &&
                     !server->f_cur->f_file; server->f_cur = server->f_cur->f_next) ;
             }
-	  server->rc.m_bPlaying = TRUE;
+	  server->rc.m_state = RTMP_STATE_PLAYING;
 	}
 
       // Return 1 if this is a Play.Complete or Play.Stop

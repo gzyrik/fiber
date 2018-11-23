@@ -99,6 +99,14 @@ struct ci {
     }
 };
 
+std::pair<std::string,int> make_addr(const std::string& addr)
+{
+    int port = 80;
+    auto colon = addr.rfind(':');
+    if (colon != addr.npos) port = std::stoi(addr.substr(colon+1));
+    return std::make_pair(addr.substr(0, colon), port);
+}
+
 } // namespace detail
 
 enum class HttpVersion { v1_0 = 0, v1_1 };
@@ -260,10 +268,9 @@ private:
 
 class Client {
 public:
-    Client(
-        const std::string& host,
-        int port = 80,
-        size_t timeout_sec = 300);
+    Client(const std::pair<std::string, int>& addr, size_t timeout_sec);
+    Client(const std::string& addr, size_t timeout_sec = 300)
+        : Client(detail::make_addr(addr), timeout_sec){}
 
     virtual ~Client();
 
@@ -342,10 +349,10 @@ private:
 
 class SSLClient : public Client {
 public:
-    SSLClient(
-        const std::string& host,
-        int port = 80,
-        size_t timeout_sec = 300);
+    SSLClient(const std::pair<std::string, int>& addr, size_t timeout_sec);
+    SSLClient(const std::string& addr, size_t timeout_sec = 300)
+        : SSLClient(detail::make_addr(addr), timeout_sec){}
+
 
     virtual ~SSLClient();
 
@@ -1884,10 +1891,9 @@ inline bool Server::read_and_close_socket(socket_t sock)
 }
 
 // HTTP client implementation
-inline Client::Client(
-    const std::string& host, int port, size_t timeout_sec)
-    : host_(host)
-    , port_(port)
+inline Client::Client(const std::pair<std::string, int>& addr, size_t timeout_sec)
+    : host_(addr.first)
+    , port_(addr.second)
     , timeout_sec_(timeout_sec)
     , host_and_port_(host_ + ":" + std::to_string(port_))
 {
@@ -2338,8 +2344,8 @@ inline bool SSLServer::read_and_close_socket(socket_t sock)
 }
 
 // SSL HTTP client implementation
-inline SSLClient::SSLClient(const std::string& host, int port, size_t timeout_sec)
-    : Client(host, port, timeout_sec)
+inline SSLClient::SSLClient(const std::pair<std::string, int>& addr, size_t timeout_sec)
+    : Client(addr, timeout_sec)
 {
     ctx_ = SSL_CTX_new(SSLv23_client_method());
 }
