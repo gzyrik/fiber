@@ -14,10 +14,10 @@
 #define CPPHTTPLIB_ST_SUPPORT
 #define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
-void HUB_SetPublisher(RTMP* r, int32_t streamId, bool live);
-void HUB_AddPlayer(RTMP* r, int32_t streamId, double seekMs, double stopMs);
-void HUB_RemoveClient(RTMP* r);
-bool HUB_IsLive(const std::string& playpath);
+void HUB_SetPublisher(int32_t streamId, RTMP* r, bool live);
+void HUB_AddPlayer(int32_t streamId, RTMP* r, double seekMs, double stopMs);
+void HUB_RemoveClient(int32_t streamId, RTMP* r);
+bool HUB_IsLive(RTMP* r);
 void HUB_PublishPacket(RTMPPacket* packet);
 static int _httpPort = 5562, _rtmpPort = 1935;
 //rtmp url regex to sockaddr
@@ -60,6 +60,7 @@ static bool notifySource(RTMP* r)
 }
 static void* serve_client_thread(int sockfd, std::vector<st_thread_t>& join)
 {
+  int32_t streamId = 0;
   RTMPPacket packet = {0};
 
   RTMP rtmp;
@@ -73,12 +74,14 @@ static void* serve_client_thread(int sockfd, std::vector<st_thread_t>& join)
     RTMP_Log(RTMP_LOGERROR, "Accept failed");
     goto cleanup;
   }
+  streamId = packet.m_nInfoField2;
   if (RTMP_State(&rtmp) & RTMP_STATE_PUSHING) {
-    HUB_SetPublisher(&rtmp,
-      packet.m_nInfoField2, rtmp.Link.lFlags&RTMP_LF_LIVE);
+    HUB_SetPublisher(streamId,
+      &rtmp, rtmp.Link.lFlags&RTMP_LF_LIVE);
   }
   else {
-    HUB_AddPlayer(&rtmp, packet.m_nInfoField2, rtmp.Link.seekTime, rtmp.Link.stopTime);
+    HUB_AddPlayer(streamId, &rtmp,
+      rtmp.Link.seekTime, rtmp.Link.stopTime);
     if (!notifySource(&rtmp)){
       RTMP_Log(RTMP_LOGERROR, "notify source failed");
       goto cleanup;
@@ -97,7 +100,7 @@ static void* serve_client_thread(int sockfd, std::vector<st_thread_t>& join)
 cleanup:
   RTMPPacket_Free(&packet);
   RTMP_LogPrintf("Closing connection... ");
-  HUB_RemoveClient(&rtmp);
+  HUB_RemoveClient(streamId, &rtmp);
   RTMP_Close(&rtmp);
   RTMP_LogPrintf("Closed connection");
   join.emplace_back(st_thread_self());
@@ -224,12 +227,12 @@ static void onIngestPost(const httplib::Request& req, httplib::Response& res)
     if (!(rtmp = new RTMP)) ERR_BREAK(503);
     RTMP_Init(rtmp);
     if (!RTMP_SetupURL(rtmp, (char*)url.c_str())) ERR_BREAK(400);
+    if (HUB_IsLive(rtmp)) ERR_BREAK(200);
 
     std::string file(rtmp->Link.playpath.av_val, rtmp->Link.playpath.av_len);
-    if (HUB_IsLive(file)) ERR_BREAK(200);
+    file.append(".flv");
 
     char buf[13];
-    file.append(".flv");
     if (!(fp = fopen(file.c_str(), "rb"))) ERR_BREAK(404);
     if (fread(buf, 1, 13, fp) != 13
       || buf[0] != 'F' || buf[1] != 'L' || buf[2] != 'V')

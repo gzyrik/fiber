@@ -6,113 +6,147 @@
 #include <string>
 #include <cstring>
 #include <unordered_map>
-bool SendPlayStop(RTMP *r, int32_t streamId, AVal* playpath);
-struct PlayStatus {
-  int32_t streamId;
-  double seekMs;
-  double lenMs;
+typedef std::unordered_map<std::string, struct Hub> HubMap;
+typedef HubMap::iterator HubIter;
+typedef std::unordered_map<int32_t, HubIter> StreamMap;
+typedef std::unordered_map<std::string, struct App> AppMap;
+typedef AppMap::iterator AppIter;
+struct Kbps
+{
 };
-struct StreamNode {
-  StreamNode(RTMP* r=nullptr, bool live=false):publisher(r), live(live){
+struct App {
+  HubMap hubs; //playpath->Hub
+  Kbps kbps;
+};
+struct Player {
+  int32_t streamId;
+  uint32_t createMs;
+  double seekMs;
+  double stopMs;
+};
+static Kbps _kbps;
+static StreamMap _streams;
+static std::unordered_map<std::string, App> _apps;
+struct Hub 
+{
+  const AppIter appIter;
+  Hub(const AppIter& app=_apps.end(), RTMP* r=nullptr, bool live=false)
+    : appIter(app),publisher(r), live(live)
+  {
     memset(&meta, 0, sizeof(meta));
   }
-  ~StreamNode() {
+  ~Hub()
+  {
     clear_gop();
   }
-  bool live;
   RTMP* publisher;
+  bool live;
+  std::unordered_map<RTMP*, Player> players;
+
   RTMPPacket meta;
   std::vector<RTMPPacket> gop;
-  std::unordered_map<RTMP*, PlayStatus> players;
   void clear_gop() {
     for(auto& packet : gop) RTMPPacket_Free(&packet);
     gop.clear();
   }
+  Kbps kbps;
 };
-typedef std::unordered_map<std::string, StreamNode> PathMap;
-typedef std::unordered_map<int32_t, PathMap::iterator> StreamMap;
-static PathMap _paths;
-static StreamMap _streams;
-bool HUB_IsLive(const std::string& playpath)
+
+
+static Hub* getHub(RTMP* r)
 {
-    auto iter = _paths.find(playpath);
-    return iter != _paths.end() && iter->second.live;
+  auto appIter = _apps.find(
+    std::string(r->Link.app.av_val, r->Link.app.av_len));
+  if (appIter == _apps.end()) return nullptr;
+
+  auto& hubs = appIter->second.hubs;
+  auto iter2 = hubs.find(
+    std::string(r->Link.playpath.av_val, r->Link.playpath.av_len));
+  if (iter2 == hubs.end()) return nullptr;
+  return &iter2->second;
 }
-static void ErasePath(PathMap::iterator& iter, int32_t streamId = 0)
+
+bool HUB_IsLive(RTMP* r)
 {
-  _paths.erase(iter);
-  //remove the stream
-  if (streamId) {
-    _streams.erase(streamId);
+  auto hub = getHub(r);
+  return hub && hub->live;
+}
+
+void HUB_RemoveClient(int32_t streamId, RTMP* r)
+{
+  auto iter = _streams.find(streamId);
+  if (iter == _streams.end())
     return;
+  auto hubIter = iter->second;
+  _streams.erase(iter);
+
+  auto& hub = hubIter->second;
+  if (hub.publisher == r) {
+    hub.publisher = nullptr;
+    const auto& playpath = hubIter->first;
+    AVal aval={(char*)playpath.data(), (int)playpath.size()};
+    for(auto& p : hub.players)
+      RTMP_SendPlayStop(p.first, &aval);
   }
-  auto iter2 = _streams.begin();
-  while (iter2 != _streams.end()) {
-    if (iter2->second == iter) {
-      _streams.erase(iter2);
-      return;
-    }
-    ++iter2;
-  }
-}
-void HUB_SetPublisher(RTMP* r, int32_t streamId, bool live)
-{
-  const std::string playpath(r->Link.playpath.av_val, r->Link.playpath.av_len);
-  auto iter = _paths.find(playpath);
-  if (iter == _paths.end()) {
-    if (!r || !streamId) return;// no exist, remove nothing.
-    _streams[streamId] = _paths.emplace(playpath, StreamNode(r, live)).first;
-  }
-  else if (!r)
-    ErasePath(iter, streamId);
-  else if (streamId) {//set publisher
-    iter->second.publisher = r;
-    iter->second.live = live;
-    _streams[streamId] = iter;
-    for(auto& i : iter->second.players) {
-      if (i.first->m_outChunkSize != r->m_inChunkSize){
-        i.first->m_outChunkSize = r->m_inChunkSize;
-        RTMP_SendChunkSize(i.first);
-      }
-    }
-  }
-}
-void HUB_RemoveClient(RTMP* r)
-{
-  auto iter = _paths.begin();
-  while (iter != _paths.end()) {
-    auto& node = iter->second;
-    if (node.publisher == r){
-      node.publisher = nullptr;
-      AVal playpath={(char*)iter->first.data(), (int)iter->first.length()};
-      for(auto& p : node.players)
-        RTMP_SendPlayStop(p.first, &playpath);
-    }
-    else
-      node.players.erase(r);
-    auto cur = iter++;
-    //remove the alone stream
-    if (!node.publisher && node.players.empty())
-      ErasePath(cur);
+  else if (!hub.players.erase(r))
+    return;
+
+  if (!hub.publisher && hub.players.empty()) {//remove the alone stream
+    auto appIter =hub.appIter;
+    auto& hubs = appIter->second.hubs;
+    hubs.erase(hubIter);
+    if (hubs.empty())
+      _apps.erase(appIter);
   }
 }
 
-void HUB_AddPlayer(RTMP* r, int32_t streamId, double seekMs, double lenMs)
+void HUB_SetPublisher(int32_t streamId, RTMP* r, bool live)
 {
+  const std::string app(r->Link.app.av_val, r->Link.app.av_len);
   const std::string playpath(r->Link.playpath.av_val, r->Link.playpath.av_len);
-  auto& node = _paths[playpath];
-  auto& p = node.players[r];
+  auto& hubs = _apps[app].hubs;
+  auto hubIter = hubs.find(playpath);
+  if (hubIter == hubs.end()) {
+    hubIter = hubs.emplace(playpath, Hub(_apps.find(app))).first;
+  }
+  _streams[streamId] = hubIter;
+
+  auto& hub = hubIter->second;
+  hub.publisher = r;
+  hub.live = live;
+  for(auto& i : hub.players) {
+    if (i.first->m_outChunkSize != r->m_inChunkSize){
+      i.first->m_outChunkSize = r->m_inChunkSize;
+      RTMP_SendChunkSize(i.first);
+    }
+  }
+}
+
+void HUB_AddPlayer(int32_t streamId, RTMP* r, double seekMs, double stopMs)
+{
+  const std::string app(r->Link.app.av_val, r->Link.app.av_len);
+  const std::string playpath(r->Link.playpath.av_val, r->Link.playpath.av_len);
+  auto& hubs = _apps[app].hubs;
+  auto hubIter = hubs.find(playpath);
+  if (hubIter == hubs.end()) {
+    hubIter = hubs.emplace(playpath, Hub(_apps.find(app))).first;
+  }
+  _streams[streamId] = hubIter;
+
+  auto& hub = hubIter->second;
+  auto& p = hub.players[r];
   p.streamId = streamId;
   p.seekMs = seekMs;
-  p.lenMs = lenMs;
-  if (node.meta.m_nBodySize  == 0) return;
-  if (r->m_outChunkSize != node.publisher->m_inChunkSize) {
-    r->m_outChunkSize = node.publisher->m_inChunkSize;
+  p.stopMs = stopMs;
+  p.createMs = RTMP_GetTime();
+  if (hub.meta.m_nBodySize  == 0) return;
+  if (r->m_outChunkSize != hub.publisher->m_inChunkSize) {
+    r->m_outChunkSize = hub.publisher->m_inChunkSize;
     RTMP_SendChunkSize(r);
   }
-  node.meta.m_nInfoField2 = streamId;
-  RTMP_SendPacket(r, &node.meta, false);
-  for(auto& packet : node.gop){
+  hub.meta.m_nInfoField2 = streamId;
+  RTMP_SendPacket(r, &hub.meta, false);
+  for(auto& packet : hub.gop){
     packet.m_nInfoField2 = streamId;
     RTMP_SendPacket(r, &packet, false);
   }
@@ -125,25 +159,24 @@ void HUB_PublishPacket(RTMPPacket* packet)
     return;
 
   packet->m_headerType = RTMP_PACKET_SIZE_LARGE;
-  auto& node = iter->second->second;
-  switch(packet->m_packetType)
-  {
+  auto& hub = iter->second->second;
+  switch(packet->m_packetType) {
   case RTMP_PACKET_TYPE_INFO:
-    RTMPPacket_Free(&node.meta);
-    memcpy(&node.meta, packet, sizeof(RTMPPacket));
+    RTMPPacket_Free(&hub.meta);
+    memcpy(&hub.meta, packet, sizeof(RTMPPacket));
     break;
   case RTMP_PACKET_TYPE_AUDIO:
-    node.gop.emplace_back(*packet);
+    hub.gop.emplace_back(*packet);
     break;
   case RTMP_PACKET_TYPE_VIDEO:
     if (packet->m_body[0] & 0x10) //is key frame ?
-      node.clear_gop();
-    node.gop.emplace_back(*packet);
+      hub.clear_gop();
+    hub.gop.emplace_back(*packet);
     break;
   default:
     return;
   }
-  for(auto& i : node.players){
+  for(auto& i : hub.players){
     packet->m_nInfoField2 = i.second.streamId;
     RTMP_SendPacket(i.first, packet, false);
   }
