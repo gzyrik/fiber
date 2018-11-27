@@ -1254,7 +1254,7 @@ RTMP_AcceptStream(RTMP *r, RTMPPacket *packet)
     }
   }
 
-  return r->m_state;
+  return r->m_stream_id;
 }
 int
 RTMP_ConnectStream(RTMP *r, int seekTime)
@@ -1281,7 +1281,7 @@ RTMP_ConnectStream(RTMP *r, int seekTime)
     }
   }
 
-  return r->m_state;
+  return r->m_stream_id;
 }
 
 
@@ -1524,11 +1524,12 @@ HandlePacket(RTMP *r, RTMPPacket *packet, bool bServer)
 
   return bHasMediaPacket;
 }
-int RTMP_ServePacket(RTMP *r, RTMPPacket *packet)
+bool
+RTMP_ServePacket(RTMP *r, RTMPPacket *packet)
 {
   return HandlePacket(r, packet, TRUE);
 }
-int
+bool
 RTMP_ClientPacket(RTMP *r, RTMPPacket *packet)
 {
   return HandlePacket(r, packet, FALSE);

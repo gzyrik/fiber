@@ -6,6 +6,7 @@
 #include <string>
 #include <cstring>
 #include <unordered_map>
+//RTMP only do live, others using HLS
 typedef std::unordered_map<std::string, struct Hub> HubMap;
 typedef HubMap::iterator HubIter;
 typedef std::unordered_map<int32_t, HubIter> StreamMap;
@@ -21,8 +22,6 @@ struct App {
 struct Player {
   int32_t streamId;
   uint32_t createMs;
-  double seekMs;
-  double stopMs;
 };
 static Kbps _kbps;
 static StreamMap _streams;
@@ -30,8 +29,8 @@ static std::unordered_map<std::string, App> _apps;
 struct Hub 
 {
   const AppIter appIter;
-  Hub(const AppIter& app=_apps.end(), RTMP* r=nullptr, bool live=false)
-    : appIter(app),publisher(r), live(live)
+  Hub(const AppIter& app=_apps.end(), RTMP* r=nullptr)
+    : appIter(app),publisher(r)
   {
     memset(&meta, 0, sizeof(meta));
   }
@@ -39,8 +38,8 @@ struct Hub
   {
     clear_gop();
   }
+  uint32_t createMs;
   RTMP* publisher;
-  bool live;
   std::unordered_map<RTMP*, Player> players;
 
   RTMPPacket meta;
@@ -52,27 +51,7 @@ struct Hub
   Kbps kbps;
 };
 
-
-static Hub* getHub(RTMP* r)
-{
-  auto appIter = _apps.find(
-    std::string(r->Link.app.av_val, r->Link.app.av_len));
-  if (appIter == _apps.end()) return nullptr;
-
-  auto& hubs = appIter->second.hubs;
-  auto iter2 = hubs.find(
-    std::string(r->Link.playpath.av_val, r->Link.playpath.av_len));
-  if (iter2 == hubs.end()) return nullptr;
-  return &iter2->second;
-}
-
-bool HUB_IsLive(RTMP* r)
-{
-  auto hub = getHub(r);
-  return hub && hub->live;
-}
-
-void HUB_RemoveClient(int32_t streamId, RTMP* r)
+void HUB_Remove(int32_t streamId, RTMP* r)
 {
   auto iter = _streams.find(streamId);
   if (iter == _streams.end())
@@ -88,11 +67,15 @@ void HUB_RemoveClient(int32_t streamId, RTMP* r)
     for(auto& p : hub.players)
       RTMP_SendPlayStop(p.first, &aval);
   }
-  else if (!hub.players.erase(r))
+  else if (hub.players.erase(r) > 0) {
+    if (hub.players.empty() && hub.publisher)
+      RTMP_Close(hub.publisher);
+  }
+  else
     return;
 
-  if (!hub.publisher && hub.players.empty()) {//remove the alone stream
-    auto appIter =hub.appIter;
+  if (!hub.publisher && hub.players.empty()) {//remove the empty app
+    auto appIter = hub.appIter;
     auto& hubs = appIter->second.hubs;
     hubs.erase(hubIter);
     if (hubs.empty())
@@ -100,61 +83,50 @@ void HUB_RemoveClient(int32_t streamId, RTMP* r)
   }
 }
 
-void HUB_SetPublisher(int32_t streamId, RTMP* r, bool live)
+bool HUB_Add(int32_t streamId, RTMP* r)
 {
   const std::string app(r->Link.app.av_val, r->Link.app.av_len);
   const std::string playpath(r->Link.playpath.av_val, r->Link.playpath.av_len);
   auto& hubs = _apps[app].hubs;
   auto hubIter = hubs.find(playpath);
-  if (hubIter == hubs.end()) {
+  if (hubIter == hubs.end())
     hubIter = hubs.emplace(playpath, Hub(_apps.find(app))).first;
-  }
   _streams[streamId] = hubIter;
 
   auto& hub = hubIter->second;
-  hub.publisher = r;
-  hub.live = live;
-  for(auto& i : hub.players) {
-    if (i.first->m_outChunkSize != r->m_inChunkSize){
-      i.first->m_outChunkSize = r->m_inChunkSize;
-      RTMP_SendChunkSize(i.first);
+  if (RTMP_State(r)&RTMP_STATE_PLAYING) {
+    auto& p = hub.players[r];
+    p.streamId = streamId;
+    p.createMs = RTMP_GetTime();
+  }
+  else if (hub.publisher != r) {
+    hub.publisher = r;
+    hub.createMs = RTMP_GetTime();
+    for(auto& p : hub.players){
+      if (p.first->m_outChunkSize != r->m_inChunkSize){
+        p.first->m_outChunkSize = r->m_inChunkSize;
+        RTMP_SendChunkSize(p.first);
+      }
     }
   }
+  if (hub.meta.m_nBodySize  > 0) {
+    if (r->m_outChunkSize != hub.publisher->m_inChunkSize) {
+      r->m_outChunkSize = hub.publisher->m_inChunkSize;
+      RTMP_SendChunkSize(r);
+    }
+    hub.meta.m_nInfoField2 = streamId;
+    RTMP_SendPacket(r, &hub.meta, false);
+    for(auto& packet : hub.gop){
+      packet.m_nInfoField2 = streamId;
+      RTMP_SendPacket(r, &packet, false);
+    }
+  }
+  return hub.publisher != nullptr;
 }
 
-void HUB_AddPlayer(int32_t streamId, RTMP* r, double seekMs, double stopMs)
+void HUB_Publish(int32_t streamId, RTMPPacket* packet)
 {
-  const std::string app(r->Link.app.av_val, r->Link.app.av_len);
-  const std::string playpath(r->Link.playpath.av_val, r->Link.playpath.av_len);
-  auto& hubs = _apps[app].hubs;
-  auto hubIter = hubs.find(playpath);
-  if (hubIter == hubs.end()) {
-    hubIter = hubs.emplace(playpath, Hub(_apps.find(app))).first;
-  }
-  _streams[streamId] = hubIter;
-
-  auto& hub = hubIter->second;
-  auto& p = hub.players[r];
-  p.streamId = streamId;
-  p.seekMs = seekMs;
-  p.stopMs = stopMs;
-  p.createMs = RTMP_GetTime();
-  if (hub.meta.m_nBodySize  == 0) return;
-  if (r->m_outChunkSize != hub.publisher->m_inChunkSize) {
-    r->m_outChunkSize = hub.publisher->m_inChunkSize;
-    RTMP_SendChunkSize(r);
-  }
-  hub.meta.m_nInfoField2 = streamId;
-  RTMP_SendPacket(r, &hub.meta, false);
-  for(auto& packet : hub.gop){
-    packet.m_nInfoField2 = streamId;
-    RTMP_SendPacket(r, &packet, false);
-  }
-}
-
-void HUB_PublishPacket(RTMPPacket* packet)
-{
-  auto iter = _streams.find(packet->m_nInfoField2);
+  auto iter = _streams.find(streamId);
   if (iter == _streams.end())
     return;
 

@@ -334,8 +334,10 @@ int RTMP_ToggleStream(RTMP *r);
  * @{
  */
 bool RTMP_Connect(RTMP *r, RTMPPacket *cp);
+/* @return streamId */
 int RTMP_ConnectStream(RTMP *r, int seekTime);
-int RTMP_ClientPacket(RTMP *r, RTMPPacket *packet);
+/* @return true if media packet. */
+bool RTMP_ClientPacket(RTMP *r, RTMPPacket *packet);
 int RTMP_ReconnectStream(RTMP *r, int seekTime);
 void RTMP_DeleteStream(RTMP *r);
 /**
@@ -344,8 +346,10 @@ void RTMP_DeleteStream(RTMP *r);
  * @{
  */
 bool RTMP_Serve(RTMP *r, int sockfd, void *sslCtx);
+/* @return streamId */
 int RTMP_AcceptStream(RTMP *r, RTMPPacket *packet);
-int RTMP_ServePacket(RTMP *r, RTMPPacket *packet);
+/* @return true if media packet. */
+bool RTMP_ServePacket(RTMP *r, RTMPPacket *packet);
 bool RTMP_SendPlayStop(RTMP *r, const AVal* playpath);
 void *RTMP_TLS_AllocServerContext(const char* cert, const char* key);
 void RTMP_TLS_FreeServerContext(void *ctx);

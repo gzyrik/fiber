@@ -14,11 +14,9 @@
 #define CPPHTTPLIB_ST_SUPPORT
 #define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
-void HUB_SetPublisher(int32_t streamId, RTMP* r, bool live);
-void HUB_AddPlayer(int32_t streamId, RTMP* r, double seekMs, double stopMs);
-void HUB_RemoveClient(int32_t streamId, RTMP* r);
-bool HUB_IsLive(RTMP* r);
-void HUB_PublishPacket(RTMPPacket* packet);
+bool HUB_Add(int32_t streamId, RTMP* r);
+void HUB_Remove(int32_t streamId, RTMP* r);
+void HUB_Publish(int32_t streamId, RTMPPacket* packet);
 static int _httpPort = 5562, _rtmpPort = 1935;
 //rtmp url regex to sockaddr
 static std::unordered_map<std::string, std::string> _sourceAddrs;
@@ -58,7 +56,9 @@ static bool notifySource(RTMP* r)
     return false;
   return true;
 }
-static void* serve_client_thread(int sockfd, std::vector<st_thread_t>& join)
+static std::vector<st_thread_t> _join;
+static std::unordered_set<st_thread_t> _childs;
+static void* serve_client_thread(void* sockfd)
 {
   int32_t streamId = 0;
   RTMPPacket packet = {0};
@@ -70,40 +70,31 @@ static void* serve_client_thread(int sockfd, std::vector<st_thread_t>& join)
     RTMP_Log(RTMP_LOGERROR, "Handshake failed");
     goto cleanup;
   }
-  if (!RTMP_AcceptStream(&rtmp, &packet)) {
+
+  streamId = RTMP_AcceptStream(&rtmp, &packet);
+  if (!streamId) {
     RTMP_Log(RTMP_LOGERROR, "Accept failed");
     goto cleanup;
   }
-  streamId = packet.m_nInfoField2;
-  if (RTMP_State(&rtmp) & RTMP_STATE_PUSHING) {
-    HUB_SetPublisher(streamId,
-      &rtmp, rtmp.Link.lFlags&RTMP_LF_LIVE);
-  }
-  else {
-    HUB_AddPlayer(streamId, &rtmp,
-      rtmp.Link.seekTime, rtmp.Link.stopTime);
-    if (!notifySource(&rtmp)){
-      RTMP_Log(RTMP_LOGERROR, "notify source failed");
-      goto cleanup;
-    }
+
+  if (!HUB_Add(streamId, &rtmp) && !notifySource(&rtmp)) {
+    RTMP_Log(RTMP_LOGERROR, "notify source failed");
+    goto cleanup;
   }
   while (_rtmpPort && RTMP_IsConnected(&rtmp)
     && RTMP_ReadPacket(&rtmp, &packet)) {
-    if (RTMPPacket_IsReady(&packet) && packet.m_body) {
-      RTMP_ServePacket(&rtmp, &packet);
-      if (RTMPPacket_IsMedia(&packet))
-        HUB_PublishPacket(&packet);
-      RTMPPacket_Free(&packet);
-    }
+    if (!RTMPPacket_IsReady(&packet) || !packet.m_body)
+      continue;
+    if (RTMP_ServePacket(&rtmp, &packet))
+      HUB_Publish(streamId, &packet);
+    RTMPPacket_Free(&packet);
   }
 
 cleanup:
   RTMPPacket_Free(&packet);
-  RTMP_LogPrintf("Closing connection... ");
-  HUB_RemoveClient(streamId, &rtmp);
+  HUB_Remove(streamId, &rtmp);
   RTMP_Close(&rtmp);
-  RTMP_LogPrintf("Closed connection");
-  join.emplace_back(st_thread_self());
+  _join.emplace_back(st_thread_self());
   return nullptr;
 }
 
@@ -114,28 +105,30 @@ static void* run_service_listen(void*fd)
   socklen_t optlen = sizeof(tv);
   getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, &optlen);
 
-  std::vector<st_thread_t> join;
-  std::unordered_set<st_thread_t> childs;
   while (_rtmpPort) {
-    if (!join.empty()) {
-      for (auto& t: join) {
+    if (!_join.empty()) {
+      for (auto& t: _join) {
         st_thread_join(t, nullptr);
-        childs.erase(t);
+        _childs.erase(t);
       }
-      join.clear();
+      _join.clear();
     }
     int clientfd = accept(sockfd, nullptr, nullptr);
     if (clientfd >= 0) {
-      setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-      auto t = st_async([clientfd,&join]{
-        return serve_client_thread(clientfd, join);
-      }, true, 1024*1024);
-      childs.emplace(t);
+      st_thread_t t = nullptr;
+      if (setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0)
+        t = st_thread_create(serve_client_thread, (void*)(ssize_t)clientfd, true, 1024*1024);
+
+      if (t)
+        _childs.emplace(t);
+      else
+        close(clientfd);
     }
   }
   close(sockfd);
-  join.clear();
-  for (auto& t : childs) st_thread_join(t, nullptr);
+  for (auto& t : _childs) st_thread_join(t, nullptr);
+  _childs.clear();
+  _join.clear();
   return nullptr;
 }
 
@@ -153,7 +146,7 @@ static void* ingest_file_thread(RTMP* rtmp, FILE* fp)
     ts |= uint32_t(buf[7]) << 24;
 
     if (!startTs) startTs = ts;
-    const uint32_t diff = (ts - startTs) - (RTMP_GetTime() -re);
+    const int32_t diff = (ts - startTs) - (RTMP_GetTime() -re);
     if (diff > 300 && diff < 3000) st_usleep(diff*1000);
 
     const size_t bodySize = AMF_DecodeInt24(buf+1), pktSize = bodySize + 11;
@@ -176,6 +169,7 @@ clean:
   RTMP_Close(rtmp);
   delete rtmp;
   if (buf) free(buf);
+  _join.emplace_back(st_thread_self());
   return nullptr;
 }
 #define ERR_BREAK(x) { res.status = x; break; }
@@ -205,14 +199,19 @@ static st_thread_t onServerPost(const httplib::Request& req, httplib::Response& 
     if (listen(sockfd, 10) < 0)
       ERR_BREAK(503);
 
+    auto t = st_thread_create(run_service_listen, (void*)(ssize_t)sockfd, true, 0);
+    if (!t)
+      ERR_BREAK(503);
+
     res.status = 201;
-    return st_thread_create(run_service_listen, (void*)(ssize_t)sockfd, true, 0);
+    return t;
   } while(0);
   _rtmpPort = 0;
   if (sockfd >= 0) close(sockfd);
   return nullptr;
 }
-static void onIngestPost(const httplib::Request& req, httplib::Response& res)
+static void
+onIngestPost(const httplib::Request& req, httplib::Response& res)
 {
   FILE* fp=nullptr;
   RTMP* rtmp=nullptr;
@@ -227,7 +226,6 @@ static void onIngestPost(const httplib::Request& req, httplib::Response& res)
     if (!(rtmp = new RTMP)) ERR_BREAK(503);
     RTMP_Init(rtmp);
     if (!RTMP_SetupURL(rtmp, (char*)url.c_str())) ERR_BREAK(400);
-    if (HUB_IsLive(rtmp)) ERR_BREAK(200);
 
     std::string file(rtmp->Link.playpath.av_val, rtmp->Link.playpath.av_len);
     file.append(".flv");
@@ -239,10 +237,19 @@ static void onIngestPost(const httplib::Request& req, httplib::Response& res)
       ERR_BREAK(500);
 
     RTMP_EnableWrite(rtmp);
-    if (!RTMP_Connect(rtmp, nullptr) || !RTMP_ConnectStream(rtmp, 0))
+    if (!RTMP_Connect(rtmp, nullptr))
+      ERR_BREAK(422);
+    struct timeval tv={.tv_sec=1,.tv_usec=0};
+    if (setsockopt(RTMP_Socket(rtmp), SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0)
+      ERR_BREAK(503);
+    if (!RTMP_ConnectStream(rtmp, 0))
       ERR_BREAK(422);
 
-    st_async([rtmp, fp]{ return ingest_file_thread(rtmp, fp); });
+    auto t = st_async([rtmp, fp]{ return ingest_file_thread(rtmp, fp); }, true);
+    if (!t)
+      ERR_BREAK(503);
+
+    _childs.emplace(t);
     res.status = 201;
     return;
   } while(0);
