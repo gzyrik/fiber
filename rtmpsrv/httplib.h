@@ -747,6 +747,10 @@ inline const char* find_content_type(const std::string& path)
         return "application/xml";
     } else if (ext == "xhtml") {
         return "application/xhtml+xml";
+    } else if (ext == "m3u8") {
+        return "application/x-mpegURL";
+    } else if (ext == "ts") {
+        return "video/MP2T";
     }
     return nullptr;
 }

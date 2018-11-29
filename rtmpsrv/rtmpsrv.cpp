@@ -278,6 +278,8 @@ int main()
     const char * help = 
       "curl -X POST 127.0.0.1:5562/server -d 1\n"
       "curl -X DELETE 127.0.0.1:5562/server\n"
+      "ffmpeg -i theory.flv -f segment -segment_time 10 "
+      "-segment_list theory.m3u8 theory/theory%d.ts\n"
       "./ffmpeg -f avfoundation -framerate 30 -i 0 "
       "-vcodec libx264 -f flv rtmp://127.0.0.1/app/xxx\n"
       "./rtmpdump  -r rtmp://127.0.0.1/app/xxx -o xxx.flv\n";
@@ -293,6 +295,8 @@ int main()
     res.status = 204;
   })
   .Post("/ingest", onIngestPost);
+  //.Get(R"(/(\w+)/(\w+).m3u8)", [&](const Request& req, Response& res) {});
+  http.set_base_dir("hls");
 
   http.listen("*", _httpPort);
   perror("Http listen");
