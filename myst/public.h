@@ -185,16 +185,27 @@ extern void _st_iterate_threads(void);
 }
 #include <functional>
 inline static void* __st_functor(void* f) {
-    auto func = (std::function<void*(void)>*)f;
-    void* ret = (*func)();
-    delete func;
-    return ret;
+  auto func = (std::function<void*(void)>*)f;
+  void* ret = (*func)();
+  delete func;
+  return ret;
 }
 inline st_thread_t st_async(
-    const std::function<void*()>&func, bool joinable=false, int stack_size=0) {
-    return st_thread_create(__st_functor,
-        new std::function<void*()>(func), joinable, stack_size);
+  const std::function<void*()>&func, bool joinable=false, int stack_size=0) {
+  return st_thread_create(__st_functor,
+    new std::function<void*()>(func), joinable, stack_size);
 }
+#include <thread>
+template <class Fn, class... Args>
+void st_cond_async(st_cond_t cvar, Fn&& fn, Args&&... args) {
+  std::thread thread([&] {
+    fn(args...);
+    while(st_cond_signal(cvar) != 1);
+  });
+  st_cond_wait(cvar);
+  thread.join();
+}
+
 #endif
 
 #endif /* !__ST_THREAD_H__ */
