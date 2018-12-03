@@ -200,7 +200,8 @@ template <class Fn, class... Args>
 void st_cond_async(st_cond_t cvar, Fn&& fn, Args&&... args) {
   std::thread thread([&] {
     fn(args...);
-    while(st_cond_signal(cvar) != 1);
+    while(st_cond_signal(cvar) != 1)
+      std::this_thread::yield();
   });
   st_cond_wait(cvar);
   thread.join();
