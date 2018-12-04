@@ -5,14 +5,16 @@
 #include <errno.h>
 #define PT_CONF_NUMEVENTS  32
 #ifndef NDEBUG
-#define PRINTF printf
+#define PRINTF(...) printf(__VA_ARGS__)
+#else
+#define PRINTF(...)
 #endif
 
-#define PT_BROADCAST NULL
-#define THREAD_NAME_STRING(p) p->name
+#define THREAD_NAME_STRING(p) (p ? p->name : "NUL")
 enum {
-  PT_STATE_CALLED = 1,
-  PT_STATE_POLL = 2
+  PT_STATE_RUNNING = 1,
+  PT_STATE_POLLING = 2,
+  PT_STATE_CALLED  = 4,
 };
 
 /*
@@ -23,9 +25,10 @@ static struct PT *_list = NULL, *_current = NULL;
  * Structure used for keeping the queue of active events.
  */
 struct event_data {
-  int ev;
+  PT_EVENT event;
   void* data;
   struct PT *p;
+  PT_MASK mask;
 };
 #ifdef PT_CONF_STATS
 static int _maxevents;
@@ -33,39 +36,38 @@ static int _maxevents;
 static int _nevents, _fevent;
 static struct event_data _events[PT_CONF_NUMEVENTS];
 
-static void exit_thread(struct PT *p, struct PT *from, unsigned mask);
-static void call_thread(struct PT *p, int ev, void* data);
-static void do_event(unsigned mask);
-static volatile unsigned _poll_requested;
-static void do_poll(unsigned mask)
+static void exit_thread(struct PT *p, struct PT *from, PT_MASK mask);
+static void call_thread(struct PT *p, PT_EVENT ev, void* data);
+static void do_event(void);
+static volatile char _poll_requested;
+static void do_poll(void)
 {
   struct PT *p;
 
-  _poll_requested &= ~mask;
+  _poll_requested = 0;
   /* Call the thread that needs to be polled. */
   for (p = _list; p != NULL; p = p->next) {
-    if ((p->mask&mask) && (p->state&PT_STATE_POLL)) {
-      p->state &= ~PT_STATE_POLL;
+    if (p->state&PT_STATE_POLLING) {
+      p->state &= ~PT_STATE_POLLING;
       call_thread(p, PT_EVENT_POLL, NULL);
     }
   }
 }
 
-int pt_run(unsigned mask)
+int pt_run(void)
 {
   /* Process poll events. */
-  if (_poll_requested&mask) {
-    do_poll(mask);
+  if (_poll_requested) {
+    do_poll();
   }
 
   /* Process one event from the queue */
-  do_event(mask);
+  do_event();
 
-  return _nevents + (_poll_requested ? 1 : 0);
+  return _nevents + _poll_requested;
 }
 
-void pt_start(struct PT *p, void* data,
-  int (*thread)(struct PT *p, int event, void* data))
+void pt_start(struct PT *p, void* data)
 {
   struct PT *q;
 
@@ -77,56 +79,61 @@ void pt_start(struct PT *p, void* data,
   if (q == p) {
     return;
   }
-  _PT_CLR(&p->ctx);
-  p->thread = thread;
-  p->state = 0;
 
   /* Put on the procs list.*/
   p->next = _list;
   _list = p;
 
-  PRINTF("process: starting '%s'\n", THREAD_NAME_STRING(p));
+  _PT_CLR(&p->ctx);
+  p->state = PT_STATE_RUNNING;
+  PRINTF("PT INFO: starting thread '%s' at function %p\n", THREAD_NAME_STRING(p), p->thread);
 
-  /* Post a synchronous initialization event to the process. */
+  /* Post a synchronous initialization event to the thread. */
   pt_send(p, PT_EVENT_INIT, data);
 }
 
 void pt_poll(struct PT *p)
 {
-  if (pt_alive(p)) {
-    p->state |= PT_STATE_POLL;
+  if (p->state != 0) {
+    p->state |= PT_STATE_POLLING;
     _poll_requested |= p->mask;
   }
 }
 
-void pt_exit(struct PT *p, unsigned mask)
+void pt_exit(struct PT *p, PT_MASK mask)
 {
   exit_thread(p, _current, mask);
 }
 
-static int post_thread(struct PT *p, unsigned mask, int ev, void* data)
+static int post_thread(struct PT *p, PT_MASK mask, PT_EVENT ev, void* data)
 {
-  int snum;
+  struct event_data* ev_dat;
 
-  if(_current == NULL) {
-    PRINTF("pt_post: NULL posts event %d to thread '%s', nevents %d\n",
-      ev,THREAD_NAME_STRING(p), _nevents);
-  } else if (p) {
-    PRINTF("pt_post: thread '%s' posts event %d to thread '%s', nevents %d\n",
+  if (p) {
+    PRINTF("PT INFO: thread '%s' posts "
+      "event %d to thread '%s', nevents %d\n",
       THREAD_NAME_STRING(_current), ev, THREAD_NAME_STRING(p), _nevents);
-  } else {
-    PRINTF("pt_post: thread '%s' posts event %d to thread mask '0x%x', nevents %d\n",
+  } else if (mask) {
+    PRINTF("PT INFO: thread '%s' broadcast "
+      "event %d by mask '0x%x', nevents %d\n",
       THREAD_NAME_STRING(_current), ev, mask, _nevents);
+  } else {
+#ifndef NDEBUG
+    printf("PT WARN: thread '%s' broadcast "
+      "event %d by mask 0, just do nothing\n",
+      THREAD_NAME_STRING(_current), ev);
+#endif
+    return 0;
   }
 
   if(_nevents == PT_CONF_NUMEVENTS) {
 #ifndef NDEBUG
     if(!p) {
-      printf("soft panic: event queue is full "
+      printf("PT *ERR: event queue is full "
         "when broadcast event %d was posted to 0x%x from %s\n",
         ev, mask, THREAD_NAME_STRING(_current));
     } else {
-      printf("soft panic: event queue is full "
+      printf("PT *ERR: event queue is full "
         "when event %d was posted to %s from %s\n",
         ev, THREAD_NAME_STRING(p), THREAD_NAME_STRING(_current));
     }
@@ -134,10 +141,11 @@ static int post_thread(struct PT *p, unsigned mask, int ev, void* data)
     return ENOSPC;
   }
 
-  snum = (_fevent + _nevents) % PT_CONF_NUMEVENTS;
-  _events[snum].ev = ev;
-  _events[snum].data = data;
-  _events[snum].p = p;
+  ev_dat = &_events[(_fevent + _nevents) % PT_CONF_NUMEVENTS];
+  ev_dat->event = ev;
+  ev_dat->data = data;
+  ev_dat->p = p;
+  ev_dat->mask = mask;
   ++_nevents;
 
 #if PT_CONF_STATS
@@ -149,20 +157,29 @@ static int post_thread(struct PT *p, unsigned mask, int ev, void* data)
   return 0;
 }
 
-void pt_send(struct PT *p, int event, void* data)
+void pt_send(struct PT *p, PT_EVENT event, void* data)
 {
   struct PT *caller = _current;
   call_thread(p, event, data);
   _current = caller;
 }
 
-static void exit_thread(struct PT *p, struct PT *from, unsigned mask)
+int pt_post(struct PT *p, PT_EVENT event, void* data)
+{
+  return post_thread(p, 0, event, data);
+}
+
+int pt_cast(PT_MASK mask, PT_EVENT event, void* data)
+{
+  return post_thread(NULL, mask, event, data);
+}
+
+static void exit_thread(struct PT *p, struct PT *from, PT_MASK mask)
 {
   register struct PT *q;
   struct PT *old_current = _current;
 
-  PRINTF("process: exit_process '%s'\n", THREAD_NAME_STRING(p));
-
+#ifndef NDEBUG
   if (p == _list) {
     _list = _list->next;
   } else {
@@ -172,23 +189,24 @@ static void exit_thread(struct PT *p, struct PT *from, unsigned mask)
         break;
       }
     }
-    /* Make sure the process is in the process list before we try to
-       exit it. */
+    /* Make sure the process is in the process list before we try to exit it. */
     if(q == NULL) {
       return;
     }
   }
+  if (!p->state) {
+    printf("PT *ERR: exited thread '%s' exit again\n", THREAD_NAME_STRING(p));
+  }
+#else
+  if (!p->state) return;
+#endif
 
-  if(pt_alive(p)) {
-    /* Thread was running */
-    p->state = 0;
+  /* Thread was running */
+  PRINTF("PT INFO: exit thread '%s'\n", THREAD_NAME_STRING(p));
+  p->state = 0;
+  p->next = NULL;
 
-    if(p->thread != NULL && p != from) {
-      /* Post the exit event to the process that is about to exit. */
-      _current = p;
-      p->thread(p, PT_EVENT_EXIT, NULL);
-    }
-
+  if (mask) {
     /*
      * Post a synchronous event to all processes to inform them that
      * this process is about to exit. This will allow services to
@@ -200,26 +218,38 @@ static void exit_thread(struct PT *p, struct PT *from, unsigned mask)
     }
   }
 
+  if(p->thread != NULL && p != from) {
+    /* Post the exit event to the process that is about to exit. */
+    _current = p;
+    p->thread(p, PT_EVENT_EXIT, NULL);
+  }
+
   _current = old_current;
 }
-static void call_thread(struct PT *p, int ev, void* data)
+static void call_thread(struct PT *p, PT_EVENT ev, void* data)
 {
   int ret;
 
 #ifndef NDEBUG
-  if(p->state & PT_STATE_CALLED) {
-    printf("process: process '%s' called again with event %d\n", THREAD_NAME_STRING(p), ev);
+  if (p->state & PT_STATE_CALLED) {
+    printf("PT WARN: thread '%s' called again with event %d\n", THREAD_NAME_STRING(p), ev);
   }
 #endif
 
-  if(p->next != NULL && p->thread != NULL) {
-    PRINTF("process: calling process '%s' with event %d\n", THREAD_NAME_STRING(p), ev);
+  if (p->thread == NULL) {
+#ifndef NDEBUG
+    printf("PT WARN: empty thread '%s' called with event %d\n", THREAD_NAME_STRING(p), ev);
+#endif
+  } else if (p->state == 0) {
+#ifndef NDEBUG
+    printf("PT WARN: exited thread '%s' called with event %d\n", THREAD_NAME_STRING(p), ev);
+#endif
+  } else {
+    PRINTF("PT INFO: calling thread '%s' with event %d\n", THREAD_NAME_STRING(p), ev);
     _current = p;
     p->state |= PT_STATE_CALLED;
     ret = p->thread(p, ev, data);
-    if(ret == PT_EXITED ||
-      ret == PT_ENDED ||
-      ev == PT_EVENT_EXIT) {
+    if(ret == PT_EXITED || ret == PT_ENDED || ev == PT_EVENT_EXIT) {
       exit_thread(p, _current, 0);
     } else {
       p->state &= ~PT_STATE_CALLED;
@@ -227,10 +257,11 @@ static void call_thread(struct PT *p, int ev, void* data)
   }
 }
 
-static void do_event(unsigned mask)
+static void do_event(void)
 {
   int ev;
   void* data;
+  PT_MASK mask;
   struct PT *receiver;
   struct PT *p;
 
@@ -245,8 +276,8 @@ static void do_event(unsigned mask)
   if(_nevents > 0) {
 
     /* There are events that we should deliver. */
-    ev = _events[_fevent].ev;
-
+    ev = _events[_fevent].event;
+    mask = _events[_fevent].mask;
     data = _events[_fevent].data;
     receiver = _events[_fevent].p;
 
@@ -257,15 +288,17 @@ static void do_event(unsigned mask)
 
     /* If this is a broadcast event, we deliver it to all events, in
        order of their priority. */
-    if(receiver == PT_BROADCAST) {
+    if(receiver == NULL) {
       for(p = _list; p != NULL; p = p->next) {
 
         /* If we have been requested to poll a process, we do this in
            between processing the broadcast event. */
-        if(_poll_requested&mask) {
-          do_poll(mask);
+        if(_poll_requested) {
+          do_poll();
         }
-        call_thread(p, ev, data);
+        if (p->mask & mask) {
+          call_thread(p, ev, data);
+        }
       }
     } else {
       /* Make sure that the process actually is running. */

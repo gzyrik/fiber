@@ -171,31 +171,53 @@ enum {
   PT_EVENT_USER = 0x8a
 };
 
+/** 事件数值类型 */
+typedef unsigned char PT_EVENT;
+
+/** 协程属性掩码类型 */
+typedef unsigned char PT_MASK;
+
 /** 事件处理协程 */
 struct PT
 {
+  /*< private >*/
   PT_CTX ctx;
-  int (*thread)(struct PT *p, int event, void* data);
-  struct PT *next;
   unsigned state;
-  /* public */
-  /** 该处理协程的属性掩码 */
-  unsigned mask;
+  struct PT *next; // 用于内部 的单链表管理
+
+  /*< public >*/
+  /** 协程的运行函数 */
+  int (*thread)(struct PT *p, PT_EVENT event, void* data);
+  /** 协程的属性掩码 */
+  PT_MASK mask;
+  /** 协程的名字, 目前仅作调试用 */
   const char* name;
 };
 
+/** 初始化 PT 结构
+ * @param[in] thread 事件处理函数
+ * @param[in] mask 协程的属性掩码
+ * @param[in] name 协程的名字
+ */
+#define PT_INIT_NAME(thread, mask, name) {\
+  (PT_CTX)0, 0, (struct PT*)0,\
+  thread, (PT_MASK)mask, name\
+}
+#define PT_INIT(thread, mask) {\
+  (PT_CTX)0, 0, (struct PT*)0,\
+  thread, (PT_MASK)mask, #thread\
+}
+
 /** 事件处理是否还处于运行状态 */
-#define pt_alive(p) (p->next)
+#define pt_alive(p) (p->state != 0)
 
 /** 开始一个事件处理协程
- * 类似于 thread(p, PT_EVENT_INIT, data);
+ * 类似于 p->thread(p, PT_EVENT_INIT, data);
  *
  * @param[in] p 处理协程的内存实例
  * @param[in] data PT_EVENT_INIT事件的相应 data 数据
- * @param[in] thread 事件处理函数
  */
-void pt_start(struct PT *p, void* data,
-  int (*thread)(struct PT *p, int event, void* data));
+void pt_start(struct PT *p, void* data);
 
 /** 标记在下一次pt_run()中,唤醒该协程
  * 类似于 pt_post(p, PT_EVENT_POLL, NULL);
@@ -203,27 +225,27 @@ void pt_start(struct PT *p, void* data,
 void pt_poll(struct PT *p);
 
 /** 阻塞方式,让协程处理该事件 */
-void pt_send(struct PT *p, int event, void* data);
+void pt_send(struct PT *p, PT_EVENT event, void* data);
 
 /** 退出协程
  * 类似于
- *     pt_send(p, PT_EVENT_EXIT, NULL);
  *     foreach(q by mask) {
  *       pt_send(q, PT_EVENT_EXITED, p);
  *     }
+ *     pt_send(p, PT_EVENT_EXIT, NULL);
  */
-void pt_exit(struct PT *p, unsigned mask);
+void pt_exit(struct PT *p, PT_MASK mask);
 
 /** 投递事件, 非阻塞方式 */
-int pt_post(struct PT *p, int event, void* data);
+int pt_post(struct PT *p, PT_EVENT event, void* data);
 
-/**  广播事件, 非阻塞方式 */
-int pt_cast(unsigned mask, int event, void* data);
+/** 广播事件, 非阻塞方式 */
+int pt_cast(PT_MASK mask, PT_EVENT event, void* data);
 
-/** 处理一遍缓存的事件
- * mask 作为过滤掩码
+/** 处理一个缓存的事件
+ * @return 返回缓存的事件个数
  */
-int pt_run(unsigned mask);
+int pt_run(void);
 
 /** @} */
 #endif
