@@ -31,6 +31,7 @@ enum {
  *      _PT_CLR(pt);
  *   - 除 PT_SCHEDULE 和 _PT_CLR 以外的 PT_* 宏函数,
  *     必须只能在 PT_BEGIN 与 PT_END 之间使用.
+ *   - 非 gcc 平台,PT_BEGIN 与 PT_END 之间不允许出现 switch 语句
  *
  * @var typedef PT_CTX;
  */
@@ -102,7 +103,7 @@ typedef unsigned short PT_CTX;
 /** 持续进行条件判断. 若为 true, 则继续, 反之出让 */
 #define PT_WAIT_UNTIL(pt, condition) do {\
   _LC_SET(pt)\
-  if(!(condition)) return PT_WAITING; \
+  if(!(condition)) return PT_WAITING;\
 } while(0)
 
 /** 持续调度一个或多个子协程
@@ -183,7 +184,7 @@ struct PT
   /*< private >*/
   PT_CTX ctx;
   unsigned state;
-  struct PT *next; // 用于内部 的单链表管理
+  struct PT *next; // 用于内部的单链表管理
 
   /*< public >*/
   /** 协程的运行函数 */

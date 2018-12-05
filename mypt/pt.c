@@ -10,7 +10,7 @@
 #define PRINTF(...)
 #endif
 
-#define THREAD_NAME_STRING(p) (p ? p->name : "NUL")
+#define THREAD_NAME(p) (p ? p->name : "NUL")
 enum {
   PT_STATE_RUNNING = 1,
   PT_STATE_POLLING = 2,
@@ -86,7 +86,7 @@ void pt_start(struct PT *p, void* data)
 
   _PT_CLR(&p->ctx);
   p->state = PT_STATE_RUNNING;
-  PRINTF("PT INFO: starting thread '%s' at function %p\n", THREAD_NAME_STRING(p), p->thread);
+  PRINTF("PT INFO: starting '%s' at function %p\n", THREAD_NAME(p), p->thread);
 
   /* Post a synchronous initialization event to the thread. */
   pt_send(p, PT_EVENT_INIT, data);
@@ -110,18 +110,15 @@ static int post_thread(struct PT *p, PT_MASK mask, PT_EVENT ev, void* data)
   struct event_data* ev_dat;
 
   if (p) {
-    PRINTF("PT INFO: thread '%s' posts "
-      "event %d to thread '%s', nevents %d\n",
-      THREAD_NAME_STRING(_current), ev, THREAD_NAME_STRING(p), _nevents);
+    PRINTF("PT INFO: posts event %d to '%s' from '%s', nevents %d\n",
+      ev, THREAD_NAME(p), THREAD_NAME(_current), _nevents);
   } else if (mask) {
-    PRINTF("PT INFO: thread '%s' broadcast "
-      "event %d by mask '0x%x', nevents %d\n",
-      THREAD_NAME_STRING(_current), ev, mask, _nevents);
+    PRINTF("PT INFO: cast event %d by mask '0x%x' from '%s', nevents %d\n",
+      ev, mask, THREAD_NAME(_current), _nevents);
   } else {
 #ifndef NDEBUG
-    printf("PT WARN: thread '%s' broadcast "
-      "event %d by mask 0, just do nothing\n",
-      THREAD_NAME_STRING(_current), ev);
+    printf("PT WARN: do nothing with event %d by mask '0x0' from '%s'\n",
+      ev, THREAD_NAME(_current));
 #endif
     return 0;
   }
@@ -131,11 +128,11 @@ static int post_thread(struct PT *p, PT_MASK mask, PT_EVENT ev, void* data)
     if(!p) {
       printf("PT *ERR: event queue is full "
         "when broadcast event %d was posted to 0x%x from %s\n",
-        ev, mask, THREAD_NAME_STRING(_current));
+        ev, mask, THREAD_NAME(_current));
     } else {
       printf("PT *ERR: event queue is full "
         "when event %d was posted to %s from %s\n",
-        ev, THREAD_NAME_STRING(p), THREAD_NAME_STRING(_current));
+        ev, THREAD_NAME(p), THREAD_NAME(_current));
     }
 #endif
     return ENOSPC;
@@ -195,14 +192,14 @@ static void exit_thread(struct PT *p, struct PT *from, PT_MASK mask)
     }
   }
   if (!p->state) {
-    printf("PT *ERR: exited thread '%s' exit again\n", THREAD_NAME_STRING(p));
+    printf("PT *ERR: exited '%s' exit again\n", THREAD_NAME(p));
   }
 #else
   if (!p->state) return;
 #endif
 
   /* Thread was running */
-  PRINTF("PT INFO: exit thread '%s'\n", THREAD_NAME_STRING(p));
+  PRINTF("PT INFO: exit '%s'\n", THREAD_NAME(p));
   p->state = 0;
   p->next = NULL;
 
@@ -232,20 +229,20 @@ static void call_thread(struct PT *p, PT_EVENT ev, void* data)
 
 #ifndef NDEBUG
   if (p->state & PT_STATE_CALLED) {
-    printf("PT WARN: thread '%s' called again with event %d\n", THREAD_NAME_STRING(p), ev);
+    printf("PT WARN: '%s' called again with event %d\n", THREAD_NAME(p), ev);
   }
 #endif
 
   if (p->thread == NULL) {
 #ifndef NDEBUG
-    printf("PT WARN: empty thread '%s' called with event %d\n", THREAD_NAME_STRING(p), ev);
+    printf("PT WARN: empty '%s' called with event %d\n", THREAD_NAME(p), ev);
 #endif
   } else if (p->state == 0) {
 #ifndef NDEBUG
-    printf("PT WARN: exited thread '%s' called with event %d\n", THREAD_NAME_STRING(p), ev);
+    printf("PT WARN: exited '%s' called with event %d\n", THREAD_NAME(p), ev);
 #endif
   } else {
-    PRINTF("PT INFO: calling thread '%s' with event %d\n", THREAD_NAME_STRING(p), ev);
+    PRINTF("PT INFO: calling '%s' with event %d\n", THREAD_NAME(p), ev);
     _current = p;
     p->state |= PT_STATE_CALLED;
     ret = p->thread(p, ev, data);
