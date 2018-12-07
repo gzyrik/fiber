@@ -89,14 +89,28 @@ void pt_start(struct PT *p, void* data)
   PRINTF("PT INFO: starting '%s' at function %p\n", THREAD_NAME(p), p->thread);
 
   /* Post a synchronous initialization event to the thread. */
-  pt_send(p, PT_EVENT_INIT, data);
+  call_thread(p, PT_EVENT_INIT, data);
 }
 
-void pt_poll(struct PT *p)
+void pt_poll(struct PT *p, PT_MASK mask)
 {
-  if (p->state != 0) {
-    p->state |= PT_STATE_POLLING;
-    _poll_requested |= p->mask;
+  if (p != NULL) {
+    if (p->state != 0) {
+      p->state |= PT_STATE_POLLING;
+      _poll_requested = 1;
+    }
+  } else if (mask) {
+    for (p = _list; p != NULL; p = p->next) {
+      if (p->state != 0) {
+        p->state |= PT_STATE_POLLING;
+        _poll_requested = 1;
+      }
+    }
+  } else {
+#ifndef NDEBUG
+    printf("PT WARN: poll nothing by mask '0x0' from '%s'\n",
+      THREAD_NAME(_current));
+#endif
   }
 }
 
@@ -105,11 +119,11 @@ void pt_exit(struct PT *p, PT_MASK mask)
   exit_thread(p, _current, mask);
 }
 
-static int post_thread(struct PT *p, PT_MASK mask, PT_EVENT ev, void* data)
+int pt_post(struct PT *p, PT_MASK mask, PT_EVENT ev, void* data)
 {
   struct event_data* ev_dat;
 
-  if (p) {
+  if (p != NULL) {
     PRINTF("PT INFO: posts event %d to '%s' from '%s', nevents %d\n",
       ev, THREAD_NAME(p), THREAD_NAME(_current), _nevents);
   } else if (mask) {
@@ -117,7 +131,7 @@ static int post_thread(struct PT *p, PT_MASK mask, PT_EVENT ev, void* data)
       ev, mask, THREAD_NAME(_current), _nevents);
   } else {
 #ifndef NDEBUG
-    printf("PT WARN: do nothing with event %d by mask '0x0' from '%s'\n",
+    printf("PT WARN: post nothing with event %d by mask '0x0' from '%s'\n",
       ev, THREAD_NAME(_current));
 #endif
     return 0;
@@ -154,21 +168,27 @@ static int post_thread(struct PT *p, PT_MASK mask, PT_EVENT ev, void* data)
   return 0;
 }
 
-void pt_send(struct PT *p, PT_EVENT event, void* data)
+void pt_send(struct PT *p, PT_MASK mask, PT_EVENT event, void* data)
 {
   struct PT *caller = _current;
-  call_thread(p, event, data);
+
+  if (p != NULL) {
+    call_thread(p, event, data);
+  } else if (mask) {
+    for (p = _list; p != NULL; p = p->next) {
+      if (p->mask & mask) {
+        call_thread(p, event, data);
+      }
+    }
+  } else {
+#ifndef NDEBUG
+    printf("PT WARN: send nothing with event %d by mask '0x0' from '%s'\n",
+      event, THREAD_NAME(_current));
+#endif
+    return;
+  }
+
   _current = caller;
-}
-
-int pt_post(struct PT *p, PT_EVENT event, void* data)
-{
-  return post_thread(p, 0, event, data);
-}
-
-int pt_cast(PT_MASK mask, PT_EVENT event, void* data)
-{
-  return post_thread(NULL, mask, event, data);
 }
 
 static void exit_thread(struct PT *p, struct PT *from, PT_MASK mask)
@@ -209,8 +229,8 @@ static void exit_thread(struct PT *p, struct PT *from, PT_MASK mask)
      * this process is about to exit. This will allow services to
      * deallocate state associated with this process.
      */
-    for(q = _list; q != NULL; q = q->next) {
-      if (q->mask&mask)
+    for (q = _list; q != NULL; q = q->next) {
+      if (q->mask & mask)
         call_thread(q, PT_EVENT_EXITED, (void*)p);
     }
   }

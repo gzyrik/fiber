@@ -215,36 +215,38 @@ struct PT
 /** 开始一个事件处理协程
  * 类似于 p->thread(p, PT_EVENT_INIT, data);
  *
- * @param[in] p 处理协程的内存实例
  * @param[in] data PT_EVENT_INIT事件的相应 data 数据
  */
 void pt_start(struct PT *p, void* data);
 
-/** 标记在下一次pt_run()中,唤醒该协程
- * 类似于 pt_post(p, PT_EVENT_POLL, NULL);
- */
-void pt_poll(struct PT *p);
-
-/** 阻塞方式,让协程处理该事件 */
-void pt_send(struct PT *p, PT_EVENT event, void* data);
-
 /** 退出协程
  * 类似于
- *     foreach(q by mask) {
- *       pt_send(q, PT_EVENT_EXITED, p);
- *     }
- *     pt_send(p, PT_EVENT_EXIT, NULL);
+ *      pt_send(NULL, mask, PT_EVENT_EXITED, p);
+ *      pt_send(p, PT_EVENT_EXIT, NULL);
  */
 void pt_exit(struct PT *p, PT_MASK mask);
 
-/** 投递事件, 非阻塞方式 */
-int pt_post(struct PT *p, PT_EVENT event, void* data);
+/** 标记在下一次pt_run()中,唤醒该协程
+ * 类似于
+ *      pt_post(p, mask, PT_EVENT_POLL, NULL);
+ */
+void pt_poll(struct PT *p, PT_MASK mask);
 
-/** 广播事件, 非阻塞方式 */
-int pt_cast(PT_MASK mask, PT_EVENT event, void* data);
+/** 阻塞方式, 调用协程处理该事件
+ * 若 p 是 NULL, 则用 mask 掩码过滤所有协程
+ * 调用该事件
+ */
+void pt_send(struct PT *p, PT_MASK mask, PT_EVENT event, void* data);
+
+/** 非阻塞方式, 投递事件, 延后至 pt_run() 中处理
+ * 若 p 是 NULL, 则用 mask 掩码过滤所有协程
+ * 广播该事件
+ * @return 成功返回 0
+ */
+int pt_post(struct PT *p, PT_MASK mask, PT_EVENT event, void* data);
 
 /** 处理一个缓存的事件
- * @return 返回缓存的事件个数
+ * @return 返回剩余的缓存事件个数
  */
 int pt_run(void);
 
