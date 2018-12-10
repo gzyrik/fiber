@@ -89,18 +89,18 @@ static int _st_hook_init()
 #endif
   }
   if (!pipe_f || !socket_f || !socketpair_f ||
-      !connect_f || !read_f || !write_f || !readv_f || !writev_f || !send_f
-      || !sendto_f || !sendmsg_f || !accept_f || !poll_f || !select_f
-      || !sleep_f|| !usleep_f || !nanosleep_f || !close_f || !fcntl_f
-      || !dup_f || !dup2_f || !fclose_f
+    !connect_f || !read_f || !write_f || !readv_f || !writev_f || !send_f
+    || !sendto_f || !sendmsg_f || !accept_f || !poll_f || !select_f
+    || !sleep_f|| !usleep_f || !nanosleep_f || !close_f || !fcntl_f
+    || !dup_f || !dup2_f || !fclose_f
 #if defined(__linux__)
-      || !pipe2_f
-      || !gethostbyname_r_f
-      || !gethostbyname2_r_f
-      || !gethostbyaddr_r_f
-      || !epoll_wait_f
+    || !pipe2_f
+    || !gethostbyname_r_f
+    || !gethostbyname2_r_f
+    || !gethostbyaddr_r_f
+    || !epoll_wait_f
 #endif
-     )
+    )
   {
     return -1;
   }
@@ -111,7 +111,7 @@ int pipe2(int pipefd[2], int flags)
 {
   int err;
 
-  while ((err = pipe2_f(pipefd, flags)) < 0) {
+  while ((err = (pipe2_f ? pipe2_f(pipefd, flags) : pipe_f(pipefd))) < 0) {
     if (errno != EINTR)
       return -1;
   }
@@ -184,14 +184,14 @@ int dup3(int oldfd, int newfd, int flags)
 }
 int close(int sockfd)
 {
-    _st_netfd_t* fd = _st_netfd(sockfd);
-    return fd ? st_netfd_close(fd) : close_f(sockfd);
+  _st_netfd_t* fd = _st_netfd(sockfd);
+  return fd ? st_netfd_close(fd) : close_f(sockfd);
 }
 int fclose(FILE* fp)
 {
-    _st_netfd_t* fd = _st_netfd(fileno(fp));
-    if (fd) st_netfd_close(fd);
-    return fclose_f(fp);
+  _st_netfd_t* fd = _st_netfd(fileno(fp));
+  if (fd) st_netfd_close(fd);
+  return fclose_f(fp);
 }
 int __close(int fd) {return close(fd);}
 int dup2(int oldfd, int newfd){return dup3(oldfd, newfd, 0);}
@@ -204,7 +204,7 @@ return fd ? st_##hook(fd, ##__VA_ARGS__, fd->rcv_timeo) : hook##_f(sockfd, ##__V
 ssize_t read(int sockfd, void *buf, size_t nbyte) {_ST_HOOK (read, sockfd, buf, nbyte);}
 ssize_t readv(int sockfd, const struct iovec *iov, int iov_size){_ST_HOOK(readv, sockfd, iov, iov_size);}
 ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
-    struct sockaddr *src_addr, socklen_t *addrlen) {_ST_HOOK(recvfrom, sockfd, buf, len, flags, src_addr, addrlen);}
+  struct sockaddr *src_addr, socklen_t *addrlen) {_ST_HOOK(recvfrom, sockfd, buf, len, flags, src_addr, addrlen);}
 ssize_t recv(int sockfd, void *buf, size_t len, int flags){_ST_HOOK(recv, sockfd, buf, len, flags);}
 ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags){_ST_HOOK(recvmsg, sockfd, msg, flags);}
 int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen){
@@ -220,13 +220,13 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen){
 //write hook
 #define _ST_HOOK(hook, sockfd, ...) \
   _st_netfd_t* fd = _st_netfd(sockfd); \
-return fd ? st_##hook(fd, ##__VA_ARGS__, fd->snd_timeo) : hook##_f(sockfd, ##__VA_ARGS__)
+  return fd ? st_##hook(fd, ##__VA_ARGS__, fd->snd_timeo) : hook##_f(sockfd, ##__VA_ARGS__)
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {_ST_HOOK(connect, sockfd, addr, addrlen);}
 ssize_t write(int sockfd, const void *buf, size_t nbyte){_ST_HOOK(write, sockfd, buf, nbyte);}
 ssize_t writev(int sockfd, const struct iovec *iov, int iov_size){_ST_HOOK(writev, sockfd, iov, iov_size);}
 ssize_t send(int sockfd, const void *buf, size_t len, int flags){_ST_HOOK(send, sockfd, buf, len, flags);}
 ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
-    const struct sockaddr *dest_addr, socklen_t addrlen) {_ST_HOOK(sendto, sockfd, buf, len, flags, dest_addr, addrlen);}
+  const struct sockaddr *dest_addr, socklen_t addrlen) {_ST_HOOK(sendto, sockfd, buf, len, flags, dest_addr, addrlen);}
 ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags){_ST_HOOK(sendmsg, sockfd, msg, flags);}
 #undef _ST_HOOK
 
@@ -238,126 +238,126 @@ int usleep(useconds_t usec) {return st_usleep(usec);}
 int nanosleep(const struct timespec *req, struct timespec *rem){return -1;}
 int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen)
 {
-    int err = setsockopt_f(sockfd, level, optname, optval, optlen);
-    if (err == 0 && level == SOL_SOCKET
-        && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
-        && optlen == sizeof(struct timeval)) {
-        _st_netfd_t* fd = _st_netfd(sockfd);
-        if (fd) {
-            struct timeval* tv = (struct timeval*)optval;
-            st_utime_t us = tv->tv_sec * 1000000 + tv->tv_usec;
-            if (optname == SO_RCVTIMEO)
-                fd->rcv_timeo = us;
-            else 
-                fd->snd_timeo = us;
-        }
+  int err = setsockopt_f(sockfd, level, optname, optval, optlen);
+  if (err == 0 && level == SOL_SOCKET
+    && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
+    && optlen == sizeof(struct timeval)) {
+    _st_netfd_t* fd = _st_netfd(sockfd);
+    if (fd) {
+      struct timeval* tv = (struct timeval*)optval;
+      st_utime_t us = tv->tv_sec * 1000000 + tv->tv_usec;
+      if (optname == SO_RCVTIMEO)
+        fd->rcv_timeo = us;
+      else 
+        fd->snd_timeo = us;
     }
-    return err;
+  }
+  return err;
 }
 int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen)
 {
-    if (level == SOL_SOCKET
-        && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
-        && *optlen == sizeof(struct timeval)) {
-        _st_netfd_t* fd = _st_netfd(sockfd);
-        if (fd) {
-            st_utime_t us = (optname == SO_RCVTIMEO ? fd->rcv_timeo : fd->snd_timeo);
-            struct timeval* tv = (struct timeval*)optval;
-            tv->tv_sec  = us /1000000;
-            tv->tv_usec = us - tv->tv_sec *1000000;
-            return 0;
-        }
+  if (level == SOL_SOCKET
+    && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
+    && *optlen == sizeof(struct timeval)) {
+    _st_netfd_t* fd = _st_netfd(sockfd);
+    if (fd) {
+      st_utime_t us = (optname == SO_RCVTIMEO ? fd->rcv_timeo : fd->snd_timeo);
+      struct timeval* tv = (struct timeval*)optval;
+      tv->tv_sec  = us /1000000;
+      tv->tv_usec = us - tv->tv_sec *1000000;
+      return 0;
     }
-    return getsockopt_f(sockfd, level, optname, optval, optlen);
+  }
+  return getsockopt_f(sockfd, level, optname, optval, optlen);
 }
 int fcntl(int __fd, int __cmd, ...)
 {
-    va_list va;
-    va_start(va, __cmd);
-    switch (__cmd) {
-    case F_DUPFD:
-    case F_DUPFD_CLOEXEC:
-        {// TODO: support FD_CLOEXEC
-            int fd = va_arg(va, int);
-            va_end(va);
-            fd = fcntl_f(__fd, __cmd, fd);
-            if (fd >= 0 && !st_netfd_open_socket(fd)){
-                int err = errno;
-                close_f(fd);
-                return err;
-            }
-            return fd;
-        }
-    case F_SETFD:
-    case F_SETOWN:
+  va_list va;
+  va_start(va, __cmd);
+  switch (__cmd) {
+  case F_DUPFD:
+  case F_DUPFD_CLOEXEC:
+    {// TODO: support FD_CLOEXEC
+      int fd = va_arg(va, int);
+      va_end(va);
+      fd = fcntl_f(__fd, __cmd, fd);
+      if (fd >= 0 && !st_netfd_open_socket(fd)){
+        int err = errno;
+        close_f(fd);
+        return err;
+      }
+      return fd;
+    }
+  case F_SETFD:
+  case F_SETOWN:
 #if defined(F_SETSIG)
-    case F_SETSIG:
-    case F_SETLEASE:
-    case F_NOTIFY:
+  case F_SETSIG:
+  case F_SETLEASE:
+  case F_NOTIFY:
 #endif
 #if defined(F_SETPIPE_SZ)
-    case F_SETPIPE_SZ:
+  case F_SETPIPE_SZ:
 #endif
-        {
-            int arg = va_arg(va, int);
-            va_end(va);
-            return fcntl_f(__fd, __cmd, arg);
-        }
-    case F_SETFL:
-        {
-            int flags = va_arg(va, int) | O_NONBLOCK;
-            va_end(va);
-            return fcntl_f(__fd, __cmd, flags);
-        }
-    case F_GETLK:
-    case F_SETLK:
-    case F_SETLKW:
-        {
-            struct flock* arg = va_arg(va, struct flock*);
-            va_end(va);
-            return fcntl_f(__fd, __cmd, arg);
-        }
+    {
+      int arg = va_arg(va, int);
+      va_end(va);
+      return fcntl_f(__fd, __cmd, arg);
+    }
+  case F_SETFL:
+    {
+      int flags = va_arg(va, int) | O_NONBLOCK;
+      va_end(va);
+      return fcntl_f(__fd, __cmd, flags);
+    }
+  case F_GETLK:
+  case F_SETLK:
+  case F_SETLKW:
+    {
+      struct flock* arg = va_arg(va, struct flock*);
+      va_end(va);
+      return fcntl_f(__fd, __cmd, arg);
+    }
 
 #if defined(F_GETOWN_EX)
-    case F_GETOWN_EX:
-    case F_SETOWN_EX:
-        {
-            struct f_owner_exlock* arg = va_arg(va, struct f_owner_exlock*);
-            va_end(va);
-            return fcntl_f(__fd, __cmd, arg);
-        }
+  case F_GETOWN_EX:
+  case F_SETOWN_EX:
+    {
+      struct f_owner_exlock* arg = va_arg(va, struct f_owner_exlock*);
+      va_end(va);
+      return fcntl_f(__fd, __cmd, arg);
+    }
 #endif
-    case F_GETFL:
-        {
-            va_end(va);
-            return fcntl_f(__fd, __cmd);
-        }
-    case F_GETFD:
-    case F_GETOWN:
+  case F_GETFL:
+    {
+      va_end(va);
+      return fcntl_f(__fd, __cmd);
+    }
+  case F_GETFD:
+  case F_GETOWN:
 #if defined(F_GETSIG)
-    case F_GETSIG:
-    case F_GETLEASE:
+  case F_GETSIG:
+  case F_GETLEASE:
 #endif
 #if defined(F_GETPIPE_SZ)
-    case F_GETPIPE_SZ:
+  case F_GETPIPE_SZ:
 #endif
-    default:
-        {
-            va_end(va);
-            return fcntl_f(__fd, __cmd);
-        }
+  default:
+    {
+      va_end(va);
+      return fcntl_f(__fd, __cmd);
     }
+  }
 }
 int ioctl(int fd, unsigned long int request, ...)
 {
-    void* arg;
-    va_list va;
-    if (request == FIONBIO) return 0;
+  void* arg;
+  va_list va;
+  if (request == FIONBIO) return 0;
 
-    va_start(va, request);
-    arg = va_arg(va, void*);
-    va_end(va);
-    return ioctl_f(fd, request, arg);
+  va_start(va, request);
+  arg = va_arg(va, void*);
+  va_end(va);
+  return ioctl_f(fd, request, arg);
 }
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout)
 {
@@ -374,7 +374,7 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
     if (writefds)  wfs = *writefds;
     if (exceptfds) efs = *exceptfds;
     n = select_f(nfds, (readfds ? &rfs : NULL), (writefds ? &wfs : NULL),
-                 (exceptfds ? &efs : NULL), &zero_tv);
+      (exceptfds ? &efs : NULL), &zero_tv);
     if (n != 0) {
       if (readfds)   *readfds   = rfs;
       if (writefds)  *writefds  = wfs;
@@ -419,4 +419,4 @@ clean:
   if (pfds != pollfds) free(pfds);
   return n;
 }
-  
+

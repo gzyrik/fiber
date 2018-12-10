@@ -287,13 +287,19 @@ void RTMPPacket_Free(RTMPPacket *p);
     RTMP_METABUF *m_mbuf;
   };
 
+void RTMP_Init(RTMP *r);
+void RTMP_Close(RTMP *r);
+void RTMP_EnableWrite(RTMP *r);
+void RTMP_SetBufferMS(RTMP *r, int size);
+
+/**
+ * @defgroup private
+ * @{
+ */
 int RTMP_ParseURL(const char *url, int *protocol, AVal *host,
   	     unsigned int *port, AVal *playpath, AVal *app);
 void RTMP_ParsePlaypath(AVal *in, AVal *playpath);
-
-
 int RTMP_SetOpt(RTMP *r, const AVal *opt, AVal *arg);
-int RTMP_SetupURL(RTMP *r, char *url);
 void RTMP_SetupStream(RTMP *r, int protocol,
   		AVal *hostname,
   		unsigned int port,
@@ -311,12 +317,9 @@ void RTMP_SetupStream(RTMP *r, int protocol,
   		AVal *usherToken,
   		int dStart,
   		int dStop, int bLiveStream, long int timeout);
-
-void RTMP_EnableWrite(RTMP *r);
-void RTMP_SetBufferMS(RTMP *r, int size);
-void RTMP_Init(RTMP *r);
-void RTMP_Close(RTMP *r);
-
+/**
+ * @}
+ */
 
 bool RTMP_ReadPacket(RTMP *r, RTMPPacket *packet);
 bool RTMP_SendPacket(RTMP *r, RTMPPacket *packet, bool queue);
@@ -327,32 +330,32 @@ int RTMP_Socket(RTMP *r);
 int RTMP_State(RTMP* r);
 int RTMP_IsTimedout(RTMP *r);
 double RTMP_GetDuration(RTMP *r);
-int RTMP_ToggleStream(RTMP *r);
-
 /**
  * @defgroup client only
  * @{
  */
+bool RTMP_SetupURL(RTMP *r, char *url);
 bool RTMP_Connect(RTMP *r, RTMPPacket *cp);
 /* @return streamId */
 int RTMP_ConnectStream(RTMP *r, int seekTime);
 /* @return true if media packet. */
 bool RTMP_ClientPacket(RTMP *r, RTMPPacket *packet);
 int RTMP_ReconnectStream(RTMP *r, int seekTime);
+int RTMP_ToggleStream(RTMP *r);
 void RTMP_DeleteStream(RTMP *r);
 /**
  * @}
  * @defgroup server only
  * @{
  */
-bool RTMP_Serve(RTMP *r, int sockfd, void *sslCtx);
+bool RTMP_Serve(RTMP *r, int sockfd, void *tlsCtx);
 /* @return streamId */
 int RTMP_AcceptStream(RTMP *r, RTMPPacket *packet);
 /* @return true if media packet. */
 bool RTMP_ServePacket(RTMP *r, RTMPPacket *packet);
 bool RTMP_SendPlayStop(RTMP *r, const AVal* playpath);
-void *RTMP_TLS_AllocServerContext(const char* cert, const char* key);
-void RTMP_TLS_FreeServerContext(void *ctx);
+void *RTMP_TLS_AllocServerContext(const char* certFile, const char* keyFile);
+void RTMP_TLS_FreeServerContext(void *tlsCtx);
 /**
  * @}
  * @defgroup utils
@@ -465,22 +468,22 @@ void RTMP_UpdateBufferMS(RTMP *r);
 void RTMP_DropRequest(RTMP *r, int i, int freeit);
 
 /* rtmpread.c prepare for read */
-  bool RTMP_ResetRead(RTMP *r, FILE *flvFile, int nSkipKeyFrames);
-  uint32_t RTMP_GetReadTS(RTMP *r);
-  int RTMP_GetReadStatus(RTMP *r);
-  int RTMP_Read(RTMP *r, char *buf, int size);
+bool RTMP_ResetRead(RTMP *r, FILE *flvFile, int nSkipKeyFrames);
+uint32_t RTMP_GetReadTS(RTMP *r);
+int RTMP_GetReadStatus(RTMP *r);
+int RTMP_Read(RTMP *r, char *buf, int size);
 
-  int RTMP_Write(RTMP *r, const char *buf, int size);
+int RTMP_Write(RTMP *r, const char *buf, int size);
 
 /* hashswf.c */
-  int RTMP_HashSWF(const char *url, unsigned int *size, unsigned char *hash, int age);
+int RTMP_HashSWF(const char *url, unsigned int *size, unsigned char *hash, int age);
 
 /* h264aac.c */
-  int RTMP_WriteMeta(RTMP *r, const char* desc,
-      double width, double height, double fps, double videoKbps,
-      double sampleRate, double sampleSize, double channels, double audioKbps);
-  int RTMP_WriteNalu(RTMP *r, const char *buf, int size, unsigned timeStamp);
-  int RTMP_WriteAdts(RTMP *r, const char *buf, int size, unsigned timeStamp);
+int RTMP_WriteMeta(RTMP *r, const char* desc,
+    double width, double height, double fps, double videoKbps,
+    double sampleRate, double sampleSize, double channels, double audioKbps);
+int RTMP_WriteNalu(RTMP *r, const char *buf, int size, unsigned timeStamp);
+int RTMP_WriteAdts(RTMP *r, const char *buf, int size, unsigned timeStamp);
 
 #ifdef __cplusplus
 };

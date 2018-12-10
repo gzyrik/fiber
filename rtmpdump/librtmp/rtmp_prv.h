@@ -20,7 +20,6 @@ struct sockaddr;
 bool RTMP_Connect0(RTMP *r, struct sockaddr *svc, int addrlen);
 bool RTMP_Connect1(RTMP *r, RTMPPacket *cp);
 
-bool RTMP_TLS_Accept(RTMP *r, void *ctx);
 int RTMPSockBuf_Fill(RTMPSockBuf *sb);
 int RTMPSockBuf_Send(RTMPSockBuf *sb, const char *buf, int len);
 int RTMPSockBuf_Close(RTMPSockBuf *sb);

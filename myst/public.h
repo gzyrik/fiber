@@ -139,6 +139,7 @@ extern int st_netfd_poll(st_netfd_t fd, int how, st_utime_t timeout);
 
 extern int st_socket(int domain, int type, int protocol);
 extern int st_poll(struct pollfd *pds, int npds, st_utime_t timeout);
+extern ssize_t st_writef(int osfd, const void *buf, size_t nbyte);
 extern st_netfd_t st_accept(st_netfd_t fd, struct sockaddr *addr, socklen_t *addrlen,
 			    st_utime_t timeout);
 extern int st_connect(st_netfd_t fd, const struct sockaddr *addr, int addrlen,
@@ -190,21 +191,29 @@ inline static void* __st_functor(void* f) {
   delete func;
   return ret;
 }
-inline st_thread_t st_async(
+inline st_thread_t st_thread(
   const std::function<void*()>&func, bool joinable=false, int stack_size=0) {
   return st_thread_create(__st_functor,
     new std::function<void*()>(func), joinable, stack_size);
 }
 #include <thread>
+/* 另开物理线程, 等待其耗时的非IO操作 */
 template <class Fn, class... Args>
-void st_cond_async(st_cond_t cvar, Fn&& fn, Args&&... args) {
+bool st_async(Fn&& fn, Args&&... args) {
+  int sfd[2];
+  if (pipe(sfd) != 0) return false;
+  st_netfd_t fd = st_netfd_open_socket(sfd[0]);
+  if (!fd) return false;
   std::thread thread([&] {
     fn(args...);
-    while(st_cond_signal(cvar) != 1)
-      std::this_thread::yield();
+    st_writef(sfd[1], (void*)sfd, sizeof(int));
   });
-  st_cond_wait(cvar);
+  bool ret = (st_read(fd, (void*)sfd, sizeof(int),
+    ST_UTIME_NO_TIMEOUT) == sizeof(int));
   thread.join();
+  st_netfd_close(fd);
+  close(sfd[1]);
+  return ret;
 }
 
 #endif

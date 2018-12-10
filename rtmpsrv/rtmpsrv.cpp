@@ -245,7 +245,7 @@ onIngestPost(const httplib::Request& req, httplib::Response& res)
     if (!RTMP_ConnectStream(rtmp, 0))
       ERR_BREAK(422);
 
-    auto t = st_async([rtmp, fp]{ return ingest_file_thread(rtmp, fp); }, true);
+    auto t = st_thread([rtmp, fp]{ return ingest_file_thread(rtmp, fp); }, true);
     if (!t)
       ERR_BREAK(503);
 

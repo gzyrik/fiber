@@ -221,11 +221,10 @@ int st_cond_wait(_st_cond_t *cvar)
 }
 
 
-static int _st_cond_signal(_st_cond_t *cvar, int max_wake)
+static int _st_cond_signal(_st_cond_t *cvar, int broadcast)
 {
   _st_thread_t *thread;
   _st_clist_t *q;
-  int n=0;
 
   for (q = cvar->wait_q.next; q != &cvar->wait_q; q = q->next) {
     thread = _ST_THREAD_WAITQ_PTR(q);
@@ -236,25 +235,24 @@ static int _st_cond_signal(_st_cond_t *cvar, int max_wake)
       /* Make thread runnable */
       thread->state = _ST_ST_RUNNABLE;
       _ST_ADD_RUNQ(thread);
-      ++n;
-      if (max_wake != 0 && n >= max_wake)
+      if (!broadcast)
         break;
     }
   }
 
-  return n;
+  return 0;
 }
 
 
 int st_cond_signal(_st_cond_t *cvar)
 {
-  return _st_cond_signal(cvar, 1);
+  return _st_cond_signal(cvar, 0);
 }
 
 
 int st_cond_broadcast(_st_cond_t *cvar)
 {
-  return _st_cond_signal(cvar, 0);
+  return _st_cond_signal(cvar, 1);
 }
 
 

@@ -63,7 +63,7 @@ static const char *my_dhm_G = "4";
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 #endif
-TLS_CTX RTMP_TLS_ctx;
+static TLS_CTX RTMP_TLS_ctx;
 #endif
 
 #define RTMP_SIG_SIZE 1536
@@ -843,7 +843,8 @@ int RTMP_SetOpt(RTMP *r, const AVal *opt, AVal *arg)
   return TRUE;
 }
 
-int RTMP_SetupURL(RTMP *r, char *url)
+bool
+RTMP_SetupURL(RTMP *r, char *url)
 {
   AVal opt, arg;
   char *p1, *p2, *ptr = strchr(url, ' ');
@@ -1078,7 +1079,7 @@ RTMP_Connect0(RTMP *r, struct sockaddr * service, int addrlen)
   return TRUE;
 }
 
-bool
+static bool
 RTMP_TLS_Accept(RTMP *r, void *ctx)
 {
 #if defined(CRYPTO) && !defined(NO_SSL)
