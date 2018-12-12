@@ -93,10 +93,12 @@ int _st_io_init(void)
   if (fdlim > 0 && rlim.rlim_max > (rlim_t) fdlim) {
     rlim.rlim_max = fdlim;
   }
+  fdlim = (int)rlim.rlim_cur;
   rlim.rlim_cur = rlim.rlim_max;
   if (setrlimit(RLIMIT_NOFILE, &rlim) < 0)
-    return -1;
-  _st_osfd_limit = (int) rlim.rlim_max;
+    _st_osfd_limit = fdlim;
+  else
+    _st_osfd_limit = (int) rlim.rlim_max;
 
 #ifdef ST_HOOK_SYS
   return _st_hook_init();

@@ -1011,6 +1011,11 @@ ST_HIDDEN int _st_kq_fd_getlimit(void)
     return 0;
 }
 
+ST_HIDDEN int _st_kq_is_supported(void)
+{
+    return 1;
+}
+
 static _st_eventsys_t _st_kq_eventsys = {
     "kqueue",
     ST_EVENTSYS_ALT,
@@ -1400,41 +1405,56 @@ static _st_eventsys_t _st_epoll_eventsys = {
 
 int st_set_eventsys(int eventsys)
 {
-    if (_st_eventsys) {
-        errno = EBUSY;
-        return -1;
-    }
+  if (_st_eventsys) {
+    errno = EBUSY;
+    return -1;
+  }
 
-    switch (eventsys) {
-    case ST_EVENTSYS_DEFAULT:
-#ifdef USE_POLL
-        _st_eventsys = &_st_poll_eventsys;
-#else
-        _st_eventsys = &_st_select_eventsys;
-#endif
-        break;
-    case ST_EVENTSYS_SELECT:
-        _st_eventsys = &_st_select_eventsys;
-        break;
-#ifdef MD_HAVE_POLL
-    case ST_EVENTSYS_POLL:
-        _st_eventsys = &_st_poll_eventsys;
-        break;
-#endif
-    case ST_EVENTSYS_ALT:
+  switch (eventsys) {
+  case ST_EVENTSYS_DEFAULT:
 #if defined (MD_HAVE_KQUEUE)
-        _st_eventsys = &_st_kq_eventsys;
-#elif defined (MD_HAVE_EPOLL)
-        if (_st_epoll_is_supported())
-            _st_eventsys = &_st_epoll_eventsys;
-#endif
-        break;
-    default:
-        errno = EINVAL;
-        return -1;
+    if (_st_kq_is_supported()) {
+      _st_eventsys = &_st_kq_eventsys;
+      break;
     }
+#elif defined (MD_HAVE_EPOLL)
+    if (_st_epoll_is_supported()) {
+      _st_eventsys = &_st_epoll_eventsys;
+      break;
+    }
+#endif
+#ifdef MD_HAVE_POLL
+    _st_eventsys = &_st_poll_eventsys;
+#else
+    _st_eventsys = &_st_select_eventsys;
+#endif
+    break;
+  case ST_EVENTSYS_SELECT:
+    _st_eventsys = &_st_select_eventsys;
+    break;
+#ifdef MD_HAVE_POLL
+  case ST_EVENTSYS_POLL:
+    _st_eventsys = &_st_poll_eventsys;
+    break;
+#endif
+  case ST_EVENTSYS_ALT:
+#if defined (MD_HAVE_KQUEUE)
+    if (_st_kq_is_supported()) {
+      _st_eventsys = &_st_kq_eventsys;
+      break;
+    }
+#elif defined (MD_HAVE_EPOLL)
+    if (_st_epoll_is_supported()) {
+      _st_eventsys = &_st_epoll_eventsys;
+      break;
+    }
+#endif
+  default:
+    errno = EINVAL;
+    return -1;
+  }
 
-    return 0;
+  return 0;
 }
 
 int st_get_eventsys(void)
