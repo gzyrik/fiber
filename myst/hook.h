@@ -39,6 +39,7 @@ static _st_netfd_t* _st_netfd(int osfd)
   X(int,dup,int)\
   X(int,dup2,int, int)\
   X(int,dup3,int, int, int)\
+  X(FILE*,fopen,const char * __restrict, const char * __restrict)\
   X(int,fclose,FILE*)
 
 #if defined(__linux__)
@@ -192,6 +193,19 @@ int close(int sockfd)
 {
   _st_netfd_t* fd = _st_netfd(sockfd);
   return fd ? st_netfd_close(fd) : close_f(sockfd);
+}
+FILE* fopen(const char * __restrict filename , const char * __restrict mode)
+{
+  FILE* fp = fopen_f(filename, mode);
+  if (fp && _st_netfd_hook) {
+    if (!st_netfd_open(fileno(fp))){
+      int err = errno;
+      fclose_f(fp);
+      errno = err;
+      return NULL;
+    }
+  }
+  return fp;
 }
 int fclose(FILE* fp)
 {

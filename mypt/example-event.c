@@ -16,9 +16,9 @@ enum {
   EVENT_DIE,
 };
 static int actor(struct PT *pt, PT_EVENT event, void* data);
-static struct PT pt1=PT_INIT_NAME(actor, 1, "a");
-static struct PT pt2=PT_INIT_NAME(actor, 2, "b");
-static struct PT pt3=PT_INIT_NAME(actor, 4, "c");
+static struct PT pt1=PT_INIT(actor, 1, "a");
+static struct PT pt2=PT_INIT(actor, 2, "b");
+static struct PT pt3=PT_INIT(actor, 4, "c");
 int actor(struct PT *pt, PT_EVENT event, void* data) PT_BEGIN(pt) {
   do {
     if (event == PT_EVENT_EXIT)

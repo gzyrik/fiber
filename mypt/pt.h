@@ -184,13 +184,14 @@ struct PT
   /*< private >*/
   PT_CTX ctx;
   unsigned state;
-  struct PT *next; // 用于内部的单链表管理
+  struct PT *next; /*< 用于内部的单链表管理 */
 
   /*< public >*/
   /** 协程的运行函数 */
   int (*thread)(struct PT *p, PT_EVENT event, void* data);
   /** 协程的属性掩码 */
   PT_MASK mask;
+
   /** 协程的名字, 目前仅作调试用 */
   const char* name;
 };
@@ -200,13 +201,9 @@ struct PT
  * @param[in] mask 协程的属性掩码
  * @param[in] name 协程的名字
  */
-#define PT_INIT_NAME(thread, mask, name) {\
+#define PT_INIT(thread, mask, name) {\
   (PT_CTX)0, 0, (struct PT*)0,\
   thread, (PT_MASK)mask, name\
-}
-#define PT_INIT(thread, mask) {\
-  (PT_CTX)0, 0, (struct PT*)0,\
-  thread, (PT_MASK)mask, #thread\
 }
 
 /** 事件处理是否还处于运行状态 */
