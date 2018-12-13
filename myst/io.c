@@ -572,11 +572,6 @@ int st_write_resid(_st_netfd_t *fd, const void *buf, size_t *resid,
   return rv;
 }
 
-ssize_t st_writef(int osfd, const void *buf, size_t nbyte)
-{
-  return _ST_SYS_CALL(write)(osfd, buf, nbyte);
-}
-
 ssize_t st_write(_st_netfd_t *fd, const void *buf, size_t nbyte,
                  st_utime_t timeout)
 {

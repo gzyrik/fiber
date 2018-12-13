@@ -4,10 +4,10 @@
 #define __USE_GNU
 #include <dlfcn.h>
 #include <fcntl.h>
-static _st_netfd_t** _st_netfd_hook;
+static __thread _st_netfd_t** _st_netfd_hook;
 static _st_netfd_t* _st_netfd(int osfd)
 {
-  if (osfd > -1 && osfd < _st_osfd_limit)
+  if (_st_netfd_hook && osfd > -1 && osfd < _st_osfd_limit)
     return _st_netfd_hook[osfd];
   return NULL;
 }
@@ -70,7 +70,6 @@ int (*epoll_wait_f)(int epfd, struct epoll_event *events, int maxevents, int tim
 
 static int _st_hook_init()
 {
-  _st_netfd_hook = calloc(_st_osfd_limit, sizeof(_st_netfd_t*));
   if (dlsym(RTLD_NEXT, "connect")) {
 #define X(ret, name, ...) name##_f = dlsym(RTLD_NEXT, #name);
     _ST_HOOK_LIST
@@ -104,6 +103,9 @@ static int _st_hook_init()
   {
     return -1;
   }
+  _st_netfd_hook = calloc(_st_osfd_limit, sizeof(_st_netfd_t*));
+  if (!_st_netfd_hook)
+    return -1;
   return 0;
 }
 
@@ -115,12 +117,13 @@ int pipe2(int pipefd[2], int flags)
     if (errno != EINTR)
       return -1;
   }
-  if (err == 0) {
+  if (err == 0 && _st_netfd_hook) {
     if (!st_netfd_open_socket(pipefd[0]) || !st_netfd_open_socket(pipefd[1])) {
       err = errno;
       close_f(pipefd[0]);
       close_f(pipefd[1]);
       errno = err;
+      return -1;
     }
   }
   return err;
@@ -133,12 +136,13 @@ int socketpair(int domain, int type, int protocol, int sv[2])
     if (errno != EINTR)
       return -1;
   }
-  if (err == 0) {
+  if (err == 0 && _st_netfd_hook) {
     if (!st_netfd_open_socket(sv[0]) || !st_netfd_open_socket(sv[1])) {
       err = errno;
       close_f(sv[0]);
       close_f(sv[1]);
       errno = err;
+      return -1;
     }
   }
   return err;
@@ -147,15 +151,16 @@ int dup(int oldfd)
 {
   int err;
 
-  while ((err =dup_f(oldfd)) < 0) {
+  while ((err = dup_f(oldfd)) < 0) {
     if (errno != EINTR)
       return -1;
   }
-  if (err >= 0) {
+  if (err >= 0 && _st_netfd_hook) {
     if (!st_netfd_open_socket(err)) {
       err = errno;
       close_f(err);
       errno = err;
+      return -1;
     }
   }
   return err;
@@ -164,20 +169,21 @@ int dup3(int oldfd, int newfd, int flags)
 {
   int err;
   _st_netfd_t* fd;
-  if (oldfd != newfd) return 0;
+  if (oldfd == newfd) return 0;
 
   fd = _st_netfd(newfd);
   if (fd) st_netfd_close(fd);
 
-  while ((err =dup3_f(oldfd, newfd, flags)) < 0) {
+  while ((err = (dup3_f ? dup3_f(oldfd, newfd, flags) : dup2_f(oldfd,newfd))) < 0) {
     if (errno != EINTR)
       return -1;
   }
-  if (err == 0) {
+  if (err == 0 && _st_netfd_hook) {
     if (!st_netfd_open_socket(newfd)) {
       err = errno;
       close_f(newfd);
       errno = err;
+      return -1;
     }
   }
   return err;
@@ -207,6 +213,7 @@ ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
   struct sockaddr *src_addr, socklen_t *addrlen) {_ST_HOOK(recvfrom, sockfd, buf, len, flags, src_addr, addrlen);}
 ssize_t recv(int sockfd, void *buf, size_t len, int flags){_ST_HOOK(recv, sockfd, buf, len, flags);}
 ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags){_ST_HOOK(recvmsg, sockfd, msg, flags);}
+#undef _ST_HOOK
 int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen){
   _st_netfd_t* fd = _st_netfd(sockfd);
   if (fd) {
@@ -215,7 +222,6 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen){
   }
   return accept_f(sockfd, addr, addrlen);
 }
-#undef _ST_HOOK
 
 //write hook
 #define _ST_HOOK(hook, sockfd, ...) \
@@ -230,12 +236,17 @@ ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
 ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags){_ST_HOOK(sendmsg, sockfd, msg, flags);}
 #undef _ST_HOOK
 
-int socket(int domain, int type, int protocol){return st_socket(domain, type, protocol);}
-int poll(struct pollfd *fds, nfds_t nfds, int timeout){return st_poll(fds, nfds, timeout);}
+int socket(int domain, int type, int protocol)
+{return _st_netfd_hook ? st_socket(domain, type, protocol) : socket_f(domain, type, protocol);}
+int poll(struct pollfd *fds, nfds_t nfds, int timeout)
+{return _st_netfd_hook ? st_poll(fds, nfds, timeout) : poll_f(fds, nfds, timeout);}
 int __poll(struct pollfd *fds, nfds_t nfds, int timeout) {return poll(fds, nfds, timeout);}
-unsigned sleep(unsigned int seconds){return st_sleep(seconds);}
-int usleep(useconds_t usec) {return st_usleep(usec);}
-int nanosleep(const struct timespec *req, struct timespec *rem){return -1;}
+unsigned sleep(unsigned int seconds)
+{return _st_netfd_hook ? st_sleep(seconds) : sleep_f(seconds);}
+int usleep(useconds_t usec)
+{return _st_netfd_hook ? st_usleep(usec) : usleep_f(usec);}
+int nanosleep(const struct timespec *req, struct timespec *rem)
+{return _st_netfd_hook ? st_usleep(req->tv_sec * 1000000 + req->tv_nsec/1000): nanosleep_f(req, rem);}
 int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen)
 {
   int err = setsockopt_f(sockfd, level, optname, optval, optlen);
@@ -276,20 +287,18 @@ int fcntl(int __fd, int __cmd, ...)
   va_start(va, __cmd);
   switch (__cmd) {
   case F_DUPFD:
-  case F_DUPFD_CLOEXEC:
-    {// TODO: support FD_CLOEXEC
-      int fd = va_arg(va, int);
-      va_end(va);
-      fd = fcntl_f(__fd, __cmd, fd);
-      if (fd >= 0 && !st_netfd_open_socket(fd)){
-        int err = errno;
-        close_f(fd);
-        return err;
-      }
-      return fd;
+  case F_DUPFD_CLOEXEC: {// TODO: support FD_CLOEXEC
+    int fd = va_arg(va, int);
+    va_end(va);
+    fd = fcntl_f(__fd, __cmd, fd);
+    if (fd >= 0 && _st_netfd_hook && !st_netfd_open_socket(fd)){
+      fd = errno;
+      close_f(fd);
+      errno = fd;
+      return -1;
     }
-  case F_SETFD:
-  case F_SETOWN:
+    return fd;
+  }
 #if defined(F_SETSIG)
   case F_SETSIG:
   case F_SETLEASE:
@@ -297,41 +306,36 @@ int fcntl(int __fd, int __cmd, ...)
 #endif
 #if defined(F_SETPIPE_SZ)
   case F_SETPIPE_SZ:
-#endif
-    {
-      int arg = va_arg(va, int);
-      va_end(va);
-      return fcntl_f(__fd, __cmd, arg);
-    }
-  case F_SETFL:
-    {
-      int flags = va_arg(va, int) | O_NONBLOCK;
-      va_end(va);
-      return fcntl_f(__fd, __cmd, flags);
-    }
+#endif 
+  case F_SETFD:
+  case F_SETOWN: {
+    int arg = va_arg(va, int);
+    va_end(va);
+    return fcntl_f(__fd, __cmd, arg);
+  }
+  case F_SETFL: {
+    int flags = va_arg(va, int);
+    if (_st_netfd_hook) flags |= O_NONBLOCK;
+    va_end(va);
+    return fcntl_f(__fd, __cmd, flags);
+  }
   case F_GETLK:
   case F_SETLK:
-  case F_SETLKW:
-    {
-      struct flock* arg = va_arg(va, struct flock*);
-      va_end(va);
-      return fcntl_f(__fd, __cmd, arg);
-    }
+  case F_SETLKW: {
+    struct flock* arg = va_arg(va, struct flock*);
+    va_end(va);
+    return fcntl_f(__fd, __cmd, arg);
+  }
 
 #if defined(F_GETOWN_EX)
   case F_GETOWN_EX:
-  case F_SETOWN_EX:
-    {
-      struct f_owner_exlock* arg = va_arg(va, struct f_owner_exlock*);
-      va_end(va);
-      return fcntl_f(__fd, __cmd, arg);
-    }
+  case F_SETOWN_EX: {
+    struct f_owner_exlock* arg = va_arg(va, struct f_owner_exlock*);
+    va_end(va);
+    return fcntl_f(__fd, __cmd, arg);
+  }
 #endif
   case F_GETFL:
-    {
-      va_end(va);
-      return fcntl_f(__fd, __cmd);
-    }
   case F_GETFD:
   case F_GETOWN:
 #if defined(F_GETSIG)
@@ -341,18 +345,17 @@ int fcntl(int __fd, int __cmd, ...)
 #if defined(F_GETPIPE_SZ)
   case F_GETPIPE_SZ:
 #endif
-  default:
-    {
-      va_end(va);
-      return fcntl_f(__fd, __cmd);
-    }
+  default: 
+    va_end(va);
+    return fcntl_f(__fd, __cmd);
   }
 }
 int ioctl(int fd, unsigned long int request, ...)
 {
   void* arg;
   va_list va;
-  if (request == FIONBIO) return 0;
+  if (request == FIONBIO && _st_netfd_hook)
+    return 0;
 
   va_start(va, request);
   arg = va_arg(va, void*);
@@ -364,6 +367,9 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
   int i, npfds, n;
   struct pollfd pollfds[4];
   struct pollfd* pfds;
+  if (!_st_netfd_hook)
+    return select_f(nfds, readfds, writefds, exceptfds, timeout);
+
   do {// 执行一次非阻塞的select, 检测异常或无效fd.
     static struct timeval zero_tv = {0, 0};
     fd_set rfs, wfs, efs;

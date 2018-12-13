@@ -139,7 +139,6 @@ extern int st_netfd_poll(st_netfd_t fd, int how, st_utime_t timeout);
 
 extern int st_socket(int domain, int type, int protocol);
 extern int st_poll(struct pollfd *pds, int npds, st_utime_t timeout);
-extern ssize_t st_writef(int osfd, const void *buf, size_t nbyte);
 extern st_netfd_t st_accept(st_netfd_t fd, struct sockaddr *addr, socklen_t *addrlen,
 			    st_utime_t timeout);
 extern int st_connect(st_netfd_t fd, const struct sockaddr *addr, int addrlen,
@@ -206,7 +205,7 @@ bool st_async(Fn&& fn, Args&&... args) {
   if (!fd) return false;
   std::thread thread([&] {
     fn(args...);
-    st_writef(sfd[1], (void*)sfd, sizeof(int));
+    write(sfd[1], (void*)sfd, sizeof(int));
   });
   bool ret = (st_read(fd, (void*)sfd, sizeof(int),
     ST_UTIME_NO_TIMEOUT) == sizeof(int));
