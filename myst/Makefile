@@ -366,7 +366,7 @@ $(HEADER): public.h
 $(TARGETDIR)/md.o: md.S
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(TARGETDIR)/%.o: %.c common.h md.h
+$(TARGETDIR)/%.o: %.c common.h md.h public.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 examples::

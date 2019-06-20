@@ -49,8 +49,8 @@
 #include <setjmp.h>
 
 /* Enable assertions only if DEBUG is defined */
-#ifndef DEBUG
-#define NDEBUG
+#if !defined(DEBUG) && !defined(NDEBUG)
+#define NDEBUG 1
 #endif
 #include <assert.h>
 #define ST_ASSERT(expr) assert(expr)

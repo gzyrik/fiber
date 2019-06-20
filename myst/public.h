@@ -69,6 +69,9 @@
 #define ST_EVENTSYS_POLL    2
 #define ST_EVENTSYS_ALT     3
 
+#if __GNUC__
+#pragma GCC visibility push(default)
+#endif
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -183,20 +186,208 @@ extern void _st_iterate_threads(void);
 
 #ifdef __cplusplus
 }
+#endif
+#if __GNUC__
+#pragma GCC visibility pop
+#endif
+
+#if __cplusplus >= 201103L
 #include <functional>
-inline static void* __st_functor(void* f) {
-  auto func = (std::function<void*(void)>*)f;
-  void* ret = (*func)();
-  delete func;
-  return ret;
-}
-inline st_thread_t st_thread(
-  const std::function<void*()>&func, bool joinable=false, int stack_size=0) {
-  return st_thread_create(__st_functor,
-    new std::function<void*()>(func), joinable, stack_size);
-}
-#include <thread>
+/* 模仿 golang 实现相似的 go */
+class __st_go {
+#ifdef DEBUG
+  const char* file_; const int lineno_;
+#endif
+  mutable int stack_size_;
+  typedef std::function<void()> detached_type;
+  typedef std::function<void*()> joinable_type;
+  static void* __st_detached_functor(void* p) {
+    auto f= reinterpret_cast<detached_type*>(p);
+    (*f)();
+    delete f;
+    return nullptr;
+  }
+  static void* __st_joinable_functor(void* p) {
+    auto f= reinterpret_cast<joinable_type*>(p);
+    void* ret = (*f)();
+    delete f;
+    return ret;
+  }
+public:
+  __st_go(const char* file, int lineno) :
+#ifdef DEBUG
+    file_(file),lineno_(lineno),
+#endif
+    stack_size_(0){}
+  const __st_go& operator,(int stack_size) const
+  { stack_size_ = stack_size; return *this; }
+  const __st_go& operator,(detached_type const&f) const {
+    st_thread_create(__st_detached_functor,
+      new detached_type(f), false, stack_size_);
+    return *this;
+  }
+  st_thread_t operator,(joinable_type const&f) const {
+    return st_thread_create(__st_joinable_functor,
+      new joinable_type(f), true, stack_size_);
+  }
+};
+#if !defined(go) && !defined(ST_NOT_DEFINE_GO)
+#define go __st_go(__FILE__, __LINE__),
+#endif
+
+class __st_pipe {//无缓冲的管线
+  struct __st_cxt { //阻塞的上下文
+    void* value; __st_cxt* next;
+    void append(__st_cxt* cxt) {
+      auto tail = this;
+      while (tail->next) tail = tail->next;
+      tail->next = cxt;
+    }
+    void remove(__st_cxt* cxt) {
+      auto prev = this;
+      while (prev->next) {
+        if (prev->next == cxt) {
+          prev->next = cxt->next;
+          return;
+        }
+        prev = prev->next;
+      }
+    }
+  } *pushing_, *poping_;//阻塞的单向队列
+  bool closed_; st_cond_t cond_;
+  virtual void assign(void* a, const void* b) = 0;
+  bool wait(__st_cxt*& waiting, void* t, st_utime_t dur) {
+    if (!dur) return false;
+    __st_cxt cxt = {t, nullptr};
+    if (waiting) waiting->append(&cxt);
+    else waiting = &cxt;
+    if (st_cond_timedwait(cond_, dur) < 0) {
+      if (closed_) ;
+      else if (waiting == &cxt) waiting = waiting->next;
+      else waiting->remove(&cxt);
+      return false;
+    }
+    return !closed_;
+  }
+public:
+  virtual bool push(const void* t, st_utime_t dur) {
+    if (closed_) return false;
+    else if (!poping_)
+      return wait(pushing_, (void*)t, dur);
+    if (poping_->value && t && poping_->value != t)
+      assign(poping_->value, t);
+    poping_ = poping_->next;
+    st_cond_signal(cond_);
+    return true;
+  }
+  virtual bool pop(void* t, st_utime_t dur) {
+    if (closed_) return false;
+    else if (!pushing_)
+      return wait(poping_, t, dur);
+    if (t && pushing_->value && t != pushing_->value)
+      assign(t, pushing_->value);
+    pushing_ = pushing_->next;
+    st_cond_signal(cond_);
+    return true;
+  }
+  void close() {
+    if (closed_) return;
+    closed_ = true;
+    st_cond_broadcast(cond_);
+  }
+  explicit __st_pipe()
+    : pushing_(nullptr), poping_(nullptr),
+    closed_(false), cond_(st_cond_new()) {}
+  virtual ~__st_pipe() {
+    st_cond_destroy(cond_);
+  }
+};
+
+#include <queue>
+#include <memory>
+/* 模仿 golang 实现相似的 chan */
+template <class T> class __st_chan {
+  struct mypipe : public __st_pipe {
+    void assign(void* a, const void* b) override {
+      *reinterpret_cast<T*>(a) = *reinterpret_cast<const T*>(b);
+    }
+  };
+  struct myqueue : public mypipe { //带缓冲的队列
+    const size_t capacity_;
+    std::queue<T> queue_;
+    bool push(const void* t, st_utime_t dur) override {
+      if (queue_.size() >= capacity_)
+        return __st_pipe::push(t, dur);
+      queue_.emplace(*(T*)t);
+      return true;
+    }
+    bool pop(void* t, st_utime_t dur) override {
+      if (queue_.empty()) 
+        return __st_pipe::pop(t, dur);
+      else if (t)
+        std::swap(*(T*)t, queue_.front());
+      queue_.pop();
+      return true;
+    }
+    explicit myqueue(size_t capacity) : capacity_(capacity){}
+  };
+  mutable std::shared_ptr<__st_pipe> queue_;
+  mutable bool failed_;//>>或<<操作失败
+public:
+  explicit __st_chan(size_t capacity = 0) : failed_(false) {
+    if (capacity > 0)
+      queue_ = std::make_shared<myqueue>(capacity);
+    else
+      queue_ = std::make_shared<mypipe>();
+  }
+  const __st_chan& operator= (std::nullptr_t/*ignore*/) const {
+    queue_.reset();
+    return *this;
+  }
+  const __st_chan& operator<< (const T& t) const {
+    if (!queue_ || !queue_->push(&t, ST_UTIME_NO_TIMEOUT))
+      failed_ = true;
+    return *this;
+  }
+  const __st_chan& operator>> (T& t) const {
+    if (!queue_ || !queue_->pop(&t, ST_UTIME_NO_TIMEOUT))
+      failed_ = true;
+    return *this;
+  }
+  const __st_chan& operator>> (std::nullptr_t/*ignore*/) const {
+    if (!queue_ || !queue_->pop(nullptr, ST_UTIME_NO_TIMEOUT))
+      failed_ = true;
+    return *this;
+  }
+  bool push(const T& t, st_utime_t dur) const {
+    if (!queue_) return false;
+    return queue_->push(&t, dur);
+  }
+  bool pop(T& t, st_utime_t dur) const {
+    if (!queue_) return false;
+    return queue_->pop(&t, dur);
+  }
+  bool pop(std::nullptr_t/*ignore*/, st_utime_t dur) const {
+    if (!queue_) return false;
+    return queue_->pop(nullptr, dur);
+  }
+  void close() const {
+    if (queue_) queue_->close();
+    queue_.reset();
+  }
+  operator bool() const { return (bool)queue_ && !failed_; }
+};
+template <> struct __st_chan<void> : public __st_chan<std::nullptr_t> {
+  using __st_chan<std::nullptr_t>::__st_chan;
+  using __st_chan<std::nullptr_t>::operator=;
+};
+#if !defined(chan) && !defined(ST_NOT_DEFINE_CHAN)
+template <typename T>
+using chan = __st_chan<T>;
+#endif
+
 /* 另开物理线程, 等待其耗时的非IO操作 */
+#include <thread>
 template <class Fn, class... Args>
 bool st_async(Fn&& fn, Args&&... args) {
   int sfd[2];
@@ -207,7 +398,7 @@ bool st_async(Fn&& fn, Args&&... args) {
     fn(args...);
     write(sfd[1], (void*)sfd, sizeof(int));
   });
-  bool ret = (st_read(fd, (void*)sfd, sizeof(int),
+  const bool ret = (st_read(fd, (void*)sfd, sizeof(int),
     ST_UTIME_NO_TIMEOUT) == sizeof(int));
   thread.join();
   st_netfd_close(fd);
@@ -215,7 +406,7 @@ bool st_async(Fn&& fn, Args&&... args) {
   return ret;
 }
 
-#endif
+#endif /* !c++11 */
 
 #endif /* !__ST_THREAD_H__ */
 

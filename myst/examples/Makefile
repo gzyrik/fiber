@@ -70,7 +70,7 @@ EXTRALIBS   = -ldl
 ifeq ($(OS),)
 EXAMPLES    = unknown
 else
-EXAMPLES    = $(OBJDIR)/lookupdns $(OBJDIR)/proxy $(OBJDIR)/server
+EXAMPLES    = $(OBJDIR)/lookupdns $(OBJDIR)/proxy $(OBJDIR)/server $(OBJDIR)/go1 $(OBJDIR)/go_echo $(OBJDIR)/go_chan
 endif
 
 
@@ -106,6 +106,18 @@ $(OBJDIR)/proxy: proxy.c $(LIBST) $(HEADER)
 
 $(OBJDIR)/server: server.c $(OBJDIR)/error.o $(LIBST) $(HEADER)
 	$(CC) $(CFLAGS) -I$(INCDIR) server.c $(OBJDIR)/error.o $(LIBST) $(EXTRALIBS) -o $@
+
+$(OBJDIR)/go1: $(OBJDIR)/go1.o $(OBJDIR)/go0.o $(LIBST) $(HEADER)
+	$(CXX) $(OBJDIR)/go1.o $(OBJDIR)/go0.o $(LIBST) $(EXTRALIBS) -o $@
+
+$(OBJDIR)/go_echo: $(OBJDIR)/go_echo.o $(OBJDIR)/go0.o $(LIBST) $(HEADER)
+	$(CXX) -std=c++11 $(CFLAGS) -I$(INCDIR) $(OBJDIR)/go_echo.o $(OBJDIR)/go0.o $(LIBST) $(EXTRALIBS) -o $@
+
+$(OBJDIR)/go_chan: $(OBJDIR)/go_chan.o $(OBJDIR)/go0.o $(LIBST) $(HEADER)
+	$(CXX) -std=c++11 $(CFLAGS) -I$(INCDIR) $(OBJDIR)/go_chan.o $(OBJDIR)/go0.o $(LIBST) $(EXTRALIBS) -o $@
+
+$(OBJDIR)/go%.o: go%.cpp
+	$(CXX) -std=c++11 $(CFLAGS) -I$(INCDIR) -c $< -o $@
 
 $(OBJDIR)/%.o: %.c
 	$(CC) $(CFLAGS) -I$(INCDIR) -c $< -o $@
