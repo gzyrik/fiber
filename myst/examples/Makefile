@@ -116,10 +116,10 @@ $(OBJDIR)/go_echo: $(OBJDIR)/go_echo.o $(OBJDIR)/go0.o $(LIBST) $(HEADER)
 $(OBJDIR)/go_chan: $(OBJDIR)/go_chan.o $(OBJDIR)/go0.o $(LIBST) $(HEADER)
 	$(CXX) -std=c++11 $(CFLAGS) -I$(INCDIR) $(OBJDIR)/go_chan.o $(OBJDIR)/go0.o $(LIBST) $(EXTRALIBS) -o $@
 
-$(OBJDIR)/go%.o: go%.cpp
+$(OBJDIR)/go%.o: go%.cpp $(HEADER)
 	$(CXX) -std=c++11 $(CFLAGS) -I$(INCDIR) -c $< -o $@
 
-$(OBJDIR)/%.o: %.c
+$(OBJDIR)/%.o: %.c $(HEADER)
 	$(CC) $(CFLAGS) -I$(INCDIR) -c $< -o $@
 
 .DEFAULT:

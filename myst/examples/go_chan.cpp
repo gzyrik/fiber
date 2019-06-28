@@ -95,9 +95,7 @@ int main ()
   // Channel不仅可以用于协程中, 还可以用于原生线程.
 
   printf("start ......\n");
-  ch_2 = nullptr;
-  ch_0 = nullptr;
-  ch_1 = nullptr;
+  ch_2 = ch_0 = ch_1 = nullptr;
   st_thread_exit(NULL);
   puts("[13]");
   return 0;

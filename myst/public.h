@@ -194,11 +194,9 @@ extern void _st_iterate_threads(void);
 #if __cplusplus >= 201103L
 #include <functional>
 /* 模仿 golang 实现相似的 go */
-class __st_go {
-#ifdef DEBUG
-  const char* file_; const int lineno_;
-#endif
+class st_go {
   mutable int stack_size_;
+  const char* file_; const int lineno_;
   typedef std::function<void()> detached_type;
   typedef std::function<void*()> joinable_type;
   static void* __st_detached_functor(void* p) {
@@ -214,14 +212,13 @@ class __st_go {
     return ret;
   }
 public:
-  __st_go(const char* file, int lineno) :
-#ifdef DEBUG
-    file_(file),lineno_(lineno),
-#endif
-    stack_size_(0){}
-  const __st_go& operator,(int stack_size) const
+  st_go(const char* file, int lineno) : stack_size_(0),
+  file_(file),lineno_(lineno) {
+    (void)file_, (void)lineno_;
+  }
+  const st_go& operator,(int stack_size) const
   { stack_size_ = stack_size; return *this; }
-  const __st_go& operator,(detached_type const&f) const {
+  const st_go& operator,(detached_type const&f) const {
     st_thread_create(__st_detached_functor,
       new detached_type(f), false, stack_size_);
     return *this;
@@ -232,7 +229,7 @@ public:
   }
 };
 #if !defined(go) && !defined(ST_NOT_DEFINE_GO)
-#define go __st_go(__FILE__, __LINE__),
+#define go st_go(__FILE__, __LINE__),
 #endif
 
 class __st_pipe {//无缓冲的管线
@@ -270,7 +267,7 @@ class __st_pipe {//无缓冲的管线
     return !closed_;
   }
 public:
-  virtual bool push(const void* t, st_utime_t dur) {
+  virtual bool push(const void* t, st_utime_t dur=ST_UTIME_NO_TIMEOUT) {
     if (closed_) return false;
     else if (!poping_)
       return wait(pushing_, (void*)t, dur);
@@ -280,7 +277,7 @@ public:
     st_cond_signal(cond_);
     return true;
   }
-  virtual bool pop(void* t, st_utime_t dur) {
+  virtual bool pop(void* t, st_utime_t dur=ST_UTIME_NO_TIMEOUT) {
     if (closed_) return false;
     else if (!pushing_)
       return wait(poping_, t, dur);
@@ -302,11 +299,45 @@ public:
     st_cond_destroy(cond_);
   }
 };
-
+class st_chan {
+protected:
+  mutable std::shared_ptr<__st_pipe> queue_;
+  mutable bool failed_;//>>或<<操作失败
+  st_chan(const st_chan& r):queue_(r.queue_),failed_(false){}
+  st_chan():failed_(false){}
+public:
+  const st_chan& operator= (std::nullptr_t/*ignore*/) const {
+    queue_.reset();
+    return *this;
+  }
+  const st_chan& operator<< (std::nullptr_t/*ignore*/) const {
+    if (!queue_ || !queue_->push(nullptr))
+      failed_ = true;
+    return *this;
+  }
+  const st_chan& operator>> (std::nullptr_t/*ignore*/) const {
+    if (!queue_ || !queue_->pop(nullptr))
+      failed_ = true;
+    return *this;
+  }
+  bool push(std::nullptr_t/*ignore*/, st_utime_t dur) const {
+    if (!queue_) return false;
+    return queue_->push(nullptr, dur);
+  }
+  bool pop(std::nullptr_t/*ignore*/, st_utime_t dur) const {
+    if (!queue_) return false;
+    return queue_->pop(nullptr, dur);
+  }
+  void close() const {
+    if (queue_) queue_->close();
+    queue_.reset();
+  }
+  operator bool() const { return (bool)queue_ && !failed_; }
+};
 #include <queue>
 #include <memory>
 /* 模仿 golang 实现相似的 chan */
-template <class T> class __st_chan {
+template <class T> class __st_chan final : public st_chan {
   struct mypipe : public __st_pipe {
     void assign(void* a, const void* b) override {
       *reinterpret_cast<T*>(a) = *reinterpret_cast<const T*>(b);
@@ -331,31 +362,25 @@ template <class T> class __st_chan {
     }
     explicit myqueue(size_t capacity) : capacity_(capacity){}
   };
-  mutable std::shared_ptr<__st_pipe> queue_;
-  mutable bool failed_;//>>或<<操作失败
 public:
-  explicit __st_chan(size_t capacity = 0) : failed_(false) {
+  using st_chan::operator=;
+  using st_chan::operator>>;
+  using st_chan::operator<<;
+  template<typename F> explicit __st_chan(const __st_chan<F>& r):st_chan(r){}
+  explicit __st_chan(size_t capacity = 0) {
+    failed_ = false;
     if (capacity > 0)
       queue_ = std::make_shared<myqueue>(capacity);
     else
       queue_ = std::make_shared<mypipe>();
   }
-  const __st_chan& operator= (std::nullptr_t/*ignore*/) const {
-    queue_.reset();
-    return *this;
-  }
   const __st_chan& operator<< (const T& t) const {
-    if (!queue_ || !queue_->push(&t, ST_UTIME_NO_TIMEOUT))
+    if (!queue_ || !queue_->push(&t))
       failed_ = true;
     return *this;
   }
   const __st_chan& operator>> (T& t) const {
-    if (!queue_ || !queue_->pop(&t, ST_UTIME_NO_TIMEOUT))
-      failed_ = true;
-    return *this;
-  }
-  const __st_chan& operator>> (std::nullptr_t/*ignore*/) const {
-    if (!queue_ || !queue_->pop(nullptr, ST_UTIME_NO_TIMEOUT))
+    if (!queue_ || !queue_->pop(&t))
       failed_ = true;
     return *this;
   }
@@ -367,19 +392,12 @@ public:
     if (!queue_) return false;
     return queue_->pop(&t, dur);
   }
-  bool pop(std::nullptr_t/*ignore*/, st_utime_t dur) const {
-    if (!queue_) return false;
-    return queue_->pop(nullptr, dur);
-  }
-  void close() const {
-    if (queue_) queue_->close();
-    queue_.reset();
-  }
-  operator bool() const { return (bool)queue_ && !failed_; }
 };
-template <> struct __st_chan<void> : public __st_chan<std::nullptr_t> {
-  using __st_chan<std::nullptr_t>::__st_chan;
-  using __st_chan<std::nullptr_t>::operator=;
+template <> struct __st_chan<void> final : public st_chan {
+  explicit __st_chan(size_t capacity = 0){}
+  using st_chan::operator=;
+  using st_chan::operator>>;
+  using st_chan::operator<<;
 };
 #if !defined(chan) && !defined(ST_NOT_DEFINE_CHAN)
 template <typename T>
