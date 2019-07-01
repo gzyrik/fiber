@@ -232,6 +232,9 @@ public:
 #define go st_go(__FILE__, __LINE__),
 #endif
 
+#include <memory>
+class st_chan {
+protected:
 class __st_pipe {//无缓冲的管线
   struct __st_cxt { //阻塞的上下文
     void* value; __st_cxt* next;
@@ -299,12 +302,8 @@ public:
     st_cond_destroy(cond_);
   }
 };
-class st_chan {
-protected:
   mutable std::shared_ptr<__st_pipe> queue_;
-  mutable bool failed_;//>>或<<操作失败
-  st_chan(const st_chan& r):queue_(r.queue_),failed_(false){}
-  st_chan():failed_(false){}
+  mutable bool failed_ = false;//>>或<<操作失败
 public:
   const st_chan& operator= (std::nullptr_t/*ignore*/) const {
     queue_.reset();
@@ -328,6 +327,14 @@ public:
     if (!queue_) return false;
     return queue_->pop(nullptr, dur);
   }
+  bool push(const void* t, st_utime_t dur) const {
+    if (!queue_) return false;
+    return queue_->push(t, dur);
+  }
+  bool pop(void* t, st_utime_t dur) const {
+    if (!queue_) return false;
+    return queue_->pop(t, dur);
+  }
   void close() const {
     if (queue_) queue_->close();
     queue_.reset();
@@ -335,7 +342,6 @@ public:
   operator bool() const { return (bool)queue_ && !failed_; }
 };
 #include <queue>
-#include <memory>
 /* 模仿 golang 实现相似的 chan */
 template <class T> class __st_chan final : public st_chan {
   struct mypipe : public __st_pipe {
@@ -363,16 +369,17 @@ template <class T> class __st_chan final : public st_chan {
     explicit myqueue(size_t capacity) : capacity_(capacity){}
   };
 public:
-  using st_chan::operator=;
   using st_chan::operator>>;
   using st_chan::operator<<;
-  template<typename F> explicit __st_chan(const __st_chan<F>& r):st_chan(r){}
   explicit __st_chan(size_t capacity = 0) {
-    failed_ = false;
     if (capacity > 0)
       queue_ = std::make_shared<myqueue>(capacity);
     else
       queue_ = std::make_shared<mypipe>();
+  }
+  const __st_chan& operator= (std::nullptr_t/*ignore*/) const {
+    queue_.reset();
+    return *this;
   }
   const __st_chan& operator<< (const T& t) const {
     if (!queue_ || !queue_->push(&t))
@@ -393,8 +400,30 @@ public:
     return queue_->pop(&t, dur);
   }
 };
-template <> struct __st_chan<void> final : public st_chan {
-  explicit __st_chan(size_t capacity = 0){}
+template <> class __st_chan<void> final : public st_chan {
+  struct myqueue : public __st_pipe {
+    const size_t capacity_;
+    size_t queue_;
+    void assign(void*, const void*) override {}
+    bool push(const void*, st_utime_t dur) override {
+      if (queue_ >= capacity_)
+        return __st_pipe::push(nullptr, dur);
+      queue_++;
+      return true;
+    }
+    bool pop(void*, st_utime_t dur) override {
+      if (queue_ == 0) 
+        return __st_pipe::pop(nullptr, dur);
+      --queue_;
+      return true;
+    }
+    explicit myqueue(size_t capacity)
+      : capacity_(capacity), queue_(0){}
+  };
+public:
+  explicit __st_chan(size_t capacity = 0){
+    queue_ = std::make_shared<myqueue>(capacity);
+  }
   using st_chan::operator=;
   using st_chan::operator>>;
   using st_chan::operator<<;

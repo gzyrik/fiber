@@ -1,4 +1,5 @@
 #include <st.h>
+void foo0();
 /*
 readelf -sW a.o | c++filt -t 
 # -s: symbol table
@@ -7,6 +8,7 @@ readelf -sW a.o | c++filt -t
 int main ()
 {
   st_init();
+  go foo0;
   /*********************** 1. 基本使用 ************************/
   // Channel也是一个模板类,
   // 使用以下代码将创建一个无缓冲区的、用于传递整数的Channel：
@@ -95,7 +97,10 @@ int main ()
   // Channel不仅可以用于协程中, 还可以用于原生线程.
 
   printf("start ......\n");
-  ch_2 = ch_0 = ch_1 = nullptr;
+  ch_2 = ch_1 = nullptr;
+  ch_0 = nullptr;
+  st_chan ch_x;
+  ch_x = ch_0;
   st_thread_exit(NULL);
   puts("[13]");
   return 0;
