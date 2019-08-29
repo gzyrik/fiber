@@ -566,6 +566,7 @@ socket_t create_socket(const char* host, int port, Fn fn, int socket_flags = 0)
             ip4_addr.sin_port = htons (port);
             int yes = 1;
             setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&yes, sizeof(yes));
+            fcntl(sock, F_SETFD, fcntl(sock, F_GETFD) | FD_CLOEXEC);
             if (fn(sock, (struct sockaddr*)&ip4_addr, sizeof ip4_addr)) 
                 return sock;
         }
@@ -597,6 +598,7 @@ socket_t create_socket(const char* host, int port, Fn fn, int socket_flags = 0)
        // Make 'reuse address' option available
        int yes = 1;
        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&yes, sizeof(yes));
+       fcntl(sock, F_SETFD, fcntl(sock, F_GETFD) | FD_CLOEXEC);
 
        // bind or connect
        if (fn(sock, rp->ai_addr, rp->ai_addrlen)) {
@@ -1594,7 +1596,10 @@ inline void Server::write_response(Stream& strm, bool last_connection, const Req
         req.get_header_value("Connection") == "close") {
         res.set_header("Connection", "close");
     }
-
+    if (req.has_header("Origin")) {
+        if (!res.has_header("Access-Control-Allow-Origin"))
+            res.set_header("Access-Control-Allow-Origin", "*");
+    }
     if (!res.body.empty()) {
 #ifdef CPPHTTPLIB_ZLIB_SUPPORT
         // TODO: 'Accpet-Encoding' has gzip, not gzip;q=0
@@ -1605,15 +1610,11 @@ inline void Server::write_response(Stream& strm, bool last_connection, const Req
             res.set_header("Content-Encoding", "gzip");
         }
 #endif
-
         if (!res.has_header("Content-Type")) {
             res.set_header("Content-Type", "text/plain");
         }
-
-        auto length = std::to_string(res.body.size());
-        res.set_header("Content-Length", length.c_str());
     }
-
+    res.set_header("Content-Length", std::to_string(res.body.size()).c_str());
     detail::write_headers(strm, res);
 
     // Body
@@ -1722,6 +1723,7 @@ inline bool Server::listen_internal()
             }
             break;
         }
+        fcntl(sock, F_SETFD, fcntl(sock, F_GETFD) | FD_CLOEXEC);
 
 #ifndef CPPHTTPLIB_ST_SUPPORT
         // TODO: Use thread pool...
@@ -1861,9 +1863,7 @@ inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool
     }
 
     if (routing(req, res)) {
-        if (res.status == -1) {
-            res.status = 200;
-        }
+        if (res.status == -1) res.status = 200;
         const auto& res_connection = res.get_header_value("Connection");
         if (res_connection == "close") 
             connection_close = true;
@@ -1874,7 +1874,6 @@ inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool
     } else {
         res.status = 404;
     }
-
     write_response(strm, connection_close, req, res);
     return ret;
 }

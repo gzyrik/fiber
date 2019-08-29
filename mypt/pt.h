@@ -32,6 +32,7 @@ enum {
  *   - 除 PT_SCHEDULE 和 _PT_CLR 以外的 PT_* 宏函数,
  *     必须只能在 PT_BEGIN 与 PT_END 之间使用.
  *   - 非 gcc 平台,PT_BEGIN 与 PT_END 之间不允许出现 switch 语句
+ *     VC 中调试信息格式不能是"用于“编辑并继续”的程序数据库(/ZI)"
  *
  * @var typedef PT_CTX;
  */
@@ -51,7 +52,7 @@ typedef unsigned short PT_CTX;
 
 #define _LC_RESUME(s) switch(_LC_REF(s)) { case 0:
 
-#define _LC_SET(s) _LC_REF(s) = __LINE__; case __LINE__:
+#define _LC_SET(s) _LC_REF(s) = (PT_CTX)__LINE__; case __LINE__:
 
 #define _LC_END(s) _LC_SET(s) break; }
 
@@ -67,21 +68,30 @@ typedef unsigned short PT_CTX;
 #define _PT_CLR(s) do { _LC_REF(s) = (PT_CTX)0; } while(0)
 
 /** 调度一个或多个协程
- * 只要有一个调度中的协程,不在退出状态(即没有执行 PT_END,PT_EXIT),
- * 整个调度就返回 true.
+ * 本质就是执行一遍函数的调用
  *
  * @param threads 一个或多个协程的函数调用
- * @return 所有 threads 都处于退出状态时,才返回false
+ * @return 返回 false 表示调度完成
  *
- * @note
- *  多个时可用 &, 例如
- *      while (PT_SCHEDULE(thread1(&pt1) & thread2(&pt2)))
- *          sleep(1);
+ * @remarks
+ *  threads 多个协程的函数时:
+ *  - 使用 & 并列, 希望等待所有协程执行完毕.
+ *    所有协程,都处于退出状态(即执行 PT_END,PT_EXIT), 才返回 false
+ *
+ *  - 使用 | 并列, 任一协程执行完毕即可.
+ *    只要有一个,处于退出状态(即执行 PT_END,PT_EXIT), 就返回 false
+ *
+ * @example
+ *  while (PT_SCHEDULE(thread1(&pt1) & thread2(&pt2)))
+ *      sleep(1);
+ *  while (PT_SCHEDULE(thread1(&pt1) | thread2(&pt2)))
+ *      sleep(1);
  */
 #define PT_SCHEDULE(threads) ((threads) < PT_EXITED)
 
 /** 开始协程代码块,必须以 PT_END 结尾.
  *  在此之前的函数内代码,重入时将重复执行!
+ *  与 PT_END 之间禁止使用 return
  *
  * @example
  *  int thread_func(ctx_t* pt, char token) PT_BEGIN(pt){
@@ -89,7 +99,7 @@ typedef unsigned short PT_CTX;
  *  } PT_END(pt)
  */
 #define PT_BEGIN(pt) {\
-  char PT_YIELD_FLAG = 1; _LC_RESUME(pt)
+  char _PT_YIELD_FLAG = 1; _LC_RESUME(pt)
 
 /** 结束协程代码块,必须与 PT_BEGIN 对应.
  * 返回 PT_ENDED 状态
@@ -97,6 +107,7 @@ typedef unsigned short PT_CTX;
  * @note
  *  在此之后的函数内代码,将永远不会被执行!
  *  退出状态就算重入,也将直接跳至该处而直接退出.
+ *  因此 PT_ENDED 前适合清理释放资源.
  */
 #define PT_END(pt) _LC_END(pt) return PT_ENDED; }
 
@@ -107,8 +118,8 @@ typedef unsigned short PT_CTX;
 } while(0)
 
 /** 持续调度一个或多个子协程
- * 只要有一个调度中的子协程,不在退出状态(即没有执行 PT_END,PT_EXIT)
- * 就出让并在重入后, 持续调度.
+ * 直到调度完成,才往下执行.
+ *
  * @see PT_SCHEDULE
  */
 #define PT_WAIT_THREAD(pt, threads) PT_WAIT_UNTIL(pt, !PT_SCHEDULE(threads))
@@ -117,9 +128,9 @@ typedef unsigned short PT_CTX;
  * 与 PT_WAIT_UNTIL 区别在于,至少出让一次.
  */
 #define PT_YIELD_UNTIL(pt, condition) do {\
-  PT_YIELD_FLAG = 0;\
+  _PT_YIELD_FLAG = 0;\
   _LC_SET(pt)\
-  if((PT_YIELD_FLAG == 0) || !(condition)) return PT_YIELDED;\
+  if((_PT_YIELD_FLAG == 0) || !(condition)) return PT_YIELDED;\
 } while(0)
 
 /** 出让一次, 并在重入后, 从下行执行 */
@@ -176,9 +187,21 @@ enum {
 typedef unsigned char PT_EVENT;
 
 /** 协程属性掩码类型 */
-typedef unsigned char PT_MASK;
+typedef unsigned PT_MASK;
 
-/** 事件处理协程 */
+/** 事件处理协程
+ * 处理函数通常如下格式:
+ *  int thread(struct PT *pt, PT_EVENT event, void* data) PT_BEGIN(pt) do
+ *  {
+ *    if (event)
+ *      ...
+ *    else if (event)
+ *      ...
+ *    ...
+ *    PT_YIELD(pt);
+ *  } while(1); PT_END(pt)
+ *  内部不能使用return, 而是 break 
+ */
 struct PT
 {
   /*< private >*/
@@ -206,6 +229,15 @@ struct PT
   thread, (PT_MASK)mask, name\
 }
 
+/** 开始事件循环的代码块, 必须以 PT_WHILE_END 结尾 */
+#define PT_BEGIN_DO(pt) PT_BEGIN(pt) do
+
+/** 结束事件处理 */
+#define PT_GOTO_END   goto __PT_GOTO_END_LABEL__
+
+/** 结束事件循环的代码块, 必须与 PT_BEGIN_DO 对应 */
+#define PT_WHILE_END(pt) while(1); __PT_GOTO_END_LABEL__: PT_END(pt)
+
 /** 事件处理是否还处于运行状态 */
 #define pt_alive(p) (p->state != 0)
 
@@ -218,8 +250,10 @@ void pt_start(struct PT *p, void* data);
 
 /** 退出协程
  * 类似于
- *      pt_send(NULL, mask, PT_EVENT_EXITED, p);
+ *      if (mask) pt_send(p, mask, PT_EVENT_EXITED, p);
  *      pt_send(p, PT_EVENT_EXIT, NULL);
+ * @note
+ * 注意 p 不能是当前协程, 若广播还会跳过当前协程
  */
 void pt_exit(struct PT *p, PT_MASK mask);
 
@@ -230,14 +264,16 @@ void pt_exit(struct PT *p, PT_MASK mask);
 void pt_poll(struct PT *p, PT_MASK mask);
 
 /** 阻塞方式, 调用协程处理该事件
- * 若 p 是 NULL, 则用 mask 掩码过滤所有协程
- * 调用该事件
+ * 若 mask 非0, 则用 mask 掩码过滤所有协程再排除 p, 进行广播
+ *
+ * @note
+ * 注意 p 不能是当前协程, 若广播还会跳过当前协程
  */
 void pt_send(struct PT *p, PT_MASK mask, PT_EVENT event, void* data);
 
 /** 非阻塞方式, 投递事件, 延后至 pt_run() 中处理
- * 若 p 是 NULL, 则用 mask 掩码过滤所有协程
- * 广播该事件
+ * 若 mask 非0, 则用 mask 掩码过滤所有协程再排除 p, 进行广播
+ *
  * @return 成功返回 0
  */
 int pt_post(struct PT *p, PT_MASK mask, PT_EVENT event, void* data);
