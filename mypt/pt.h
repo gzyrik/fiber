@@ -103,13 +103,14 @@ typedef unsigned short PT_CTX;
 
 /** 结束协程代码块,必须与 PT_BEGIN 对应.
  * 返回 PT_ENDED 状态
+ * ... 是额外的清理代码块
  *
  * @note
  *  在此之后的函数内代码,将永远不会被执行!
  *  退出状态就算重入,也将直接跳至该处而直接退出.
- *  因此 PT_ENDED 前适合清理释放资源.
+ *  因此 ... 是适于清理释放资源.
  */
-#define PT_END(pt) _LC_END(pt) return PT_ENDED; }
+#define PT_END(pt,...) __VA_ARGS__; _LC_END(pt) return PT_ENDED; }
 
 /** 持续进行条件判断. 若为 true, 则继续, 反之出让 */
 #define PT_WAIT_UNTIL(pt, condition) do {\
@@ -229,14 +230,26 @@ struct PT
   thread, (PT_MASK)mask, name\
 }
 
-/** 开始事件循环的代码块, 必须以 PT_WHILE_END 结尾 */
+/** 开始事件循环的代码块, 必须以 PT_WHILE_END 结尾
+ *
+ * @example
+ * int thread(struct PT *pt, PT_EVENT event, void* data) PT_BEGIN_DO(pt)
+ * {
+ *     switch(event) {
+ *     case: ...; break;
+ *     case: ...; PT_GOTO_END;
+ *     }
+ *     PT_YIELD(pt);
+ * } PT_WHILE_END(pt);
+ *
+ */
 #define PT_BEGIN_DO(pt) PT_BEGIN(pt) do
 
 /** 结束事件处理 */
 #define PT_GOTO_END   goto __PT_GOTO_END_LABEL__
 
 /** 结束事件循环的代码块, 必须与 PT_BEGIN_DO 对应 */
-#define PT_WHILE_END(pt) while(1); __PT_GOTO_END_LABEL__: PT_END(pt)
+#define PT_WHILE_END(pt,...) while(1); __PT_GOTO_END_LABEL__: PT_END(pt,__VA_ARGS__)
 
 /** 事件处理是否还处于运行状态 */
 #define pt_alive(p) (p->state != 0)
@@ -248,6 +261,21 @@ struct PT
  */
 void pt_start(struct PT *p, void* data);
 
+/** 阻塞方式, 调用协程处理该事件
+ * 若 mask 非0, 则用 mask 掩码过滤所有协程并排除 p, 进行广播
+ *
+ * @note
+ * 注意 p 不能是当前协程, 若广播还会跳过当前协程
+ */
+void pt_send(struct PT *p, PT_MASK mask, PT_EVENT event, void* data);
+
+/** 非阻塞方式, 投递事件, 延后至 pt_run() 中处理
+ * 若 mask 非0, 则用 mask 掩码过滤所有协程并排除 p, 进行广播
+ *
+ * @return 成功返回 0
+ */
+int pt_post(struct PT *p, PT_MASK mask, PT_EVENT event, void* data);
+
 /** 退出协程
  * 类似于
  *      if (mask) pt_send(p, mask, PT_EVENT_EXITED, p);
@@ -257,26 +285,11 @@ void pt_start(struct PT *p, void* data);
  */
 void pt_exit(struct PT *p, PT_MASK mask);
 
-/** 标记在下一次pt_run()中,唤醒该协程
+/** 标记在pt_run()中,唤醒该协程
  * 类似于
  *      pt_post(p, mask, PT_EVENT_POLL, NULL);
  */
 void pt_poll(struct PT *p, PT_MASK mask);
-
-/** 阻塞方式, 调用协程处理该事件
- * 若 mask 非0, 则用 mask 掩码过滤所有协程再排除 p, 进行广播
- *
- * @note
- * 注意 p 不能是当前协程, 若广播还会跳过当前协程
- */
-void pt_send(struct PT *p, PT_MASK mask, PT_EVENT event, void* data);
-
-/** 非阻塞方式, 投递事件, 延后至 pt_run() 中处理
- * 若 mask 非0, 则用 mask 掩码过滤所有协程再排除 p, 进行广播
- *
- * @return 成功返回 0
- */
-int pt_post(struct PT *p, PT_MASK mask, PT_EVENT event, void* data);
 
 /** 处理一个缓存的事件
  * @return 返回剩余的缓存事件个数

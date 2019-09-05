@@ -50,7 +50,7 @@ static int actor(struct PT *pt, PT_EVENT event, void* data) PT_BEGIN_DO(pt)
     PT_GOTO_END;
   }
   PT_YIELD(pt);
-} PT_WHILE_END(pt)
+} PT_WHILE_END(pt, printf("%s ok\n",pt->name);)
 
 int main(void)
 {
