@@ -40,14 +40,14 @@
  */
 
 #include <stdlib.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/ioctl.h>
-#include <sys/uio.h>
-#include <sys/time.h>
-#include <sys/resource.h>
-#include <fcntl.h>
+//#include <unistd.h>
+//#include <sys/socket.h>
+//#include <sys/ioctl.h>
+//#include <sys/uio.h>
+//#include <sys/time.h>
+//#include <sys/resource.h>
+//#include <fcntl.h>
+//#include <sys/types.h>
 #include <signal.h>
 #include <errno.h>
 #include "common.h"
@@ -74,9 +74,10 @@ static void _st_netfd_free_aux_data(_st_netfd_t *fd);
 
 int _st_io_init(void)
 {
+  int fdlim = (*_st_eventsys->fd_getlimit)();
+#ifndef _WIN32
   struct sigaction sigact;
   struct rlimit rlim;
-  int fdlim;
 
   /* Ignore SIGPIPE */
   sigact.sa_handler = SIG_IGN;
@@ -89,16 +90,16 @@ int _st_io_init(void)
   if (getrlimit(RLIMIT_NOFILE, &rlim) < 0)
     return -1;
 
-  fdlim = (*_st_eventsys->fd_getlimit)();
   if (fdlim > 0 && rlim.rlim_max > (rlim_t) fdlim) {
     rlim.rlim_max = fdlim;
   }
   fdlim = (int)rlim.rlim_cur;
   rlim.rlim_cur = rlim.rlim_max;
-  if (setrlimit(RLIMIT_NOFILE, &rlim) < 0)
-    _st_osfd_limit = fdlim;
-  else
-    _st_osfd_limit = (int) rlim.rlim_max;
+  if (setrlimit(RLIMIT_NOFILE, &rlim) >= 0)
+    fdlim = (int)rlim.rlim_max;
+#endif
+
+  _st_osfd_limit = fdlim;
 
 #ifdef ST_HOOK_SYS
   return _st_hook_init();
@@ -164,6 +165,13 @@ static _st_netfd_t *_st_netfd_new(int osfd, int nonblock, int is_socket)
   fd->next = NULL;
 
   if (nonblock) {
+#ifdef _WIN32
+    u_long nonblock = 1;
+    if (ioctlsocket (osfd, FIONBIO, &nonblock) < 0) {
+      st_netfd_free(fd);
+      return NULL;
+    }
+#else
     /* Use just one system call */
     if (is_socket && _ST_SYS_CALL(ioctl)(osfd, FIONBIO, &flags) != -1)
       ;
@@ -173,6 +181,7 @@ static _st_netfd_t *_st_netfd_new(int osfd, int nonblock, int is_socket)
       st_netfd_free(fd);
       return NULL;
     }
+#endif
   }
 
 #ifdef ST_HOOK_SYS
@@ -488,6 +497,30 @@ int st_read_resid(_st_netfd_t *fd, void *buf, size_t *resid,
   return rv;
 }
 
+#ifdef _WIN32
+static int readv(int fd, const struct iovec *iov, int iov_size)
+{
+  DWORD numberOfBytesRecevd;
+  if (WSARecv(fd, (LPWSABUF)iov, iov_size, &numberOfBytesRecevd, 0, NULL, NULL) == 0)
+    return numberOfBytesRecevd;
+  return EINTR;
+}
+static int writev(int fd, struct iovec *iov, int iov_size)
+{
+  return EINTR;
+}
+static int recvmsg(int fd, struct msghdr *msg, int flags)
+{
+  return EINTR;
+}
+static int sendmsg(int fd, const struct msghdr *msg, int flags)
+{
+  DWORD numberOfBytesSent;
+  if (WSASendMsg(fd, (LPWSAMSG)msg, 0, &numberOfBytesSent, NULL, NULL) == 0)
+    return numberOfBytesSent;
+  return EINTR;
+}
+#endif
 
 ssize_t st_readv(_st_netfd_t *fd, const struct iovec *iov, int iov_size,
                  st_utime_t timeout)
@@ -839,7 +872,10 @@ _st_netfd_t *st_open(const char *path, int oflags, mode_t mode)
   int osfd, err;
   _st_netfd_t *newfd;
 
-  while ((osfd = open(path, oflags | O_NONBLOCK, mode)) < 0) {
+#ifndef _WIN32
+  oflags |= O_NONBLOCK;
+#endif
+  while ((osfd = open(path, oflags, mode)) < 0) {
     if (errno != EINTR)
       return NULL;
   }

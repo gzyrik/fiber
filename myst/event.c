@@ -33,8 +33,6 @@
  */
 
 #include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <string.h>
 #include <time.h>
 #include <errno.h>
@@ -246,10 +244,12 @@ ST_HIDDEN void _st_select_find_bad_fd(void)
             pds->revents = 0;
             if (pds->events == 0)
                 continue;
+#ifndef _WIN32
             if (fcntl(osfd, F_GETFL, 0) < 0) {
                 pds->revents = POLLNVAL;
                 notify = 1;
             }
+#endif
             if (osfd > pq_max_osfd) {
                 pq_max_osfd = osfd;
             }
@@ -532,7 +532,11 @@ ST_HIDDEN void _st_poll_dispatch(void)
     }
 
     /* Check for I/O operations */
+#ifdef _WIN32
+    nfd = WSAPoll(_ST_POLLFDS, _ST_POLL_OSFD_CNT, timeout);
+#else
     nfd = _ST_SYS_CALL(poll)(_ST_POLLFDS, _ST_POLL_OSFD_CNT, timeout);
+#endif
 
     /* Notify threads that are associated with the selected descriptors */
     if (nfd > 0) {

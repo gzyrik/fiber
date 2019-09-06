@@ -40,8 +40,6 @@
  */
 
 #include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <string.h>
 #include <time.h>
 #include <errno.h>
@@ -161,7 +159,13 @@ int st_init(void)
   if ((*_st_eventsys->init)() < 0)
     return -1;
 
+#ifdef _WIN32
+  SYSTEM_INFO si;
+  GetSystemInfo(&si);
+  _st_this_vp.pagesize = si.dwPageSize;
+#else
   _st_this_vp.pagesize = getpagesize();
+#endif
   _st_this_vp.last_clock = st_utime();
 
   /*
@@ -563,8 +567,8 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
   thread = (_st_thread_t *) sp;
 
   /* Make stack 64-byte aligned */
-  if ((unsigned long)sp & 0x3f)
-    sp = sp - ((unsigned long)sp & 0x3f);
+  if ((intptr_t)sp & 0x3f)
+    sp = sp - ((intptr_t)sp & 0x3f);
   stack->sp = sp - _ST_STACK_PAD_SIZE;
 #elif defined (MD_STACK_GROWS_UP)
   sp = stack->stk_bottom;

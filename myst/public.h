@@ -37,13 +37,32 @@
 #ifndef __ST_THREAD_H__
 #define __ST_THREAD_H__
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#include <process.h>
+#include <ws2tcpip.h>
+#include <crtdbg.h>
+#include <io.h>
+typedef SSIZE_T ssize_t;
+typedef ULONG  nfds_t;
+typedef int mode_t;
+struct iovec {
+  ULONG iov_len;     /* the length of the buffer */
+  _Field_size_bytes_(len) CHAR FAR *iov_base; /* the pointer to the buffer */
+};
+#else
 #include <unistd.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/time.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <poll.h>
+#endif
+#include <sys/types.h>
 #include <time.h>
 #include <errno.h>
-#include <poll.h>
 
 #define ST_VERSION	    "1.9"
 #define ST_VERSION_MAJOR    1
@@ -193,7 +212,7 @@ extern void _st_iterate_threads(void);
 
 #if __cplusplus >= 201103L
 #include <functional>
-/* æ¨¡ä»¿ golang å®ç°ç›¸ä¼¼çš„ go */
+/* Ä£·Â golang ÊµÏÖÏàËÆµÄ go */
 class st_go {
   mutable int stack_size_;
   const char* file_; const int lineno_;
@@ -235,8 +254,8 @@ public:
 #include <memory>
 class st_chan {
 protected:
-class __st_pipe {//æ— ç¼“å†²çš„ç®¡çº¿
-  struct __st_cxt { //é˜»å¡çš„ä¸Šä¸‹æ–‡
+class __st_pipe {//ÎŞ»º³åµÄ¹ÜÏß
+  struct __st_cxt { //×èÈûµÄÉÏÏÂÎÄ
     void* value; __st_cxt* next;
     void append(__st_cxt* cxt) {
       auto tail = this;
@@ -253,7 +272,7 @@ class __st_pipe {//æ— ç¼“å†²çš„ç®¡çº¿
         prev = prev->next;
       }
     }
-  } *pushing_, *poping_;//é˜»å¡çš„å•å‘é˜Ÿåˆ—
+  } *pushing_, *poping_;//×èÈûµÄµ¥Ïò¶ÓÁĞ
   bool closed_; st_cond_t cond_;
   virtual void assign(void* a, const void* b) = 0;
   bool wait(__st_cxt*& waiting, void* t, st_utime_t dur) {
@@ -261,6 +280,7 @@ class __st_pipe {//æ— ç¼“å†²çš„ç®¡çº¿
     __st_cxt cxt = {t, nullptr};
     if (waiting) waiting->append(&cxt);
     else waiting = &cxt;
+    if (!cond_) cond_ = st_cond_new();
     if (st_cond_timedwait(cond_, dur) < 0) {
       if (closed_) ;
       else if (waiting == &cxt) waiting = waiting->next;
@@ -293,17 +313,17 @@ public:
   void close() {
     if (closed_) return;
     closed_ = true;
-    st_cond_broadcast(cond_);
+    if (cond_) st_cond_broadcast(cond_);
   }
   explicit __st_pipe()
     : pushing_(nullptr), poping_(nullptr),
-    closed_(false), cond_(st_cond_new()) {}
+    closed_(false), cond_(nullptr) {}
   virtual ~__st_pipe() {
-    st_cond_destroy(cond_);
+    if (cond_) st_cond_destroy(cond_);
   }
 };
   mutable std::shared_ptr<__st_pipe> queue_;
-  mutable bool failed_ = false;//>>æˆ–<<æ“ä½œå¤±è´¥
+  mutable bool failed_ = false;//>>»ò<<²Ù×÷Ê§°Ü
 public:
   const st_chan& operator= (std::nullptr_t/*ignore*/) const {
     queue_.reset();
@@ -342,14 +362,14 @@ public:
   operator bool() const { return (bool)queue_ && !failed_; }
 };
 #include <queue>
-/* æ¨¡ä»¿ golang å®ç°ç›¸ä¼¼çš„ chan */
+/* Ä£·Â golang ÊµÏÖÏàËÆµÄ chan */
 template <class T> class __st_chan final : public st_chan {
   struct mypipe : public __st_pipe {
     void assign(void* a, const void* b) override {
       *reinterpret_cast<T*>(a) = *reinterpret_cast<const T*>(b);
     }
   };
-  struct myqueue : public mypipe { //å¸¦ç¼“å†²çš„é˜Ÿåˆ—
+  struct myqueue : public mypipe { //´ø»º³åµÄ¶ÓÁĞ
     const size_t capacity_;
     std::queue<T> queue_;
     bool push(const void* t, st_utime_t dur) override {
@@ -433,7 +453,7 @@ template <typename T>
 using chan = __st_chan<T>;
 #endif
 
-/* å¦å¼€ç‰©ç†çº¿ç¨‹, ç­‰å¾…å…¶è€—æ—¶çš„éIOæ“ä½œ */
+/* Áí¿ªÎïÀíÏß³Ì, µÈ´ıÆäºÄÊ±µÄ·ÇIO²Ù×÷ */
 #include <thread>
 template <class Fn, class... Args>
 bool st_async(Fn&& fn, Args&&... args) {

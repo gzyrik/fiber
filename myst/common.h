@@ -43,9 +43,7 @@
 #define __ST_COMMON_H__
 
 #include <stddef.h>
-#include <unistd.h>
 #include <sys/types.h>
-#include <sys/time.h>
 #include <setjmp.h>
 
 /* Enable assertions only if DEBUG is defined */
@@ -63,8 +61,9 @@
 #else
 #define	ST_HIDDEN   static
 #endif
-
+#ifndef _WIN32
 #define ST_HOOK_SYS
+#endif
 #include "public.h"
 #include "md.h"
 

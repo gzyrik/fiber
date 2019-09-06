@@ -1,4 +1,4 @@
-#include <st.h>
+#include "../public.h"
 /*
 readelf -sW a.o | c++filt -t 
 # -s: symbol table
@@ -7,7 +7,7 @@ readelf -sW a.o | c++filt -t
 void foo0()
 {
   go []{
-    printf("lambda\n");
+    printf("start 2nd round scheduling ......\n");
   };
   printf("function pointer\n");
 }

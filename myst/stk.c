@@ -43,7 +43,13 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#ifdef _WIN32
+#define MALLOC_STACK  1
+static int random() { return rand(); }
+static void srandom(unsigned int x) { srand(x); }
+#else
 #include <sys/mman.h>
+#endif
 #include "common.h"
 
 

@@ -57,8 +57,45 @@
 /*****************************************
  * Platform specifics
  */
+#if defined(_WIN32)
+/*
+yasm -rcpp -D_M_IX86=1 -D__i386__  -fwin32 -pgas md.S -o md_x86.obj
+yasm -rcpp -D_M_IX86=1 -D__x86_64__ -fwin64  -pgas md.S -o md_x64.obj
+*/
+#define MD_STACK_GROWS_DOWN
+#define MD_ACCEPT_NB_INHERITED
+#define MD_ALWAYS_UNSERIALIZED_ACCEPT
+#define MD_HAVE_SOCKLEN_T
 
-#if defined (AIX)
+
+#if defined _M_IX86
+#define MD_JB_SP 4
+extern int st_md_cxt_save(jmp_buf env);
+extern void st_md_cxt_restore(jmp_buf env, int val);
+#define MD_SETJMP(env) st_md_cxt_save(env)
+#define MD_LONGJMP(env, val) st_md_cxt_restore(env, val)
+
+#elif defined _M_X64
+#define MD_JB_SP 6
+extern int _st_md_cxt_save(jmp_buf env);
+extern void _st_md_cxt_restore(jmp_buf env, int val);
+#define MD_SETJMP(env) _st_md_cxt_save(env)
+#define MD_LONGJMP(env, val) _st_md_cxt_restore(env, val)
+#endif
+
+#define MD_GET_SP(_t) *((long *)&((_t)->context[MD_JB_SP]))
+
+#define MD_INIT_CONTEXT(_thread, _sp, _main) \
+  ST_BEGIN_MACRO                             \
+  if (MD_SETJMP((_thread)->context))         \
+    _main();                                 \
+  MD_GET_SP(_thread) = (long) (_sp);         \
+  ST_END_MACRO
+
+#define MD_GET_UTIME()                       \
+  return timeGetTime()*1000LL
+
+#elif defined (AIX)
 
 #define MD_STACK_GROWS_DOWN
 #define MD_USE_SYSV_ANON_MMAP
