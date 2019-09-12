@@ -37,5 +37,6 @@ int main(int argc, char *argv[])
 
     printf("start ......\n");
     st_thread_exit(NULL);
+    printf("end ......\n");
     return 0;
 }

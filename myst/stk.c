@@ -43,6 +43,53 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include "common.h"
+
+#ifdef MD_WINDOWS_FIBER
+static _st_clist_t _st_free_threads = ST_INIT_STATIC_CLIST(&_st_free_threads);
+/*
+ * Free the current thread
+ */
+void _st_thread_free(_st_thread_t *thread)
+{
+  if (!thread)
+    return;
+  if (thread->context && GetFiberData() != thread) {
+    DeleteFiber(thread->context);
+    thread->context = NULL;
+  }
+  /* Put the thread on the free list */
+  ST_APPEND_LINK(&thread->links, _st_free_threads.prev);
+}
+_st_thread_t *_st_thread_new(void *(*start)(void *arg), void *arg, int stk_size)
+{
+  _st_thread_t* thread;
+  if (ST_CLIST_IS_EMPTY(&_st_free_threads))
+  {
+    thread = (_st_thread_t *)calloc(1, sizeof(_st_thread_t) + (ST_KEYS_MAX * sizeof(void *)));
+    if (!thread)
+      return NULL;
+    thread->private_data = (void **)(thread + 1);
+  }
+  else {
+    thread = _ST_THREAD_PTR(_st_free_threads.next);
+    ST_REMOVE_LINK(&thread->links);
+    if (thread->context)
+      DeleteFiber(thread->context);
+  }
+  thread->context = CreateFiberEx(0, stk_size, 0, (LPFIBER_START_ROUTINE)_st_thread_main, thread);
+  if (!thread->context) {
+    ST_APPEND_LINK(&thread->links, _st_free_threads.prev);
+    return NULL;
+  }
+
+  thread->start = start;
+  thread->arg = arg;
+  return thread;
+}
+int st_randomize_stacks(int on) { return 0; }
+#else
+
 #ifdef _WIN32
 #define MALLOC_STACK  1
 static int random() { return rand(); }
@@ -94,7 +141,7 @@ _st_stack_t *_st_stack_new(int stack_size)
   ts->stk_bottom = ts->vaddr + REDZONE;
   ts->stk_top = ts->stk_bottom + stack_size;
 
-#ifdef DEBUG
+#ifdef PROT_NONE
   mprotect(ts->vaddr, REDZONE, PROT_NONE);
   mprotect(ts->stk_top + extra, REDZONE, PROT_NONE);
 #endif
@@ -177,3 +224,4 @@ int st_randomize_stacks(int on)
 
   return wason;
 }
+#endif /* MD_WINDOWS_FIBER */

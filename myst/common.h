@@ -48,7 +48,7 @@
 
 /* Enable assertions only if DEBUG is defined */
 #if !defined(DEBUG) && !defined(NDEBUG)
-#define NDEBUG 1
+#define DEBUG 1
 #endif
 #include <assert.h>
 #define ST_ASSERT(expr) assert(expr)
@@ -166,9 +166,12 @@ struct _st_thread {
   void *(*start)(void *arg);  /* The start function of the thread */
   void *arg;                  /* Argument of the start function */
   void *retval;               /* Return value of the start function */
-
+#ifdef MD_WINDOWS_FIBER 
+  LPVOID context;             /* fiber's handle */
+#else
   _st_stack_t *stack;	      /* Info about thread's stack */
-
+  jmp_buf context;            /* Thread's context */
+#endif
   _st_clist_t links;          /* For putting on run/sleep/zombie queue */
   _st_clist_t wait_links;     /* For putting on mutex/condvar wait queue */
 #ifdef DEBUG
@@ -183,8 +186,6 @@ struct _st_thread {
   void **private_data;        /* Per thread private data */
 
   _st_cond_t *term;           /* Termination condition variable for join */
-
-  jmp_buf context;            /* Thread's context */
 };
 
 
@@ -239,7 +240,7 @@ typedef struct _st_vp {
 
 
 typedef struct _st_netfd {
-  int osfd;                   /* Underlying OS file descriptor */
+  SOCKET osfd;                   /* Underlying OS file descriptor */
   int inuse;                  /* In-use flag */
   void *private_data;         /* Per descriptor private data */
   _st_destructor_t destructor; /* Private data destructor function */
@@ -458,8 +459,13 @@ void _st_thread_main(void);
 void _st_thread_cleanup(_st_thread_t *thread);
 void _st_add_sleep_q(_st_thread_t *thread, st_utime_t timeout);
 void _st_del_sleep_q(_st_thread_t *thread);
+#ifdef MD_WINDOWS_FIBER
+_st_thread_t *_st_thread_new(void *(*start)(void *arg), void *arg, int stk_size);
+void _st_thread_free(_st_thread_t *thread);
+#else
 _st_stack_t *_st_stack_new(int stack_size);
 void _st_stack_free(_st_stack_t *ts);
+#endif
 int _st_io_init(void);
 
 st_utime_t st_utime(void);

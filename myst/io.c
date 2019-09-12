@@ -51,6 +51,48 @@
 #include <signal.h>
 #include <errno.h>
 #include "common.h"
+#ifdef _WIN32
+int* _st_errno(void) { return _errno(); }
+static void _IO_GET_ERRNO()
+{
+  const int r = WSAGetLastError();
+  switch (r){
+  case WSAEWOULDBLOCK: errno = EWOULDBLOCK; break;
+  case WSAEINPROGRESS: errno = EINPROGRESS; break;
+  case WSAEINTR: errno = EINTR; break;
+  case WSAEADDRINUSE: errno = EADDRINUSE; break;
+  case WSAETIMEDOUT: errno = ETIMEDOUT; break;
+  default: errno = r;
+  }
+}
+static int readv(SOCKET fd, const struct iovec *iov, int iov_size)
+{
+  DWORD numberOfBytesRecevd, flags=0;
+  if (WSARecv(fd, (LPWSABUF)iov, iov_size, &numberOfBytesRecevd, &flags, NULL, NULL) >= 0)
+    return numberOfBytesRecevd;
+  return -1;
+}
+static int writev(SOCKET fd, struct iovec *iov, int iov_size)
+{
+  DWORD numberOfBytesRecevd;
+  if (WSASend(fd, (LPWSABUF)iov, iov_size, &numberOfBytesRecevd, 0, NULL, NULL) >= 0)
+    return numberOfBytesRecevd;
+  return -1;
+}
+static int sendmsg(SOCKET fd, const struct msghdr *msg, int flags)
+{
+  DWORD numberOfBytesSent;
+  if (WSASendMsg(fd, (LPWSAMSG)msg, 0, &numberOfBytesSent, NULL, NULL) >= 0)
+    return numberOfBytesSent;
+  return -1;
+}
+static int recvmsg(SOCKET fd, struct msghdr *msg, int flags)
+{
+  return -1;
+}
+#else
+static void _IO_GET_ERRNO() {}
+#endif
 
 
 #if EAGAIN != EWOULDBLOCK
@@ -136,7 +178,7 @@ void st_netfd_free(_st_netfd_t *fd)
 }
 
 
-static _st_netfd_t *_st_netfd_new(int osfd, int nonblock, int is_socket)
+static _st_netfd_t *_st_netfd_new(SOCKET osfd, int nonblock, int is_socket)
 {
   _st_netfd_t *fd;
   int flags = 1;
@@ -288,6 +330,7 @@ _st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, socklen_t *addrle
   _st_netfd_t *newfd;
 
   while ((osfd = _ST_SYS_CALL(accept)(fd->osfd, addr, addrlen)) < 0) {
+    _IO_GET_ERRNO();
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -432,6 +475,7 @@ int st_connect(_st_netfd_t *fd, const struct sockaddr *addr, int addrlen,
   int n, err = 0;
 
   while (_ST_SYS_CALL(connect)(fd->osfd, addr, addrlen) < 0) {
+    _IO_GET_ERRNO();
     if (errno != EINTR) {
       /*
        * On some platforms, if connect() is interrupted (errno == EINTR)
@@ -441,7 +485,7 @@ int st_connect(_st_netfd_t *fd, const struct sockaddr *addr, int addrlen,
        * "UNIX Network Programming," Vol. 1, 2nd edition, p. 413
        * ("Interrupted connect").
        */
-      if (errno != EINPROGRESS && (errno != EADDRINUSE || err == 0))
+      if (errno != EINPROGRESS && !_IO_NOT_READY_ERROR && (errno != EADDRINUSE || err == 0))
         return -1;
       /* Wait until the socket becomes writable */
       if (st_netfd_poll(fd, POLLOUT, timeout) < 0)
@@ -466,21 +510,11 @@ int st_connect(_st_netfd_t *fd, const struct sockaddr *addr, int addrlen,
 
 ssize_t st_read(_st_netfd_t *fd, void *buf, size_t nbyte, st_utime_t timeout)
 {
-  ssize_t n;
-
-  while ((n = _ST_SYS_CALL(read)(fd->osfd, buf, nbyte)) < 0) {
-    if (errno == EINTR)
-      continue;
-    if (!_IO_NOT_READY_ERROR)
-      return -1;
-    /* Wait until the socket becomes readable */
-    if (st_netfd_poll(fd, POLLIN, timeout) < 0)
-      return -1;
-  }
-
-  return n;
+  struct iovec iov;
+  iov.iov_base = buf;
+  iov.iov_len = nbyte;
+  return st_readv(fd, &iov, 1, timeout);
 }
-
 
 int st_read_resid(_st_netfd_t *fd, void *buf, size_t *resid,
                   st_utime_t timeout)
@@ -497,37 +531,13 @@ int st_read_resid(_st_netfd_t *fd, void *buf, size_t *resid,
   return rv;
 }
 
-#ifdef _WIN32
-static int readv(int fd, const struct iovec *iov, int iov_size)
-{
-  DWORD numberOfBytesRecevd;
-  if (WSARecv(fd, (LPWSABUF)iov, iov_size, &numberOfBytesRecevd, 0, NULL, NULL) == 0)
-    return numberOfBytesRecevd;
-  return EINTR;
-}
-static int writev(int fd, struct iovec *iov, int iov_size)
-{
-  return EINTR;
-}
-static int recvmsg(int fd, struct msghdr *msg, int flags)
-{
-  return EINTR;
-}
-static int sendmsg(int fd, const struct msghdr *msg, int flags)
-{
-  DWORD numberOfBytesSent;
-  if (WSASendMsg(fd, (LPWSAMSG)msg, 0, &numberOfBytesSent, NULL, NULL) == 0)
-    return numberOfBytesSent;
-  return EINTR;
-}
-#endif
-
 ssize_t st_readv(_st_netfd_t *fd, const struct iovec *iov, int iov_size,
                  st_utime_t timeout)
 {
   ssize_t n;
 
   while ((n = _ST_SYS_CALL(readv)(fd->osfd, iov, iov_size)) < 0) {
+    _IO_GET_ERRNO();
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -546,11 +556,8 @@ int st_readv_resid(_st_netfd_t *fd, struct iovec **iov, int *iov_size,
   ssize_t n;
 
   while (*iov_size > 0) {
-    if (*iov_size == 1)
-      n = _ST_SYS_CALL(read)(fd->osfd, (*iov)->iov_base, (*iov)->iov_len);
-    else
-      n = _ST_SYS_CALL(readv)(fd->osfd, *iov, *iov_size);
-    if (n < 0) {
+    if ((n = _ST_SYS_CALL(readv)(fd->osfd, *iov, *iov_size)) < 0) {
+      _IO_GET_ERRNO();
       if (errno == EINTR)
         continue;
       if (!_IO_NOT_READY_ERROR)
@@ -640,6 +647,7 @@ ssize_t st_writev(_st_netfd_t *fd, const struct iovec *iov, int iov_size,
       break;
     }
     if ((n = _ST_SYS_CALL(writev)(fd->osfd, tmp_iov, iov_cnt)) < 0) {
+      _IO_GET_ERRNO();
       if (errno == EINTR)
         continue;
       if (!_IO_NOT_READY_ERROR) {
@@ -696,11 +704,8 @@ int st_writev_resid(_st_netfd_t *fd, struct iovec **iov, int *iov_size,
   ssize_t n;
 
   while (*iov_size > 0) {
-    if (*iov_size == 1)
-      n = _ST_SYS_CALL(write)(fd->osfd, (*iov)->iov_base, (*iov)->iov_len);
-    else
-      n = _ST_SYS_CALL(writev)(fd->osfd, *iov, *iov_size);
-    if (n < 0) {
+    if ((n = _ST_SYS_CALL(writev)(fd->osfd, *iov, *iov_size)) < 0) {
+      _IO_GET_ERRNO();
       if (errno == EINTR)
         continue;
       if (!_IO_NOT_READY_ERROR)
@@ -736,8 +741,8 @@ int st_recv(_st_netfd_t *fd, void *buf, int len, int flags, st_utime_t timeout)
 {
   int n;
 
-  while ((n = _ST_SYS_CALL(recv)(fd->osfd, buf, len, flags))
-         < 0) {
+  while ((n = _ST_SYS_CALL(recv)(fd->osfd, buf, len, flags)) < 0) {
+    _IO_GET_ERRNO();
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -756,8 +761,8 @@ int st_recvfrom(_st_netfd_t *fd, void *buf, int len, int flags, struct sockaddr 
 {
   int n;
 
-  while ((n = _ST_SYS_CALL(recvfrom)(fd->osfd, buf, len, flags, from, fromlen))
-         < 0) {
+  while ((n = _ST_SYS_CALL(recvfrom)(fd->osfd, buf, len, flags, from, fromlen)) < 0) {
+    _IO_GET_ERRNO();
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -777,6 +782,7 @@ int st_sendto(_st_netfd_t *fd, const void *msg, int len, int flags,
   int n;
 
   while ((n = _ST_SYS_CALL(sendto)(fd->osfd, msg, len, flags, to, tolen)) < 0) {
+    _IO_GET_ERRNO();
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -796,6 +802,7 @@ int st_recvmsg(_st_netfd_t *fd, struct msghdr *msg, int flags,
   int n;
 
   while ((n = _ST_SYS_CALL(recvmsg)(fd->osfd, msg, flags)) < 0) {
+    _IO_GET_ERRNO();
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -814,6 +821,7 @@ int st_send(_st_netfd_t *fd, const void *buf, size_t len, int flags,
   int n;
 
   while ((n = _ST_SYS_CALL(send)(fd->osfd, buf, len, flags)) < 0) {
+    _IO_GET_ERRNO();
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)
@@ -832,6 +840,7 @@ int st_sendmsg(_st_netfd_t *fd, const struct msghdr *msg, int flags,
   int n;
 
   while ((n = _ST_SYS_CALL(sendmsg)(fd->osfd, msg, flags)) < 0) {
+    _IO_GET_ERRNO();
     if (errno == EINTR)
       continue;
     if (!_IO_NOT_READY_ERROR)

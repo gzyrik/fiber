@@ -57,8 +57,11 @@ struct iovec {
 #include <sys/uio.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <fcntl.h>
 #include <poll.h>
+typedef int SOCKET;
 #endif
 #include <sys/types.h>
 #include <time.h>
@@ -106,6 +109,12 @@ typedef void (*st_switch_cb_t)(void);
 
 extern int st_init(void);
 extern int st_getfdlimit(void);
+#ifdef _WIN32
+extern int* _st_errno(void);
+#define st_errno (*_st_errno())
+#else
+#define st_errno errno
+#endif
 
 extern int st_set_eventsys(int eventsys);
 extern int st_get_eventsys(void);

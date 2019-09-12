@@ -92,7 +92,7 @@ int st_poll(struct pollfd *pds, int npds, st_utime_t timeout)
     /* Count the number of ready descriptors */
     for (pd = pds; pd < epd; pd++) {
       if (pd->revents)
-	n++;
+        n++;
     }
   }
 
@@ -133,7 +133,7 @@ int st_init(void)
 {
   _st_thread_t *thread;
 
-  if (_st_active_count) {
+  if (_st_this_vp.idle_thread) {
     /* Already initialized */
     return 0;
   }
@@ -169,21 +169,10 @@ int st_init(void)
   _st_this_vp.last_clock = st_utime();
 
   /*
-   * Create idle thread
-   */
-  _st_this_vp.idle_thread = st_thread_create(_st_idle_thread_start,
-					     NULL, 0, 0);
-  if (!_st_this_vp.idle_thread)
-    return -1;
-  _st_this_vp.idle_thread->flags = _ST_FL_IDLE_THREAD;
-  _st_active_count--;
-  _ST_DEL_RUNQ(_st_this_vp.idle_thread);
-
-  /*
    * Initialize primordial thread
    */
   thread = (_st_thread_t *) calloc(1, sizeof(_st_thread_t) +
-				   (ST_KEYS_MAX * sizeof(void *)));
+                   (ST_KEYS_MAX * sizeof(void *)));
   if (!thread)
     return -1;
   thread->private_data = (void **) (thread + 1);
@@ -194,7 +183,22 @@ int st_init(void)
 #ifdef DEBUG
   _ST_ADD_THREADQ(thread);
 #endif
+#ifdef MD_WINDOWS_FIBER
+  thread->context = ConvertThreadToFiber(thread);
+#endif
 
+  /*
+   * Create idle thread
+   */
+  _st_this_vp.idle_thread = st_thread_create(_st_idle_thread_start, NULL, 0, 0);
+  if (!_st_this_vp.idle_thread)
+  {
+    free(thread);
+    return -1;
+  }
+  _st_this_vp.idle_thread->flags = _ST_FL_IDLE_THREAD;
+  _st_active_count--;
+  _ST_DEL_RUNQ(_st_this_vp.idle_thread);
   return 0;
 }
 
@@ -236,7 +240,7 @@ void *_st_idle_thread_start(void *arg)
   }
 
   /* No more threads */
-  exit(0);
+  _exit(0);
 
   /* NOTREACHED */
   return NULL;
@@ -270,8 +274,13 @@ void st_thread_exit(void *retval)
   _ST_DEL_THREADQ(thread);
 #endif
 
+#ifdef MD_WINDOWS_FIBER
+  _st_thread_free(thread);
+#else
   if (!(thread->flags & _ST_FL_PRIMORDIAL))
     _st_stack_free(thread->stack);
+  /* else  the PRIMORDIAL thread is leaked */
+#endif
 
   /* Find another thread to run */
   _ST_SWITCH_CONTEXT(thread);
@@ -421,33 +430,33 @@ static void heap_delete(_st_thread_t *thread) {
       _st_thread_t *y; /* The younger child */
       int index_tmp;
       if (t->left == NULL)
-	break;
+        break;
       else if (t->right == NULL)
-	y = t->left;
+        y = t->left;
       else if (t->left->due < t->right->due)
-	y = t->left;
+        y = t->left;
       else
-	y = t->right;
+        y = t->right;
       if (t->due > y->due) {
-	_st_thread_t *tl = y->left;
-	_st_thread_t *tr = y->right;
-	*p = y;
-	if (y == t->left) {
-	  y->left = t;
-	  y->right = t->right;
-	  p = &y->left;
-	} else {
-	  y->left = t->left;
-	  y->right = t;
-	  p = &y->right;
-	}
-	t->left = tl;
-	t->right = tr;
-	index_tmp = t->heap_index;
-	t->heap_index = y->heap_index;
-	y->heap_index = index_tmp;
+        _st_thread_t *tl = y->left;
+        _st_thread_t *tr = y->right;
+        *p = y;
+        if (y == t->left) {
+          y->left = t;
+          y->right = t->right;
+          p = &y->left;
+        } else {
+          y->left = t->left;
+          y->right = t;
+          p = &y->right;
+        }
+        t->left = tl;
+        t->right = tr;
+        index_tmp = t->heap_index;
+        t->heap_index = y->heap_index;
+        y->heap_index = index_tmp;
       } else {
-	break;
+        break;
       }
     }
   }
@@ -475,7 +484,7 @@ void _st_vp_check_clock(void)
 {
   _st_thread_t *thread;
   st_utime_t elapsed, now;
- 
+
   now = st_utime();
   elapsed = now - _ST_LAST_CLOCK;
   _ST_LAST_CLOCK = now;
@@ -525,9 +534,13 @@ void st_thread_interrupt(_st_thread_t *thread)
 
 
 _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
-			       int joinable, int stk_size)
+                   int joinable, int stk_size)
 {
   _st_thread_t *thread;
+#ifdef MD_WINDOWS_FIBER
+  if (!(thread = _st_thread_new(start, arg, stk_size)))
+    return NULL;
+#else
   _st_stack_t *stack;
   void **ptds;
   char *sp;
@@ -599,12 +612,16 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
 #else
   _ST_INIT_CONTEXT(thread, stack->sp, stack->bsp, _st_thread_main);
 #endif
-
+#endif /* MD_WINDOWS_FIBER */
   /* If thread is joinable, allocate a termination condition variable */
   if (joinable) {
     thread->term = st_cond_new();
     if (thread->term == NULL) {
+#ifdef MD_WINDOWS_FIBER
+      _st_thread_free(thread);
+#else
       _st_stack_free(thread->stack);
+#endif
       return NULL;
     }
   }
