@@ -138,12 +138,14 @@ typedef unsigned short PT_CTX;
 #define PT_YIELD(pt) PT_YIELD_UNTIL(pt, 1)
 
 /** 退出协程
+ * 返回 PT_EXITED 状态
+ * ... 是额外的清理代码块
  *
  * @note
  *  就算重入,也将直接跳至该处直接退出.
  *  与 PT_END 区别在于, 返回PT_EXITED 状态
  */
-#define PT_EXIT(pt) do { _LC_SET(pt) return PT_EXITED; } while(0)
+#define PT_EXIT(pt,...) do { __VA_ARGS__; _LC_SET(pt) return PT_EXITED; } while(0)
 
 /** 复位协程
  * 出让并在重入后, 函数将重新从头执行
@@ -192,16 +194,13 @@ typedef unsigned PT_MASK;
 
 /** 事件处理协程
  * 处理函数通常如下格式:
- *  int thread(struct PT *pt, PT_EVENT event, void* data) PT_BEGIN(pt) do
- *  {
- *    if (event)
- *      ...
- *    else if (event)
- *      ...
- *    ...
+ *  int thread(struct PT *pt, const PT_EVENT event, void* data) PT_BEGIN(pt) do {
+ *  //内部不能使用return, 而是 break 或 PT_EXIT
+ *  //非 gcc 平台,PT_BEGIN 与 PT_END 之间不允许出现 switch 语句
+ *  ...
  *    PT_YIELD(pt);
- *  } while(1); PT_END(pt)
- *  内部不能使用return, 而是 break 
+ *  } while(1); PT_END(pt, ...)
+ *
  */
 struct PT
 {
@@ -212,7 +211,7 @@ struct PT
 
   /*< public >*/
   /** 协程的运行函数 */
-  int (*thread)(struct PT *p, PT_EVENT event, void* data);
+  int (*thread)(struct PT *p, const PT_EVENT event, void* data);
   /** 协程的属性掩码 */
   PT_MASK mask;
 
@@ -229,27 +228,6 @@ struct PT
   (PT_CTX)0, 0, (struct PT*)0,\
   thread, (PT_MASK)mask, name\
 }
-
-/** 开始事件循环的代码块, 必须以 PT_WHILE_END 结尾
- *
- * @example
- * int thread(struct PT *pt, PT_EVENT event, void* data) PT_BEGIN_DO(pt)
- * {
- *     switch(event) {
- *     case: ...; break;
- *     case: ...; PT_GOTO_END;
- *     }
- *     PT_YIELD(pt);
- * } PT_WHILE_END(pt);
- *
- */
-#define PT_BEGIN_DO(pt) PT_BEGIN(pt) do
-
-/** 结束事件处理 */
-#define PT_GOTO_END   goto __PT_GOTO_END_LABEL__
-
-/** 结束事件循环的代码块, 必须与 PT_BEGIN_DO 对应 */
-#define PT_WHILE_END(pt,...) while(1); __PT_GOTO_END_LABEL__: PT_END(pt,__VA_ARGS__)
 
 /** 事件处理是否还处于运行状态 */
 #define pt_alive(p) (p->state != 0)

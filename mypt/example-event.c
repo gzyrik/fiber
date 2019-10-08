@@ -15,42 +15,37 @@ enum {
   EVENT_JUMP,
   EVENT_DIE,
 };
-static int actor2(struct PT *pt, PT_EVENT event, void* data) PT_BEGIN_DO(pt) 
-{
-  PT_GOTO_END;
-} PT_WHILE_END(pt)
-static int actor(struct PT *pt, PT_EVENT event, void* data) PT_BEGIN_DO(pt) 
-{
-  switch(event) {
-    struct PT* from;
-  case PT_EVENT_INIT:
+static int actor2(struct PT *pt, const PT_EVENT event, void* data) PT_BEGIN(pt) do { 
+} while(1); PT_END(pt)
+static int actor(struct PT *pt, const PT_EVENT event, void* data) PT_BEGIN(pt) do {
+  struct PT* from = (struct PT*)data;
+
+  if (event == PT_EVENT_INIT)
     printf("%s start\n", pt->name);
-    break;
-  case PT_EVENT_EXIT:
-    printf("%s exit\n", pt->name);
-    PT_GOTO_END;
-  case EVENT_WALK:
+  else if (event == EVENT_WALK)
     printf("%s walk\n", pt->name);
-    break;
-  case EVENT_ATTACK:
+  else if (event == EVENT_ATTACK) {
     from = (struct PT*)data;
     printf("%s attack %s\n", pt->name, from->name);
     pt_post(from, 0, EVENT_JUMP, pt);
-    break;
-  case EVENT_JUMP:
+  }
+  else if (event == EVENT_JUMP) {
     from = (struct PT*)data;
     printf("%s jump by %s\n", pt->name, from->name);
     pt_send(NULL, 0xF, EVENT_DIE, pt);
     printf("%s die by self\n", pt->name);
-    PT_GOTO_END;
-  case EVENT_DIE:
-    from = (struct PT*)data;
+    break;
+  }
+  else if (event == EVENT_DIE) {
     printf("%s die by %s\n", pt->name, from->name);
-    //pt_send(from, 0, EVENT_DIE, pt);
-    PT_GOTO_END;
+    break;
+  }
+  else if (event == PT_EVENT_EXIT) {
+    printf("%s exit\n", pt->name);
+    break;
   }
   PT_YIELD(pt);
-} PT_WHILE_END(pt, printf("%s ok\n",pt->name);)
+} while(1); PT_END(pt, printf("%s ok\n",pt->name))
 
 int main(void)
 {
