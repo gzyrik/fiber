@@ -83,7 +83,7 @@ extern void st_md_cxt_restore(jmp_buf env, int val);
   ST_END_MACRO
 
 #else
-#define MD_WINDOWS_FIBER
+#define MD_WINDOWS_FIBER 1
 #define MD_SETJMP(x) 0
 #define MD_LONGJMP(env, val) SwitchToFiber(env)
 #define MD_INIT_CONTEXT
@@ -474,9 +474,16 @@ extern void st_md_cxt_restore(jmp_buf env, int val);
 
 #elif defined(__arm__)
 #define MD_STACK_GROWS_DOWN
+#define MD_USE_BUILTIN_SETJMP
+
+/* force to use glibc solution, hack the guard jmpbuf from michaeltalyansky */
+#ifdef USE_LIBC_SETJMP
+#undef MD_USE_BUILTIN_SETJMP
+#endif
 
 #if defined(__GLIBC__) && __GLIBC__ >= 2
-#define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[20]
+/* Merge from https://github.com/michaeltalyansky/state-threads/commit/56554a5c425aee8e7a73782eae23d74d83c4120a */
+#define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[8]
 #else
 #error "ARM/Linux pre-glibc2 not supported yet"
 #endif /* defined(__GLIBC__) && __GLIBC__ >= 2 */

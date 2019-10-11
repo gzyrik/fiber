@@ -45,6 +45,11 @@
 #include <errno.h>
 #include "common.h"
 
+/* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
+#ifndef NVALGRIND
+#include <valgrind/valgrind.h>
+#endif
+
 
 /* Global data */
 _st_vp_t _st_this_vp;           /* This VP */
@@ -277,6 +282,12 @@ void st_thread_exit(void *retval)
 #ifdef MD_WINDOWS_FIBER
   _st_thread_free(thread);
 #else
+  /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
+#ifndef NVALGRIND
+  if (!(thread->flags & _ST_FL_PRIMORDIAL)) {
+    VALGRIND_STACK_DEREGISTER(thread->stack->valgrind_stack_id);
+  }
+#endif
   if (!(thread->flags & _ST_FL_PRIMORDIAL))
     _st_stack_free(thread->stack);
   /* else  the PRIMORDIAL thread is leaked */
@@ -533,6 +544,14 @@ void st_thread_interrupt(_st_thread_t *thread)
 }
 
 
+/* Merge from https://github.com/michaeltalyansky/state-threads/commit/cce736426c2320ffec7c9820df49ee7a18ae638c */
+#if defined(__arm__) && !defined(MD_USE_BUILTIN_SETJMP) && __GLIBC_MINOR__ >= 19
+  extern unsigned long  __pointer_chk_guard;
+  #define PTR_MANGLE(var) \
+        (var) = (__typeof (var)) ((unsigned long) (var) ^ __pointer_chk_guard)
+  #define PTR_DEMANGLE(var)     PTR_MANGLE (var)
+#endif
+
 _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
                    int joinable, int stk_size)
 {
@@ -608,7 +627,15 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
   thread->arg = arg;
 
 #ifndef __ia64__
-  _ST_INIT_CONTEXT(thread, stack->sp, _st_thread_main);
+  /* Merge from https://github.com/michaeltalyansky/state-threads/commit/cce736426c2320ffec7c9820df49ee7a18ae638c */
+  #if defined(__arm__) && !defined(MD_USE_BUILTIN_SETJMP) && __GLIBC_MINOR__ >= 19
+    volatile void * lsp = PTR_MANGLE(stack->sp);
+    if (_setjmp ((thread)->context))
+      _st_thread_main();
+    (thread)->context[0].__jmpbuf[8] = (long) (lsp);
+  #else
+    _ST_INIT_CONTEXT(thread, stack->sp, _st_thread_main);
+  #endif
 #else
   _ST_INIT_CONTEXT(thread, stack->sp, stack->bsp, _st_thread_main);
 #endif
@@ -632,6 +659,13 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
   _ST_ADD_RUNQ(thread);
 #ifdef DEBUG
   _ST_ADD_THREADQ(thread);
+#endif
+
+  /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
+#ifndef NVALGRIND
+  if (!(thread->flags & _ST_FL_PRIMORDIAL)) {
+    thread->stack->valgrind_stack_id = VALGRIND_STACK_REGISTER(thread->stack->stk_top, thread->stack->stk_bottom);
+  }
 #endif
 
   return thread;

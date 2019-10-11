@@ -49,4 +49,4 @@ EXPORTS
     st_write @109
     st_write_resid @110
     st_writev @111
-	_st_errno
+    _st_errno
