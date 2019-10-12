@@ -557,6 +557,7 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
 {
   _st_thread_t *thread;
 #ifdef MD_WINDOWS_FIBER
+  stk_size = ((stk_size + _ST_PAGE_SIZE - 1) / _ST_PAGE_SIZE) * _ST_PAGE_SIZE;
   if (!(thread = _st_thread_new(start, arg, stk_size)))
     return NULL;
 #else

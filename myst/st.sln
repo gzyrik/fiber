@@ -9,6 +9,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "go_chan", "examples\go_chan
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "go_echo", "examples\go_echo.vcxproj", "{DC19A54C-6CE8-49EC-9195-75206C2C0C3D}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "go2", "examples\go2.vcxproj", "{E30C3979-464B-407C-BD9F-99124151FC94}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -41,6 +43,14 @@ Global
 		{DC19A54C-6CE8-49EC-9195-75206C2C0C3D}.Release|x64.Build.0 = Release|x64
 		{DC19A54C-6CE8-49EC-9195-75206C2C0C3D}.Release|x86.ActiveCfg = Release|Win32
 		{DC19A54C-6CE8-49EC-9195-75206C2C0C3D}.Release|x86.Build.0 = Release|Win32
+		{E30C3979-464B-407C-BD9F-99124151FC94}.Debug|x64.ActiveCfg = Debug|x64
+		{E30C3979-464B-407C-BD9F-99124151FC94}.Debug|x64.Build.0 = Debug|x64
+		{E30C3979-464B-407C-BD9F-99124151FC94}.Debug|x86.ActiveCfg = Debug|Win32
+		{E30C3979-464B-407C-BD9F-99124151FC94}.Debug|x86.Build.0 = Debug|Win32
+		{E30C3979-464B-407C-BD9F-99124151FC94}.Release|x64.ActiveCfg = Release|x64
+		{E30C3979-464B-407C-BD9F-99124151FC94}.Release|x64.Build.0 = Release|x64
+		{E30C3979-464B-407C-BD9F-99124151FC94}.Release|x86.ActiveCfg = Release|Win32
+		{E30C3979-464B-407C-BD9F-99124151FC94}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -122,7 +122,10 @@ int st_usleep(st_utime_t usecs)
     return -1;
   }
 
-  if (usecs != ST_UTIME_NO_TIMEOUT) {
+  if (usecs == 0) {
+    me->state = _ST_ST_RUNNABLE;
+    _ST_ADD_RUNQ(me);
+  } else if (usecs != ST_UTIME_NO_TIMEOUT) {
     me->state = _ST_ST_SLEEPING;
     _ST_ADD_SLEEPQ(me, usecs);
   } else
