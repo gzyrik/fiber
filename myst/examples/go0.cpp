@@ -1,4 +1,4 @@
-#include "../public.h"
+#include "../st.h"
 /*
 readelf -sW a.o | c++filt -t 
 # -s: symbol table

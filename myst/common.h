@@ -64,7 +64,7 @@
 #ifndef _WIN32
 #define ST_HOOK_SYS
 #endif
-#include "public.h"
+#include "st.h"
 #include "md.h"
 
 /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */

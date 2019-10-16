@@ -1,18 +1,12 @@
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <librtmp/rtmp.h>
 #include <librtmp/log.h>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #define CPPHTTPLIB_ST_SUPPORT
-#define CPPHTTPLIB_ZLIB_SUPPORT
+//#define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
 bool HUB_Add(int32_t streamId, RTMP* r);
 void HUB_Remove(int32_t streamId, RTMP* r);
@@ -101,9 +95,10 @@ cleanup:
 static void* run_service_listen(void*fd)
 {
   int sockfd = (int)(ssize_t)fd;
-  struct timeval tv={.tv_sec=1,.tv_usec=0};
+  struct timeval tv;
   socklen_t optlen = sizeof(tv);
-  getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, &optlen);
+  tv.tv_sec = 1,tv.tv_usec = 0;
+  getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, &optlen);
 
   while (_rtmpPort) {
     if (!_join.empty()) {
@@ -116,7 +111,7 @@ static void* run_service_listen(void*fd)
     int clientfd = accept(sockfd, nullptr, nullptr);
     if (clientfd >= 0) {
       st_thread_t t = nullptr;
-      if (setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0)
+      if (setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv)) == 0)
         t = st_thread_create(serve_client_thread, (void*)(ssize_t)clientfd, true, 1024*1024);
 
       if (t)
@@ -176,16 +171,17 @@ clean:
 static st_thread_t onServerPost(const httplib::Request& req, httplib::Response& res)
 {
   int sockfd=-1, tmp=1;
-  struct timeval tv={.tv_sec=1,.tv_usec=0};
+  struct timeval tv;
+  tv.tv_sec = 1, tv.tv_usec = 0;
   do {
     sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sockfd < 0)
       ERR_BREAK(503);
 
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &tmp, sizeof(tmp)) < 0)
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&tmp, sizeof(tmp)) < 0)
       ERR_BREAK(503);
 
-    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0)
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv)) < 0)
       ERR_BREAK(503);
 
     if (!_rtmpPort) _rtmpPort = 1935;
@@ -239,13 +235,14 @@ onIngestPost(const httplib::Request& req, httplib::Response& res)
     RTMP_EnableWrite(rtmp);
     if (!RTMP_Connect(rtmp, nullptr))
       ERR_BREAK(422);
-    struct timeval tv={.tv_sec=1,.tv_usec=0};
-    if (setsockopt(RTMP_Socket(rtmp), SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0)
+    struct timeval tv;
+    tv.tv_sec = 1, tv.tv_usec = 0;
+    if (setsockopt(RTMP_Socket(rtmp), SOL_SOCKET, SO_SNDTIMEO, (char*)&tv, sizeof(tv)) < 0)
       ERR_BREAK(503);
     if (!RTMP_ConnectStream(rtmp, 0))
       ERR_BREAK(422);
 
-    auto t = st_thread([rtmp, fp]{ return ingest_file_thread(rtmp, fp); }, true);
+    st_thread_t t = st_thread([=] { return ingest_file_thread(rtmp, fp); });
     if (!t)
       ERR_BREAK(503);
 

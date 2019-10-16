@@ -459,11 +459,7 @@ private:
 
 inline int close_socket(socket_t sock)
 {
-#ifdef _WIN32
     return closesocket(sock);
-#else
-    return close(sock);
-#endif
 }
 
 inline int select_read(socket_t sock, size_t sec, size_t usec)
@@ -566,7 +562,13 @@ socket_t create_socket(const char* host, int port, Fn fn, int socket_flags = 0)
             ip4_addr.sin_port = htons (port);
             int yes = 1;
             setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&yes, sizeof(yes));
+#ifdef _WIN32
+            SetHandleInformation((HANDLE)sock, HANDLE_FLAG_INHERIT, 0);
+            u_long nonblock = 1;
+            ioctlsocket(sock, FIONBIO, &nonblock);
+#else
             fcntl(sock, F_SETFD, fcntl(sock, F_GETFD) | FD_CLOEXEC);
+#endif
             if (fn(sock, (struct sockaddr*)&ip4_addr, sizeof ip4_addr)) 
                 return sock;
         }
@@ -598,7 +600,13 @@ socket_t create_socket(const char* host, int port, Fn fn, int socket_flags = 0)
        // Make 'reuse address' option available
        int yes = 1;
        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&yes, sizeof(yes));
+#ifdef _WIN32
+       SetHandleInformation((HANDLE)sock, HANDLE_FLAG_INHERIT, 0);
+       u_long nonblock = 1;
+       ioctlsocket(sock, FIONBIO, &nonblock);
+#else
        fcntl(sock, F_SETFD, fcntl(sock, F_GETFD) | FD_CLOEXEC);
+#endif
 
        // bind or connect
        if (fn(sock, rp->ai_addr, rp->ai_addrlen)) {
@@ -1723,8 +1731,13 @@ inline bool Server::listen_internal()
             }
             break;
         }
+#ifdef _WIN32
+        SetHandleInformation((HANDLE)sock, HANDLE_FLAG_INHERIT, 0);
+        u_long nonblock = 1;
+        ioctlsocket(sock, FIONBIO, &nonblock);
+#else
         fcntl(sock, F_SETFD, fcntl(sock, F_GETFD) | FD_CLOEXEC);
-
+#endif
 #ifndef CPPHTTPLIB_ST_SUPPORT
         // TODO: Use thread pool...
         std::thread([=]() {
@@ -1741,7 +1754,7 @@ inline bool Server::listen_internal()
             }
         }).detach();
 #else
-        st_thread([=]{ read_and_close_socket(sock); return nullptr; });
+        go[=]{ read_and_close_socket(sock); };
 #endif
     }
 #ifndef CPPHTTPLIB_ST_SUPPORT

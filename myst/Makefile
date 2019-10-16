@@ -359,14 +359,14 @@ $(DLIBRARY): $(OBJS:%.o=%-pic.o)
 		$(LN) $(LNFLAGS) $(FULLNAME) $(LINKNAME);	\
 	fi
 
-$(HEADER): public.h
+$(HEADER): st.h
 	rm -f $@
-	cp public.h $@
+	cp st.h $@
 
 $(TARGETDIR)/md.o: md.S
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(TARGETDIR)/%.o: %.c common.h md.h public.h
+$(TARGETDIR)/%.o: %.c common.h md.h st.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 examples::

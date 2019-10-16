@@ -19,17 +19,23 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="go0.cpp" />
-    <ClCompile Include="go_echo.cpp" />
+    <ClInclude Include="httplib.h" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\st.vcxproj">
+    <ClCompile Include="rtmphub.cpp" />
+    <ClCompile Include="rtmpsrv.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\myst\st.vcxproj">
       <Project>{a6faf0bc-4519-4c36-afd0-5de78cb4e745}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\rtmpdump\librtmp\librtmp.vcxproj">
+      <Project>{f9fde41c-6e54-4691-b34f-34e3d2309616}</Project>
     </ProjectReference>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
-    <ProjectGuid>{DC19A54C-6CE8-49EC-9195-75206C2C0C3D}</ProjectGuid>
+    <ProjectGuid>{30F445A2-E473-45A5-880D-2FE567738D3A}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>examples</RootNamespace>
   </PropertyGroup>
@@ -105,6 +111,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <AdditionalIncludeDirectories>..\rtmpdump;..\myst;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
