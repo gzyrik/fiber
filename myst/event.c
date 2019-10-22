@@ -532,7 +532,7 @@ ST_HIDDEN void _st_poll_dispatch(void)
     }
 
     /* Check for I/O operations */
-#ifdef _WIN32
+#if !defined(ST_HOOK_SYS) && defined(_WIN32)
     nfd = WSAPoll(_ST_POLLFDS, _ST_POLL_OSFD_CNT, timeout);
 #else
     nfd = _ST_SYS_CALL(poll)(_ST_POLLFDS, _ST_POLL_OSFD_CNT, timeout);

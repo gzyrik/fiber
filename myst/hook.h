@@ -1,9 +1,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include <fcntl.h>
+#ifndef _WIN32
 #define __USE_GNU
 #include <dlfcn.h>
-#include <fcntl.h>
+typedef int SOCKET;
+#define WINAPI
+#else
+#define __thread __declspec(thread)
+#endif
 static __thread _st_netfd_t** _st_netfd_hook;
 static _st_netfd_t* _st_netfd(int osfd)
 {
@@ -71,11 +77,18 @@ int (*epoll_wait_f)(int epfd, struct epoll_event *events, int maxevents, int tim
 
 static int _st_hook_init()
 {
-  if (dlsym(RTLD_NEXT, "connect")) {
+#ifdef _WIN32
+  HMODULE RTLD_NEXT = LoadLibrary("Ws2_32.dll");
+  if (!RTLD_NEXT) return -1;
+#define dlsym(x,y) (void*)GetProcAddress(x, y)
+  poll_f = dlsym(RTLD_NEXT, "WSAPoll");
+#else
+  poll_f = dlsym(RTLD_NEXT, "poll");
+#endif
+  if (poll_f) {
 #define X(ret, name, ...) name##_f = dlsym(RTLD_NEXT, #name);
     _ST_HOOK_LIST
     select_f = dlsym(RTLD_NEXT, "select");
-    poll_f = dlsym(RTLD_NEXT, "poll");
     epoll_wait_f = dlsym(RTLD_NEXT, "epoll_wait");
 #undef X
 #if defined(__linux__)
@@ -88,10 +101,12 @@ static int _st_hook_init()
 #undef X
 #endif
   }
-  if (!pipe_f || !socket_f || !socketpair_f ||
-    !connect_f || !read_f || !write_f || !readv_f || !writev_f || !send_f
-    || !sendto_f || !sendmsg_f || !accept_f || !poll_f || !select_f
-    || !sleep_f|| !usleep_f || !nanosleep_f || !close_f || !fcntl_f
+  if (!connect_f || !send_f || !socket_f
+    || !sendto_f || !accept_f || !poll_f || !select_f 
+#ifndef _WIN32
+    || !read_f || !write_f || !readv_f || !writev_f
+    || !pipe_f || !socketpair_f || !sendmsg_f
+    || !sleep_f || !usleep_f || !nanosleep_f || !close_f || !fcntl_f
     || !dup_f || !dup2_f || !fclose_f
 #if defined(__linux__)
     || !pipe2_f
@@ -99,6 +114,7 @@ static int _st_hook_init()
     || !gethostbyname2_r_f
     || !gethostbyaddr_r_f
     || !epoll_wait_f
+#endif
 #endif
     )
   {
@@ -189,6 +205,7 @@ int dup3(int oldfd, int newfd, int flags)
   }
   return err;
 }
+int closesocket(SOCKET sockfd) {return close(sockfd);}
 int close(int sockfd)
 {
   _st_netfd_t* fd = _st_netfd(sockfd);
@@ -217,18 +234,25 @@ int __close(int fd) {return close(fd);}
 int dup2(int oldfd, int newfd){return dup3(oldfd, newfd, 0);}
 int pipe(int pipefd[2]) {return pipe2(pipefd, 0);}
 
+
 //read hook
 #define _ST_HOOK(hook, sockfd, ...) \
   _st_netfd_t* fd = _st_netfd(sockfd); \
 return fd ? st_##hook(fd, ##__VA_ARGS__, fd->rcv_timeo) : hook##_f(sockfd, ##__VA_ARGS__)
+#ifndef _WIN32
 ssize_t read(int sockfd, void *buf, size_t nbyte) {_ST_HOOK (read, sockfd, buf, nbyte);}
 ssize_t readv(int sockfd, const struct iovec *iov, int iov_size){_ST_HOOK(readv, sockfd, iov, iov_size);}
 ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
   struct sockaddr *src_addr, socklen_t *addrlen) {_ST_HOOK(recvfrom, sockfd, buf, len, flags, src_addr, addrlen);}
 ssize_t recv(int sockfd, void *buf, size_t len, int flags){_ST_HOOK(recv, sockfd, buf, len, flags);}
 ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags){_ST_HOOK(recvmsg, sockfd, msg, flags);}
+#else
+int recvfrom(SOCKET sockfd, char *buf, int len, int flags,
+  struct sockaddr *src_addr, int *addrlen) {_ST_HOOK(recvfrom, sockfd, buf, len, flags, src_addr, addrlen);}
+int recv(SOCKET sockfd, char *buf, int len, int flags) {_ST_HOOK(recv, sockfd, buf, len, flags);}
+#endif
 #undef _ST_HOOK
-int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen){
+SOCKET accept(SOCKET sockfd, struct sockaddr *addr, socklen_t *addrlen){
   _st_netfd_t* fd = _st_netfd(sockfd);
   if (fd) {
     fd = st_accept(fd, addr, addrlen, fd->rcv_timeo);
@@ -242,25 +266,33 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen){
   _st_netfd_t* fd = _st_netfd(sockfd); \
   return fd ? st_##hook(fd, ##__VA_ARGS__, fd->snd_timeo) : hook##_f(sockfd, ##__VA_ARGS__)
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {_ST_HOOK(connect, sockfd, addr, addrlen);}
+#ifndef _WIN32
 ssize_t write(int sockfd, const void *buf, size_t nbyte){_ST_HOOK(write, sockfd, buf, nbyte);}
 ssize_t writev(int sockfd, const struct iovec *iov, int iov_size){_ST_HOOK(writev, sockfd, iov, iov_size);}
 ssize_t send(int sockfd, const void *buf, size_t len, int flags){_ST_HOOK(send, sockfd, buf, len, flags);}
 ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
   const struct sockaddr *dest_addr, socklen_t addrlen) {_ST_HOOK(sendto, sockfd, buf, len, flags, dest_addr, addrlen);}
 ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags){_ST_HOOK(sendmsg, sockfd, msg, flags);}
+#else
+int send(int sockfd, const char *buf, int len, int flags) {_ST_HOOK(send, sockfd, buf, len, flags);}
+int sendto(int sockfd, const char *buf, int len, int flags,
+  const struct sockaddr *dest_addr, int addrlen) {_ST_HOOK(sendto, sockfd, buf, len, flags, dest_addr, addrlen);}
+#endif
 #undef _ST_HOOK
 
-int socket(int domain, int type, int protocol)
+SOCKET socket(int domain, int type, int protocol)
 {return _st_netfd_hook ? st_socket(domain, type, protocol) : socket_f(domain, type, protocol);}
 int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 {return _st_netfd_hook ? st_poll(fds, nfds, timeout) : poll_f(fds, nfds, timeout);}
 int __poll(struct pollfd *fds, nfds_t nfds, int timeout) {return poll(fds, nfds, timeout);}
+#ifndef _WIN32
 unsigned sleep(unsigned int seconds)
 {return _st_netfd_hook ? st_sleep(seconds) : sleep_f(seconds);}
 int usleep(useconds_t usec)
 {return _st_netfd_hook ? st_usleep(usec) : usleep_f(usec);}
 int nanosleep(const struct timespec *req, struct timespec *rem)
 {return _st_netfd_hook ? st_usleep(req->tv_sec * 1000000 + req->tv_nsec/1000): nanosleep_f(req, rem);}
+#endif
 int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen)
 {
   int err = setsockopt_f(sockfd, level, optname, optval, optlen);
@@ -295,6 +327,7 @@ int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optl
   }
   return getsockopt_f(sockfd, level, optname, optval, optlen);
 }
+#ifndef _WIN32
 int fcntl(int __fd, int __cmd, ...)
 {
   va_list va;
@@ -364,6 +397,7 @@ int fcntl(int __fd, int __cmd, ...)
     return fcntl_f(__fd, __cmd);
   }
 }
+#endif
 int ioctl(int fd, unsigned long int request, ...)
 {
   void* arg;

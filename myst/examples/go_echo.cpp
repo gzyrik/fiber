@@ -25,30 +25,38 @@ void echo_server()
     exit(1);
   }
   puts("[3]");
-  st_netfd_t netfd = st_netfd_open_socket(accept_fd);
-
+retry:
   puts("[4]");
-  st_netfd_t sockfd = st_accept(netfd, (sockaddr*)&addr, &len, ST_UTIME_NO_TIMEOUT);
-  if (!sockfd) {
+  int sockfd = accept(accept_fd, (sockaddr*)&addr, &len);
+  if (sockfd == -1) {
+    if (EAGAIN == errno || EINTR == errno)
+      goto retry;
+
     fprintf(stderr, "accept error:%s\n", strerror(errno));
     return ;
   }
+
   char buf[1024];
+retry_read:
   puts("[8]");
-  if ((n = st_read(sockfd, buf, sizeof(buf), ST_UTIME_NO_TIMEOUT)) < 0) {
+  if ((n = recv(sockfd, buf, sizeof(buf), 0)) < 0) {
+    if (EAGAIN == errno || EINTR == errno)
+      goto retry_read;
     fprintf(stderr, "read errno=%d\n", st_errno);
   } else if (n == 0) {
     fprintf(stderr, "read eof\n");
   } else {
+    // echo
     // 阻塞的write已被HOOK，等待期间切换执行其他协程。
     puts("[12]");
-    st_write(sockfd, buf, n, ST_UTIME_NO_TIMEOUT);
+    send(sockfd, buf, n, 0);
     puts("[13]");
   }
 }
 
 void client()
 {
+  int n;
   puts("[5]");
   int sockfd = socket(AF_INET, SOCK_STREAM, 0);
   sockaddr_in addr;
@@ -57,8 +65,8 @@ void client()
   addr.sin_addr.s_addr = inet_addr("127.0.0.1");
   // 阻塞的connect已被HOOK，等待期间切换执行其他协程。
   puts("[6]");
-  st_netfd_t netfd = st_netfd_open_socket(sockfd);
-  if (st_connect(netfd, (sockaddr*)&addr, sizeof(addr),ST_UTIME_NO_TIMEOUT) < 0) {
+
+  if (-1 == connect(sockfd, (sockaddr*)&addr, sizeof(addr))) {
     fprintf(stderr, "connect error:%s\n", strerror(errno));
     exit(1);
   }
@@ -68,14 +76,17 @@ void client()
 
   // 阻塞的write已被HOOK，等待期间切换执行其他协程。
   puts("[9]");
-  st_write(netfd, buf, len, ST_UTIME_NO_TIMEOUT);
+  send(sockfd, buf, len, 0);
   puts("[10]");
 
   char rcv_buf[12];
-
+retry_read:
+  // 阻塞的read已被HOOK，等待期间切换执行其他协程。
   puts("[11]");
-  int n = st_read(netfd, rcv_buf, sizeof(rcv_buf), ST_UTIME_NO_TIMEOUT);
-  if (n < 0) {
+  if ((n = recv(sockfd, rcv_buf, sizeof(rcv_buf), 0)) < 0) {
+    if (EAGAIN == errno || EINTR == errno)
+      goto retry_read;
+
     fprintf(stderr, "read errno=%d:%s\n", errno, strerror(errno));
   } else if (n == 0) {
     fprintf(stderr, "read eof\n");
@@ -87,10 +98,6 @@ void client()
 
 int main()
 {
-#ifdef _WIN32
-  WSADATA wsd;
-  WSAStartup(MAKEWORD(2, 2), &wsd);
-#endif
   st_init();
   go client;
   go []{

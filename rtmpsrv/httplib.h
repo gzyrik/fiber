@@ -477,6 +477,7 @@ inline int select_read(socket_t sock, size_t sec, size_t usec)
 
 inline bool wait_until_socket_is_ready(socket_t sock, size_t sec, size_t usec)
 {
+#ifndef CPPHTTPLIB_ST_SUPPORT
     fd_set fdsr;
     FD_ZERO(&fdsr);
     FD_SET(sock, &fdsr);
@@ -499,7 +500,7 @@ inline bool wait_until_socket_is_ready(socket_t sock, size_t sec, size_t usec)
     } else {
         return false;
     }
-
+#endif
     return true;
 }
 
@@ -1294,7 +1295,7 @@ inline bool decompress(std::string& content)
 }
 #endif
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(CPPHTTPLIB_ST_SUPPORT)
 class WSInit {
 public:
     WSInit() {

@@ -61,9 +61,7 @@
 #else
 #define	ST_HIDDEN   static
 #endif
-#ifndef _WIN32
 #define ST_HOOK_SYS
-#endif
 #include "st.h"
 #include "md.h"
 

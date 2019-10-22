@@ -50,3 +50,18 @@ EXPORTS
     st_write_resid @110
     st_writev @111
     _st_errno
+	bind
+	listen
+	htons
+	htonl
+	ntohl
+	ntohs
+	inet_addr
+	freeaddrinfo
+	getaddrinfo
+	getnameinfo
+	gethostbyname
+	ioctlsocket
+	getpeername
+	getsockname
+	WSAGetLastError

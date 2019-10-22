@@ -5,7 +5,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
-#define CPPHTTPLIB_ST_SUPPORT
+#define CPPHTTPLIB_ST_SUPPORT //必须开启 HOOK RTMP 内部的 sock 操作
 //#define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
 bool HUB_Add(int32_t streamId, RTMP* r);
@@ -93,15 +93,16 @@ cleanup:
 }
 
 static void* run_service_listen(void*fd)
-{
-  int sockfd = (int)(ssize_t)fd;
+{//RTMP 服务循环
   struct timeval tv;
+  int sockfd = (int)(ssize_t)fd;
   socklen_t optlen = sizeof(tv);
   tv.tv_sec = 1,tv.tv_usec = 0;
-  getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, &optlen);
+  if (0 != getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, &optlen))
+    goto clean;
 
   while (_rtmpPort) {
-    if (!_join.empty()) {
+    if (!_join.empty()) {//回收已断开的连接
       for (auto& t: _join) {
         st_thread_join(t, nullptr);
         _childs.erase(t);
@@ -120,6 +121,7 @@ static void* run_service_listen(void*fd)
         close(clientfd);
     }
   }
+clean:
   close(sockfd);
   for (auto& t : _childs) st_thread_join(t, nullptr);
   _childs.clear();
@@ -169,7 +171,7 @@ clean:
 }
 #define ERR_BREAK(x) { res.status = x; break; }
 static st_thread_t onServerPost(const httplib::Request& req, httplib::Response& res)
-{
+{//创建并返回服务线程run_service_listen
   int sockfd=-1, tmp=1;
   struct timeval tv;
   tv.tv_sec = 1, tv.tv_usec = 0;
@@ -283,9 +285,11 @@ int main()
     res.set_content(help, "text/html");
   })
   .Post("/server", [&](const auto& req, auto& res) {
-    server = onServerPost(req, res);
+    //处理POST /server, 开启 RTMP 服务
+    if (!server) server = onServerPost(req, res);
   })
   .Delete("/server",[&](const auto& req, auto& res) {
+    //处理DELETE /server, 关闭 RTMP 服务
     _rtmpPort = 0;
     if (server) st_thread_join(server, nullptr);
     server = nullptr;
@@ -293,8 +297,8 @@ int main()
   })
   .Post("/ingest", onIngestPost);
   //.Get(R"(/(\w+)/(\w+).m3u8)", [&](const Request& req, Response& res) {});
-  http.set_base_dir("hls");
 
+  http.set_base_dir("hls");
   http.listen("*", _httpPort);
   perror("Http listen");
   return -1;
