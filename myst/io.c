@@ -43,49 +43,6 @@
 #include <signal.h>
 #include <errno.h>
 #include "common.h"
-#ifdef _WIN32
-int* _st_errno(void) { return _errno(); }
-static void _IO_GET_ERRNO()
-{
-  const int r = WSAGetLastError();
-  switch (r){
-  case WSAEWOULDBLOCK: errno = EWOULDBLOCK; break;
-  case WSAEINPROGRESS: errno = EINPROGRESS; break;
-  case WSAEINTR: errno = EINTR; break;
-  case WSAEADDRINUSE: errno = EADDRINUSE; break;
-  case WSAETIMEDOUT: errno = ETIMEDOUT; break;
-  default: errno = r;
-  }
-}
-static int readv(SOCKET fd, const struct iovec *iov, int iov_size)
-{
-  DWORD numberOfBytesRecevd, flags=0;
-  if (WSARecv(fd, (LPWSABUF)iov, iov_size, &numberOfBytesRecevd, &flags, NULL, NULL) >= 0)
-    return numberOfBytesRecevd;
-  return -1;
-}
-static int writev(SOCKET fd, struct iovec *iov, int iov_size)
-{
-  DWORD numberOfBytesRecevd;
-  if (WSASend(fd, (LPWSABUF)iov, iov_size, &numberOfBytesRecevd, 0, NULL, NULL) >= 0)
-    return numberOfBytesRecevd;
-  return -1;
-}
-static int sendmsg(SOCKET fd, const struct msghdr *msg, int flags)
-{
-  DWORD numberOfBytesSent;
-  if (WSASendMsg(fd, (LPWSAMSG)msg, 0, &numberOfBytesSent, NULL, NULL) >= 0)
-    return numberOfBytesSent;
-  return -1;
-}
-static int recvmsg(SOCKET fd, struct msghdr *msg, int flags)
-{
-  return -1;
-}
-#else
-static void _IO_GET_ERRNO() {}
-#endif
-
 
 #if EAGAIN != EWOULDBLOCK
 #define _IO_NOT_READY_ERROR  ((errno == EAGAIN) || (errno == EWOULDBLOCK))
@@ -104,6 +61,50 @@ static void _st_netfd_free_aux_data(_st_netfd_t *fd);
 
 #ifdef ST_HOOK_SYS
 #include "hook.h"
+#endif
+
+#ifdef _WIN32
+int* _st_errno(void) { return _errno(); }
+static void _IO_GET_ERRNO()
+{
+  const int r = _ST_SYS_CALL(WSAGetLastError)();
+  switch (r){
+  case WSAEWOULDBLOCK: errno = EWOULDBLOCK; break;
+  case WSAEINPROGRESS: errno = EINPROGRESS; break;
+  case WSAEINTR: errno = EINTR; break;
+  case WSAEADDRINUSE: errno = EADDRINUSE; break;
+  case WSAETIMEDOUT: errno = ETIMEDOUT; break;
+  default: errno = r;
+  }
+}
+static int _ST_SYS_CALL(readv)(SOCKET fd, const struct iovec *iov, int iov_size)
+{
+  DWORD numberOfBytesRecevd, flags=0;
+  if (WSARecv(fd, (LPWSABUF)iov, iov_size, &numberOfBytesRecevd, &flags, NULL, NULL) >= 0)
+    return numberOfBytesRecevd;
+  return -1;
+}
+static int _ST_SYS_CALL(writev)(SOCKET fd, struct iovec *iov, int iov_size)
+{
+  DWORD numberOfBytesRecevd;
+  if (WSASend(fd, (LPWSABUF)iov, iov_size, &numberOfBytesRecevd, 0, NULL, NULL) >= 0)
+    return numberOfBytesRecevd;
+  return -1;
+}
+static int _ST_SYS_CALL(sendmsg)(SOCKET fd, const struct msghdr *msg, int flags)
+{
+  DWORD numberOfBytesSent;
+  if (WSASendMsg(fd, (LPWSAMSG)msg, 0, &numberOfBytesSent, NULL, NULL) >= 0)
+    return numberOfBytesSent;
+  return -1;
+}
+static int _ST_SYS_CALL(recvmsg)(SOCKET fd, struct msghdr *msg, int flags)
+{//TODO
+  return -1;
+}
+#else
+static void _IO_GET_ERRNO() {}
+static int _ST_SYS_CALL(closesocket)(int osfd) {return _ST_SYS_CALL(close)(osfd);}
 #endif
 
 int _st_io_init(void)
@@ -205,7 +206,7 @@ static _st_netfd_t *_st_netfd_new(SOCKET osfd, int nonblock, int is_socket)
   if (nonblock) {
 #ifdef _WIN32
     u_long nonblock = 1;
-    if (ioctlsocket (osfd, FIONBIO, &nonblock) < 0) {
+    if (_ST_SYS_CALL(ioctlsocket) (osfd, FIONBIO, &nonblock) < 0) {
       st_netfd_free(fd);
       return NULL;
     }
@@ -248,7 +249,7 @@ int st_netfd_close(_st_netfd_t *fd)
     return -1;
 
   st_netfd_free(fd);
-  return _ST_SYS_CALL(close)(fd->osfd);
+  return _ST_SYS_CALL(closesocket)(fd->osfd);
 }
 
 
@@ -348,7 +349,7 @@ _st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, socklen_t *addrle
 
   if (!newfd) {
     err = errno;
-    _ST_SYS_CALL(close)(osfd);
+    _ST_SYS_CALL(closesocket)(osfd);
     errno = err;
   }
 
@@ -456,7 +457,7 @@ _st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, socklen_t *addrle
 
   if (!newfd) {
     err = errno;
-    _ST_SYS_CALL(close)(osfd);
+    _ST_SYS_CALL(closesocket)(osfd);
     errno = err;
   }
 
@@ -862,7 +863,7 @@ int st_socket(int domain, int type, int protocol)
   newfd = _st_netfd_new(osfd, 1, 1);
   if (!newfd) {
     err = errno;
-    _ST_SYS_CALL(close)(osfd);
+    _ST_SYS_CALL(closesocket)(osfd);
     errno = err;
   }
 
@@ -888,7 +889,7 @@ _st_netfd_t *st_open(const char *path, int oflags, mode_t mode)
   newfd = _st_netfd_new(osfd, 0, 0);
   if (!newfd) {
     err = errno;
-    _ST_SYS_CALL(close)(osfd);
+    _ST_SYS_CALL(closesocket)(osfd);
     errno = err;
   }
 

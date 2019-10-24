@@ -62,14 +62,16 @@ void HUB_Remove(int32_t streamId, RTMP* r)
   auto& hub = hubIter->second;
   if (hub.publisher == r) {
     hub.publisher = nullptr;
+    RTMP_Log(RTMP_LOGCRIT, "Publisher[%d] Removed", streamId);
     const auto& playpath = hubIter->first;
     AVal aval={(char*)playpath.data(), (int)playpath.size()};
     for(auto& p : hub.players)
-      RTMP_SendPlayStop(p.first, &aval);
+      RTMP_SendPlayStop(p.first, &aval);// publisher closed then notify its players
   }
   else if (hub.players.erase(r) > 0) {
+    RTMP_Log(RTMP_LOGCRIT, "Player[%d] Removed", streamId);
     if (hub.players.empty() && hub.publisher)
-      RTMP_Close(hub.publisher);
+      RTMP_Close(hub.publisher);// no player then close the publisher
   }
   else
     return;
@@ -77,9 +79,12 @@ void HUB_Remove(int32_t streamId, RTMP* r)
   if (!hub.publisher && hub.players.empty()) {//remove the empty app
     auto appIter = hub.appIter;
     auto& hubs = appIter->second.hubs;
+    RTMP_Log(RTMP_LOGCRIT, "Remove playpath: %s",hubIter->first.c_str());
     hubs.erase(hubIter);
-    if (hubs.empty())
+    if (hubs.empty()){
+      RTMP_Log(RTMP_LOGCRIT, "Remove App: %s",appIter->first.c_str());
       _apps.erase(appIter);
+    }
   }
 }
 
@@ -98,8 +103,10 @@ bool HUB_Add(int32_t streamId, RTMP* r)
     auto& p = hub.players[r];
     p.streamId = streamId;
     p.createMs = RTMP_GetTime();
+    RTMP_Log(RTMP_LOGCRIT, "[%d]%s/%s: add Player[%d]", RTMP_Socket(r), app.c_str(), playpath.c_str(), streamId);
   }
   else if (hub.publisher != r) {
+    RTMP_Log(RTMP_LOGCRIT, "[%d]%s/%s: add Publisher[%d]", RTMP_Socket(r), app.c_str(), playpath.c_str(), streamId);
     hub.publisher = r;
     hub.createMs = RTMP_GetTime();
     for(auto& p : hub.players){

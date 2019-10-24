@@ -32,6 +32,7 @@
 #ifdef _WIN32
 #pragma comment( lib,"winmm.lib" )
 #pragma comment(lib, "Ws2_32.lib")
+#define strcasecmp stricmp
 #endif
 #define MAX_PRINT_LEN	2048
 
@@ -45,7 +46,7 @@ static RTMP_LogCallback rtmp_log_default, *cb = rtmp_log_default;
 
 static const char *levels[] = {
   "CRIT", "ERROR", "WARNING", "INFO",
-  "DEBUG", "DEBUG2"
+  "DEBUG", "DEBUG2", NULL,
 };
 
 static void rtmp_log_default(int level, const char *format, va_list vl)
@@ -80,6 +81,17 @@ void RTMP_LogSetOutput(FILE *file)
 void RTMP_LogSetLevel(RTMP_LogLevel level)
 {
 	RTMP_debuglevel = level;
+}
+
+bool RTMP_LogSetLevel2(const char* lvl)
+{
+    for (int i = 0; levels[i]; ++i) {
+        if (!strcasecmp(lvl,levels[i])) {
+            RTMP_debuglevel = i;
+            return true;
+        }
+    }
+    return false;
 }
 
 void RTMP_LogSetCallback(RTMP_LogCallback *cbp)

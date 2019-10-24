@@ -363,6 +363,7 @@ void RTMP_TLS_FreeServerContext(void *tlsCtx);
  */
 int RTMP_LibVersion(void);
 void RTMP_UserInterrupt(void);	/* user typed Ctrl-C */
+void RTMP_PrintInfo(RTMP *rtmp, int loglevel, const char* prefix);
 /**
  * @}
  */

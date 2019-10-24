@@ -52,6 +52,7 @@ typedef SOCKET socket_t;
 
 typedef int socket_t;
 #define INVALID_SOCKET (-1)
+#define closesocket close
 #endif
 
 #include <fstream>

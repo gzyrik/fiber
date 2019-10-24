@@ -11,7 +11,7 @@
 bool HUB_Add(int32_t streamId, RTMP* r);
 void HUB_Remove(int32_t streamId, RTMP* r);
 void HUB_Publish(int32_t streamId, RTMPPacket* packet);
-static int _httpPort = 5562, _rtmpPort = 1935;
+static int _httpPort = 5562, _rtmpPort = 0;
 //rtmp url regex to sockaddr
 static std::unordered_map<std::string, std::string> _sourceAddrs;
 #define DUPTIME	5000	/* interval we disallow duplicate requests, in msec */
@@ -71,6 +71,7 @@ static void* serve_client_thread(void* sockfd)
     goto cleanup;
   }
 
+  RTMP_PrintInfo(&rtmp, RTMP_LOGCRIT, "Accept");
   if (!HUB_Add(streamId, &rtmp) && !notifySource(&rtmp)) {
     RTMP_Log(RTMP_LOGERROR, "notify source failed");
     goto cleanup;
@@ -118,11 +119,11 @@ static void* run_service_listen(void*fd)
       if (t)
         _childs.emplace(t);
       else
-        close(clientfd);
+        closesocket(clientfd);
     }
   }
 clean:
-  close(sockfd);
+  closesocket(sockfd);
   for (auto& t : _childs) st_thread_join(t, nullptr);
   _childs.clear();
   _join.clear();
@@ -185,8 +186,10 @@ static st_thread_t onServerPost(const httplib::Request& req, httplib::Response& 
 
     if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv)) < 0)
       ERR_BREAK(503);
+    if (req.has_param("port")) _rtmpPort = std::stoi(req.get_param_value("port"));
+    if (req.has_param("loglevel")) RTMP_LogSetLevel2(req.get_param_value("loglevel").c_str());
 
-    if (!_rtmpPort) _rtmpPort = 1935;
+    if (_rtmpPort <= 0) _rtmpPort = 1935;
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -205,7 +208,7 @@ static st_thread_t onServerPost(const httplib::Request& req, httplib::Response& 
     return t;
   } while(0);
   _rtmpPort = 0;
-  if (sockfd >= 0) close(sockfd);
+  if (sockfd >= 0) closesocket(sockfd);
   return nullptr;
 }
 static void
@@ -248,6 +251,7 @@ onIngestPost(const httplib::Request& req, httplib::Response& res)
     if (!t)
       ERR_BREAK(503);
 
+    RTMP_PrintInfo(rtmp, RTMP_LOGCRIT, "Ingest");
     _childs.emplace(t);
     res.status = 201;
     return;
@@ -284,16 +288,21 @@ int main()
       "./rtmpdump  -r rtmp://127.0.0.1/app/xxx -o xxx.flv\n";
     res.set_content(help, "text/html");
   })
+  .Post("/loglevel", [&](const auto& req, auto& res) {
+    if (!RTMP_LogSetLevel2(req.body.c_str()))
+      res.status = 400;
+  })
   .Post("/server", [&](const auto& req, auto& res) {
     //处理POST /server, 开启 RTMP 服务
-    if (!server) server = onServerPost(req, res);
+    if (server) return;
+    server = onServerPost(req, res);
   })
   .Delete("/server",[&](const auto& req, auto& res) {
     //处理DELETE /server, 关闭 RTMP 服务
+    if (!server) return;
     _rtmpPort = 0;
-    if (server) st_thread_join(server, nullptr);
+    st_thread_join(server, nullptr);
     server = nullptr;
-    res.status = 204;
   })
   .Post("/ingest", onIngestPost);
   //.Get(R"(/(\w+)/(\w+).m3u8)", [&](const Request& req, Response& res) {});

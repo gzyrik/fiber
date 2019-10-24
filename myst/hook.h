@@ -18,44 +18,56 @@ static _st_netfd_t* _st_netfd(int osfd)
   return NULL;
 }
 #define _ST_HOOK_LIST0 \
-  X(int,pipe,int pipefd[2])\
-  X(int,pipe2,int pipefd[2], int flags)\
   X(int,socket,int domain, int type, int protocol)\
-  X(int,socketpair,int domain, int type, int protocol, int sv[2])\
   X(int,connect,int, const struct sockaddr *, socklen_t)\
-  X(ssize_t,read,int, void *, size_t)\
-  X(ssize_t,readv,int, const struct iovec *, int)\
   X(ssize_t,recv,int sockfd, void *buf, size_t len, int flags)\
   X(ssize_t,recvfrom,int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen)\
-  X(ssize_t,recvmsg,int sockfd, struct msghdr *msg, int flags)\
-  X(ssize_t,write,int, const void *, size_t)\
-  X(ssize_t,writev,int, const struct iovec *, int)\
   X(ssize_t,send,int sockfd, const void *buf, size_t len, int flags)\
   X(ssize_t,sendto,int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen)\
-  X(ssize_t,sendmsg,int sockfd, const struct msghdr *msg, int flags)\
   X(int,accept,int sockfd, struct sockaddr *addr, socklen_t *addrlen)\
+  X(int,setsockopt,int, int, int, const void*, socklen_t)\
+  X(int,getsockopt,int, int, int, void*, socklen_t*)\
+
+#ifdef _WIN32
+#define _ST_HOOK_LIST _ST_HOOK_LIST0 \
+  X(int, closesocket, int)\
+  X(int,ioctlsocket, SOCKET, long, u_long*)\
+  X(int, WSAGetLastError, void)\
+  X(void, WSASetLastError, int)
+
+#else
+#define _ST_HOOK_LIST1 _ST_HOOK_LIST0 \
+  X(int,close,int)\
   X(unsigned,sleep,unsigned int)\
   X(int,usleep,useconds_t)\
   X(int,nanosleep,const struct timespec *req, struct timespec *rem)\
-  X(int,setsockopt,int, int, int, const void*, socklen_t)\
-  X(int,getsockopt,int, int, int, void*, socklen_t*)\
-  X(int,close,int)\
+  X(int,pipe,int pipefd[2])\
+  X(int,pipe2,int pipefd[2], int flags)\
+  X(int,socketpair,int domain, int type, int protocol, int sv[2])\
+  X(ssize_t,read,int, void *, size_t)\
+  X(ssize_t,readv,int, const struct iovec *, int)\
+  X(ssize_t,recvmsg,int sockfd, struct msghdr *msg, int flags)\
+  X(ssize_t,write,int, const void *, size_t)\
+  X(ssize_t,writev,int, const struct iovec *, int)\
+  X(ssize_t,sendmsg,int sockfd, const struct msghdr *msg, int flags)\
   X(int,fcntl,int, int, ...)\
-  X(int,ioctl,int, unsigned long int, ...)\
   X(int,dup,int)\
   X(int,dup2,int, int)\
   X(int,dup3,int, int, int)\
   X(FILE*,fopen,const char * __restrict, const char * __restrict)\
-  X(int,fclose,FILE*)
+  X(int,fclose,FILE*)\
+  X(int,ioctl,int, unsigned long, ...)
 
 #if defined(__linux__)
 struct hostent;
-#define _ST_HOOK_LIST _ST_HOOK_LIST0 \
+#define _ST_HOOK_LIST _ST_HOOK_LIST1 \
   X(int,gethostbyname_r,const char*__restrict, struct hostent*__restrict, char*__restrict, size_t, struct hostent**__restrict, int*__restrict)\
   X(int,gethostbyname2_r,const char*, int, struct hostent*, char*, size_t , struct hostent**, int *)\
   X(int,gethostbyaddr_r,const void*, socklen_t, int type, struct hostent*, char*, size_t, struct hostent**, int *)
 #else
-#define _ST_HOOK_LIST _ST_HOOK_LIST0
+#define _ST_HOOK_LIST _ST_HOOK_LIST1
+#endif
+
 #endif
 
 #define X(ret, name, ...) static ret (*name##_f)(__VA_ARGS__);
@@ -73,14 +85,17 @@ __attribute__((weak)) extern int __epoll_wait_nocancel(int, struct epoll_event*,
 
 int (*select_f)(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
 int (*poll_f)(struct pollfd *fds, nfds_t nfds, int timeout);
+#ifdef MD_HAVE_EPOLL
 int (*epoll_wait_f)(int epfd, struct epoll_event *events, int maxevents, int timeout);
-
+#endif
 static int _st_hook_init()
 {
 #ifdef _WIN32
   HMODULE RTLD_NEXT = LoadLibrary("Ws2_32.dll");
   if (!RTLD_NEXT) return -1;
 #define dlsym(x,y) (void*)GetProcAddress(x, y)
+  closesocket_f = dlsym(RTLD_NEXT, "closesocket");
+  ioctlsocket_f = dlsym(RTLD_NEXT, "ioctlsocket");
   poll_f = dlsym(RTLD_NEXT, "WSAPoll");
 #else
   poll_f = dlsym(RTLD_NEXT, "poll");
@@ -89,9 +104,11 @@ static int _st_hook_init()
 #define X(ret, name, ...) name##_f = dlsym(RTLD_NEXT, #name);
     _ST_HOOK_LIST
     select_f = dlsym(RTLD_NEXT, "select");
+#ifdef MD_HAVE_EPOLL
     epoll_wait_f = dlsym(RTLD_NEXT, "epoll_wait");
+#endif
 #undef X
-#if defined(__linux__)
+#ifdef __linux__
   } else {
 #define X(ret, name, ...) name##_f = &__##name;
     _ST_HOOK_LIST
@@ -125,7 +142,7 @@ static int _st_hook_init()
     return -1;
   return 0;
 }
-
+#ifndef _WIN32
 int pipe2(int pipefd[2], int flags)
 {
   int err;
@@ -205,7 +222,6 @@ int dup3(int oldfd, int newfd, int flags)
   }
   return err;
 }
-int closesocket(SOCKET sockfd) {return close(sockfd);}
 int close(int sockfd)
 {
   _st_netfd_t* fd = _st_netfd(sockfd);
@@ -233,7 +249,15 @@ int fclose(FILE* fp)
 int __close(int fd) {return close(fd);}
 int dup2(int oldfd, int newfd){return dup3(oldfd, newfd, 0);}
 int pipe(int pipefd[2]) {return pipe2(pipefd, 0);}
-
+#else
+int closesocket(SOCKET sockfd)
+{
+  _st_netfd_t* fd = _st_netfd(sockfd);
+  return fd ? st_netfd_close(fd) : closesocket_f(sockfd);
+}
+int WSAGetLastError(void) {return st_errno;}
+void WSASetLastError(int err) {st_errno=err;}
+#endif
 
 //read hook
 #define _ST_HOOK(hook, sockfd, ...) \
@@ -397,8 +421,7 @@ int fcntl(int __fd, int __cmd, ...)
     return fcntl_f(__fd, __cmd);
   }
 }
-#endif
-int ioctl(int fd, unsigned long int request, ...)
+int ioctl(int fd, unsigned long request, ...)
 {
   void* arg;
   va_list va;
@@ -410,6 +433,15 @@ int ioctl(int fd, unsigned long int request, ...)
   va_end(va);
   return ioctl_f(fd, request, arg);
 }
+#else
+int ioctlsocket (SOCKET fd, long request, u_long *arg)
+{
+  if (request == FIONBIO && _st_netfd_hook)
+    return 0;
+
+  return ioctlsocket_f(fd, request, arg);
+}
+#endif
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout)
 {
   int i, npfds, n;
