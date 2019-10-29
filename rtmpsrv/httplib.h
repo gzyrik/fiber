@@ -465,6 +465,7 @@ inline int close_socket(socket_t sock)
 
 inline int select_read(socket_t sock, size_t sec, size_t usec)
 {
+#ifndef CPPHTTPLIB_ST_SUPPORT
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(sock, &fds);
@@ -474,6 +475,9 @@ inline int select_read(socket_t sock, size_t sec, size_t usec)
     tv.tv_usec = usec;
 
     return select(sock + 1, &fds, NULL, NULL, &tv);
+#else
+    return true;
+#endif
 }
 
 inline bool wait_until_socket_is_ready(socket_t sock, size_t sec, size_t usec)

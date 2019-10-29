@@ -88,7 +88,7 @@ void HUB_Remove(int32_t streamId, RTMP* r)
   }
 }
 
-bool HUB_Add(int32_t streamId, RTMP* r)
+RTMP* HUB_Add(int32_t streamId, RTMP* r)
 {
   const std::string app(r->Link.app.av_val, r->Link.app.av_len);
   const std::string playpath(r->Link.playpath.av_val, r->Link.playpath.av_len);
@@ -128,7 +128,7 @@ bool HUB_Add(int32_t streamId, RTMP* r)
       RTMP_SendPacket(r, &packet, false);
     }
   }
-  return hub.publisher != nullptr;
+  return hub.publisher;
 }
 
 void HUB_Publish(int32_t streamId, RTMPPacket* packet)

@@ -30,8 +30,6 @@
 #include "rtmp_sys.h"
 #include "log.h"
 #ifdef _WIN32
-#pragma comment( lib,"winmm.lib" )
-#pragma comment(lib, "Ws2_32.lib")
 #define strcasecmp stricmp
 #endif
 #define MAX_PRINT_LEN	2048

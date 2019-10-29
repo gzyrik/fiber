@@ -453,8 +453,8 @@ void _st_iterate_threads(void);
 
 #ifdef ST_HOOK_SYS
 #define _ST_SYS_CALL(func) func##_f
-extern int (*select_f)(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
-extern int (*poll_f)(struct pollfd *fds, nfds_t nfds, int timeout);
+extern int (WSAAPI *select_f)(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const struct timeval *timeout);
+extern int (WSAAPI *poll_f)(struct pollfd *fds, nfds_t nfds, int timeout);
 #ifdef MD_HAVE_EPOLL
 struct epoll_event;
 extern int (*epoll_wait_f)(int epfd, struct epoll_event *events, int maxevents, int timeout);

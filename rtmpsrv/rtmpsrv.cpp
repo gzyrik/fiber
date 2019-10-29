@@ -8,7 +8,7 @@
 #define CPPHTTPLIB_ST_SUPPORT //必须开启 HOOK RTMP 内部的 sock 操作
 //#define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
-bool HUB_Add(int32_t streamId, RTMP* r);
+RTMP* HUB_Add(int32_t streamId, RTMP* r);
 void HUB_Remove(int32_t streamId, RTMP* r);
 void HUB_Publish(int32_t streamId, RTMPPacket* packet);
 static int _httpPort = 5562, _rtmpPort = 0;
@@ -27,7 +27,7 @@ static void toURL(std::ostream& oss, const AVal& av)
   }
   oss<<url.substr(a);
 }
-static bool notifySource(RTMP* r)
+static bool setupPublisher(RTMP* r)
 {
   std::string addr="127.0.0.1:"+std::to_string(_httpPort);
   for (auto& iter : _sourceAddrs) {
@@ -72,8 +72,9 @@ static void* serve_client_thread(void* sockfd)
   }
 
   RTMP_PrintInfo(&rtmp, RTMP_LOGCRIT, "Accept");
-  if (!HUB_Add(streamId, &rtmp) && !notifySource(&rtmp)) {
-    RTMP_Log(RTMP_LOGERROR, "notify source failed");
+
+  if (!HUB_Add(streamId, &rtmp) && !setupPublisher(&rtmp)) {
+    RTMP_Log(RTMP_LOGERROR, "setup publisher failed");
     goto cleanup;
   }
   while (_rtmpPort && RTMP_IsConnected(&rtmp)
@@ -87,8 +88,8 @@ static void* serve_client_thread(void* sockfd)
 
 cleanup:
   RTMPPacket_Free(&packet);
-  HUB_Remove(streamId, &rtmp);
   RTMP_Close(&rtmp);
+  HUB_Remove(streamId, &rtmp);
   _join.emplace_back(st_thread_self());
   return nullptr;
 }
@@ -102,6 +103,7 @@ static void* run_service_listen(void*fd)
   if (0 != getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, &optlen))
     goto clean;
 
+  RTMP_Log(RTMP_LOGCRIT, "[%d]Rtmpsrv at port %d", sockfd, _rtmpPort);
   while (_rtmpPort) {
     if (!_join.empty()) {//回收已断开的连接
       for (auto& t: _join) {
@@ -127,6 +129,7 @@ clean:
   for (auto& t : _childs) st_thread_join(t, nullptr);
   _childs.clear();
   _join.clear();
+  RTMP_Log(RTMP_LOGCRIT, "[%d]Rtmpsrv Closed", sockfd);
   return nullptr;
 }
 
@@ -162,7 +165,7 @@ static void* ingest_file_thread(RTMP* rtmp, FILE* fp)
     if (fseek(fp, 4, SEEK_CUR) != 0)
       break;
   } while(_rtmpPort && !feof(fp));
-clean:
+
   fclose(fp);
   RTMP_Close(rtmp);
   delete rtmp;

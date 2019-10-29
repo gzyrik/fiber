@@ -62,6 +62,7 @@ struct iovec {
 #include <fcntl.h>
 #include <poll.h>
 typedef int SOCKET;
+#define WSAAPI
 #endif
 #include <sys/types.h>
 #include <time.h>

@@ -5,10 +5,12 @@
 #ifndef _WIN32
 #define __USE_GNU
 #include <dlfcn.h>
-typedef int SOCKET;
-#define WINAPI
+#define SOCKOPTVAL_T void
+#define SELECT_TIMEVAL_T struct timeval
 #else
 #define __thread __declspec(thread)
+#define SOCKOPTVAL_T char
+#define SELECT_TIMEVAL_T const struct timeval
 #endif
 static __thread _st_netfd_t** _st_netfd_hook;
 static _st_netfd_t* _st_netfd(int osfd)
@@ -70,7 +72,7 @@ struct hostent;
 
 #endif
 
-#define X(ret, name, ...) static ret (*name##_f)(__VA_ARGS__);
+#define X(ret, name, ...) static ret (WSAAPI *name##_f)(__VA_ARGS__);
 _ST_HOOK_LIST
 #undef X
 
@@ -83,8 +85,8 @@ __attribute__((weak)) extern int __epoll_wait_nocancel(int, struct epoll_event*,
 #undef X
 #endif
 
-int (*select_f)(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
-int (*poll_f)(struct pollfd *fds, nfds_t nfds, int timeout);
+int (WSAAPI *select_f)(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const struct timeval *timeout);
+int (WSAAPI *poll_f)(struct pollfd *fds, nfds_t nfds, int timeout);
 #ifdef MD_HAVE_EPOLL
 int (*epoll_wait_f)(int epfd, struct epoll_event *events, int maxevents, int timeout);
 #endif
@@ -250,13 +252,13 @@ int __close(int fd) {return close(fd);}
 int dup2(int oldfd, int newfd){return dup3(oldfd, newfd, 0);}
 int pipe(int pipefd[2]) {return pipe2(pipefd, 0);}
 #else
-int closesocket(SOCKET sockfd)
+int WSAAPI closesocket(SOCKET sockfd)
 {
   _st_netfd_t* fd = _st_netfd(sockfd);
   return fd ? st_netfd_close(fd) : closesocket_f(sockfd);
 }
-int WSAGetLastError(void) {return st_errno;}
-void WSASetLastError(int err) {st_errno=err;}
+int WSAAPI WSAGetLastError(void) {return st_errno;}
+void WSAAPI WSASetLastError(int err) {st_errno=err;}
 #endif
 
 //read hook
@@ -271,12 +273,12 @@ ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
 ssize_t recv(int sockfd, void *buf, size_t len, int flags){_ST_HOOK(recv, sockfd, buf, len, flags);}
 ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags){_ST_HOOK(recvmsg, sockfd, msg, flags);}
 #else
-int recvfrom(SOCKET sockfd, char *buf, int len, int flags,
+int WSAAPI recvfrom(SOCKET sockfd, char *buf, int len, int flags,
   struct sockaddr *src_addr, int *addrlen) {_ST_HOOK(recvfrom, sockfd, buf, len, flags, src_addr, addrlen);}
-int recv(SOCKET sockfd, char *buf, int len, int flags) {_ST_HOOK(recv, sockfd, buf, len, flags);}
+int WSAAPI recv(SOCKET sockfd, char *buf, int len, int flags) {_ST_HOOK(recv, sockfd, buf, len, flags);}
 #endif
 #undef _ST_HOOK
-SOCKET accept(SOCKET sockfd, struct sockaddr *addr, socklen_t *addrlen){
+SOCKET WSAAPI accept(SOCKET sockfd, struct sockaddr *addr, socklen_t *addrlen){
   _st_netfd_t* fd = _st_netfd(sockfd);
   if (fd) {
     fd = st_accept(fd, addr, addrlen, fd->rcv_timeo);
@@ -289,7 +291,7 @@ SOCKET accept(SOCKET sockfd, struct sockaddr *addr, socklen_t *addrlen){
 #define _ST_HOOK(hook, sockfd, ...) \
   _st_netfd_t* fd = _st_netfd(sockfd); \
   return fd ? st_##hook(fd, ##__VA_ARGS__, fd->snd_timeo) : hook##_f(sockfd, ##__VA_ARGS__)
-int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {_ST_HOOK(connect, sockfd, addr, addrlen);}
+int WSAAPI connect(SOCKET sockfd, const struct sockaddr *addr, socklen_t addrlen) {_ST_HOOK(connect, sockfd, addr, addrlen);}
 #ifndef _WIN32
 ssize_t write(int sockfd, const void *buf, size_t nbyte){_ST_HOOK(write, sockfd, buf, nbyte);}
 ssize_t writev(int sockfd, const struct iovec *iov, int iov_size){_ST_HOOK(writev, sockfd, iov, iov_size);}
@@ -298,13 +300,13 @@ ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
   const struct sockaddr *dest_addr, socklen_t addrlen) {_ST_HOOK(sendto, sockfd, buf, len, flags, dest_addr, addrlen);}
 ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags){_ST_HOOK(sendmsg, sockfd, msg, flags);}
 #else
-int send(int sockfd, const char *buf, int len, int flags) {_ST_HOOK(send, sockfd, buf, len, flags);}
-int sendto(int sockfd, const char *buf, int len, int flags,
+int WSAAPI send(SOCKET sockfd, const char *buf, int len, int flags) {_ST_HOOK(send, sockfd, buf, len, flags);}
+int WSAAPI sendto(SOCKET sockfd, const char *buf, int len, int flags,
   const struct sockaddr *dest_addr, int addrlen) {_ST_HOOK(sendto, sockfd, buf, len, flags, dest_addr, addrlen);}
 #endif
 #undef _ST_HOOK
 
-SOCKET socket(int domain, int type, int protocol)
+SOCKET WSAAPI socket(int domain, int type, int protocol)
 {return _st_netfd_hook ? st_socket(domain, type, protocol) : socket_f(domain, type, protocol);}
 int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 {return _st_netfd_hook ? st_poll(fds, nfds, timeout) : poll_f(fds, nfds, timeout);}
@@ -317,7 +319,7 @@ int usleep(useconds_t usec)
 int nanosleep(const struct timespec *req, struct timespec *rem)
 {return _st_netfd_hook ? st_usleep(req->tv_sec * 1000000 + req->tv_nsec/1000): nanosleep_f(req, rem);}
 #endif
-int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen)
+int WSAAPI setsockopt(SOCKET sockfd, int level, int optname, const SOCKOPTVAL_T *optval, socklen_t optlen)
 {
   int err = setsockopt_f(sockfd, level, optname, optval, optlen);
   if (err == 0 && level == SOL_SOCKET
@@ -335,7 +337,7 @@ int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t
   }
   return err;
 }
-int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen)
+int WSAAPI getsockopt(SOCKET sockfd, int level, int optname, SOCKOPTVAL_T *optval, socklen_t *optlen)
 {
   if (level == SOL_SOCKET
     && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
@@ -434,7 +436,7 @@ int ioctl(int fd, unsigned long request, ...)
   return ioctl_f(fd, request, arg);
 }
 #else
-int ioctlsocket (SOCKET fd, long request, u_long *arg)
+int WSAAPI ioctlsocket (SOCKET fd, long request, u_long *arg)
 {
   if (request == FIONBIO && _st_netfd_hook)
     return 0;
@@ -442,7 +444,7 @@ int ioctlsocket (SOCKET fd, long request, u_long *arg)
   return ioctlsocket_f(fd, request, arg);
 }
 #endif
-int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout)
+int WSAAPI select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, SELECT_TIMEVAL_T*timeout)
 {
   int i, npfds, n;
   struct pollfd pollfds[4];
