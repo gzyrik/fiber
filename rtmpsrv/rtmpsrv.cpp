@@ -138,7 +138,9 @@ static void* ingest_file_thread(RTMP* rtmp, FILE* fp)
   size_t bufSize = 1024*4;
   char *buf = (char*)malloc(bufSize);
   const uint32_t re = RTMP_GetTime();
-  uint32_t startTs = 0;
+  uint32_t startTs = 0, lastTm = 0;
+  off_t bytes = 0;
+
   do {
     if (fread(buf, 1, 11, fp) != 11)
       break;
@@ -147,7 +149,8 @@ static void* ingest_file_thread(RTMP* rtmp, FILE* fp)
     ts |= uint32_t(buf[7]) << 24;
 
     if (!startTs) startTs = ts;
-    const int32_t diff = (ts - startTs) - (RTMP_GetTime() -re);
+    uint32_t now = RTMP_GetTime();
+    const int32_t diff = (ts - startTs) - (now - re);
     if (diff > 300 && diff < 3000) st_usleep(diff*1000);
 
     const size_t bodySize = AMF_DecodeInt24(buf+1), pktSize = bodySize + 11;
@@ -161,6 +164,16 @@ static void* ingest_file_thread(RTMP* rtmp, FILE* fp)
     {
       if (RTMP_Write(rtmp, buf, pktSize) != pktSize)
         break;
+      bytes += pktSize;
+      if (now - lastTm > 200) {
+        const double wts = ts - startTs;
+        double percent =  wts / (RTMP_GetDuration(rtmp) * 1000.0) * 100.0;
+        percent = ((double) (int) (percent * 10.0)) / 10.0;
+
+        RTMP_LogStatus("\r[%d]%.3f kB / %.2f sec (%.1f%%)", RTMP_Socket(rtmp),
+          (double) bytes / 1024.0, wts / 1000.0, percent);
+        lastTm = now;
+      }
     }
     if (fseek(fp, 4, SEEK_CUR) != 0)
       break;
@@ -189,8 +202,10 @@ static st_thread_t onServerPost(const httplib::Request& req, httplib::Response& 
 
     if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv)) < 0)
       ERR_BREAK(503);
-    if (req.has_param("port")) _rtmpPort = std::stoi(req.get_param_value("port"));
-    if (req.has_param("loglevel")) RTMP_LogSetLevel2(req.get_param_value("loglevel").c_str());
+    if (req.has_param("port"))
+      _rtmpPort = std::stoi(req.get_param_value("port"));
+    if (req.has_param("loglevel"))
+      RTMP_LogSetLevel2(req.get_param_value("loglevel").c_str());
 
     if (_rtmpPort <= 0) _rtmpPort = 1935;
     struct sockaddr_in addr;
@@ -210,6 +225,7 @@ static st_thread_t onServerPost(const httplib::Request& req, httplib::Response& 
     res.status = 201;
     return t;
   } while(0);
+  RTMP_Log(RTMP_LOGERROR, "POST /server failed");
   _rtmpPort = 0;
   if (sockfd >= 0) closesocket(sockfd);
   return nullptr;
@@ -220,7 +236,8 @@ onIngestPost(const httplib::Request& req, httplib::Response& res)
   FILE* fp=nullptr;
   RTMP* rtmp=nullptr;
   do {
-    assert(req.has_header("REMOTE_ADDR"));
+    if (!req.has_header("REMOTE_ADDR"))
+      ERR_BREAK(400);
     std::string url;{
       std::ostringstream oss;
       oss << "rtmp://" << req.get_header_value("REMOTE_ADDR")
@@ -259,6 +276,7 @@ onIngestPost(const httplib::Request& req, httplib::Response& res)
     res.status = 201;
     return;
   } while(0);
+  RTMP_Log(RTMP_LOGERROR, "POST /ingest failed");
   if (fp) fclose(fp);
   if (rtmp) {
     RTMP_Close(rtmp);
@@ -280,7 +298,7 @@ int main()
   st_thread_t server = nullptr;
   httplib::Server http;
   RTMP_debuglevel = RTMP_LOGWARNING;
-  http.Get("/", [&](const auto& req, auto& res){
+  http.Get("/", [&](const httplib::Request& req, httplib::Response& res){
     const char * help = 
       "curl -X POST 127.0.0.1:5562/server -d 1\n"
       "curl -X DELETE 127.0.0.1:5562/server\n"
@@ -291,16 +309,16 @@ int main()
       "./rtmpdump  -r rtmp://127.0.0.1/app/xxx -o xxx.flv\n";
     res.set_content(help, "text/html");
   })
-  .Post("/loglevel", [&](const auto& req, auto& res) {
+  .Post("/loglevel", [&](const httplib::Request& req, httplib::Response& res) {
     if (!RTMP_LogSetLevel2(req.body.c_str()))
       res.status = 400;
   })
-  .Post("/server", [&](const auto& req, auto& res) {
+  .Post("/server", [&](const httplib::Request& req, httplib::Response& res) {
     //处理POST /server, 开启 RTMP 服务
     if (server) return;
     server = onServerPost(req, res);
   })
-  .Delete("/server",[&](const auto& req, auto& res) {
+  .Delete("/server",[&](const httplib::Request& req, httplib::Response& res) {
     //处理DELETE /server, 关闭 RTMP 服务
     if (!server) return;
     _rtmpPort = 0;
@@ -308,7 +326,6 @@ int main()
     server = nullptr;
   })
   .Post("/ingest", onIngestPost);
-  //.Get(R"(/(\w+)/(\w+).m3u8)", [&](const Request& req, Response& res) {});
 
   http.set_base_dir("hls");
   http.listen("*", _httpPort);

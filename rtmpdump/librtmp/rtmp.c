@@ -240,9 +240,7 @@ SAVC2(Stopped_playing, "Stopped playing");
 uint32_t
 RTMP_GetTime()
 {
-#ifdef _DEBUG
-  return 0;
-#elif defined(_WIN32)
+#ifdef _WIN32
   return timeGetTime();
 #else
   struct tms t;
@@ -3856,7 +3854,7 @@ HandleMetadata(RTMP *r, char *body, unsigned int len)
     if (RTMP_FindFirstMatchingProperty(&obj, &av_duration, &prop))
     {
       r->m_fDuration = prop.p_vu.p_number;
-      /*RTMP_Log(RTMP_LOGDEBUG, "Set duration: %.2f", m_fDuration); */
+      RTMP_Log(RTMP_LOGDEBUG, "Set duration: %.2f", r->m_fDuration);
     }
     /* Search for audio or video tags */
     if (RTMP_FindPrefixProperty(&obj, &av_video, &prop))
@@ -5074,8 +5072,20 @@ RTMP_Write(RTMP *r, const char *buf, int size)
           !pkt->m_nTimeStamp) || pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
       {
         pkt->m_headerType = RTMP_PACKET_SIZE_LARGE;
-        if (pkt->m_packetType == RTMP_PACKET_TYPE_INFO)
+        if (pkt->m_packetType == RTMP_PACKET_TYPE_INFO) {
+          AMFObject obj;
+          AMFObjectProperty prop;
+
           pkt->m_nBodySize += 1+2+av_setDataFrame.av_len;
+          AMF_Decode(&obj, buf, size, FALSE);
+          AMF_Dump(&obj);
+          if (RTMP_FindFirstMatchingProperty(&obj, &av_duration, &prop))
+          {
+            r->m_fDuration = prop.p_vu.p_number;
+            RTMP_Log(RTMP_LOGDEBUG, "Set duration: %.2f", r->m_fDuration);
+          }
+          AMF_Reset(&obj);
+        }
       }
       else
       {

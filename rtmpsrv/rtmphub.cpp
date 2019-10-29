@@ -7,11 +7,9 @@
 #include <cstring>
 #include <unordered_map>
 //RTMP only do live, others using HLS
-typedef std::unordered_map<std::string, struct Hub> HubMap;
+typedef std::unordered_map<std::string, struct Hub*> HubMap;
 typedef HubMap::iterator HubIter;
 typedef std::unordered_map<int32_t, HubIter> StreamMap;
-typedef std::unordered_map<std::string, struct App> AppMap;
-typedef AppMap::iterator AppIter;
 struct Kbps
 {
 };
@@ -19,6 +17,8 @@ struct App {
   HubMap hubs; //playpath->Hub
   Kbps kbps;
 };
+typedef std::unordered_map<std::string, struct App> AppMap;
+typedef AppMap::iterator AppIter;
 struct Player {
   int32_t streamId;
   uint32_t createMs;
@@ -59,7 +59,7 @@ void HUB_Remove(int32_t streamId, RTMP* r)
   auto hubIter = iter->second;
   _streams.erase(iter);
 
-  auto& hub = hubIter->second;
+  auto& hub = *(hubIter->second);
   if (hub.publisher == r) {
     hub.publisher = nullptr;
     RTMP_Log(RTMP_LOGCRIT, "Publisher[%d] Removed", streamId);
@@ -80,6 +80,7 @@ void HUB_Remove(int32_t streamId, RTMP* r)
     auto appIter = hub.appIter;
     auto& hubs = appIter->second.hubs;
     RTMP_Log(RTMP_LOGCRIT, "Remove playpath: %s",hubIter->first.c_str());
+    delete hubIter->second;
     hubs.erase(hubIter);
     if (hubs.empty()){
       RTMP_Log(RTMP_LOGCRIT, "Remove App: %s",appIter->first.c_str());
@@ -95,10 +96,10 @@ RTMP* HUB_Add(int32_t streamId, RTMP* r)
   auto& hubs = _apps[app].hubs;
   auto hubIter = hubs.find(playpath);
   if (hubIter == hubs.end())
-    hubIter = hubs.emplace(playpath, Hub(_apps.find(app))).first;
+    hubIter = hubs.emplace(playpath, new Hub(_apps.find(app))).first;
   _streams[streamId] = hubIter;
 
-  auto& hub = hubIter->second;
+  auto& hub = *(hubIter->second);
   if (RTMP_State(r)&RTMP_STATE_PLAYING) {
     auto& p = hub.players[r];
     p.streamId = streamId;
@@ -138,7 +139,7 @@ void HUB_Publish(int32_t streamId, RTMPPacket* packet)
     return;
 
   packet->m_headerType = RTMP_PACKET_SIZE_LARGE;
-  auto& hub = iter->second->second;
+  auto& hub = *(iter->second->second);
   switch(packet->m_packetType) {
   case RTMP_PACKET_TYPE_INFO:
     RTMPPacket_Free(&hub.meta);

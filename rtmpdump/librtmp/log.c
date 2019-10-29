@@ -83,7 +83,8 @@ void RTMP_LogSetLevel(RTMP_LogLevel level)
 
 bool RTMP_LogSetLevel2(const char* lvl)
 {
-    for (int i = 0; levels[i]; ++i) {
+    int i;
+    for (i = 0; levels[i]; ++i) {
         if (!strcasecmp(lvl,levels[i])) {
             RTMP_debuglevel = i;
             return true;

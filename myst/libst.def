@@ -68,3 +68,4 @@ getsockname
 inet_ntop
 WSAGetLastError
 WSASetLastError
+timeGetTime

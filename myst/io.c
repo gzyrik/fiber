@@ -103,6 +103,7 @@ static int _ST_SYS_CALL(recvmsg)(SOCKET fd, struct msghdr *msg, int flags)
   return -1;
 }
 #else
+#include <sys/resource.h>
 static void _IO_GET_ERRNO() {}
 static int _ST_SYS_CALL(closesocket)(int osfd) {return _ST_SYS_CALL(close)(osfd);}
 #endif
