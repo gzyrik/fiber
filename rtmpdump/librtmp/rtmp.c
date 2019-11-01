@@ -306,39 +306,6 @@ RTMP_LibVersion()
 {
   return RTMP_LIB_VERSION;
 }
-void
-RTMP_PrintInfo(RTMP *rtmp, int loglevel, const char* prefix)
-{
-  char buf[1024];
-  char* p=buf, *endbuf=buf+sizeof(buf);
-  int sockfd = RTMP_Socket(rtmp);
-  if (sockfd != -1) {
-    struct sockaddr_storage sa;
-    struct sockaddr_in *v4 = (struct sockaddr_in *)&sa;
-    struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&sa;
-    socklen_t sklen = sizeof(sa);
-    getpeername(sockfd, (struct sockaddr*)&sa, &sklen);
-    switch(sa.ss_family) {
-    case AF_INET:
-      p += strlen(inet_ntop(AF_INET, &(v4->sin_addr), p, endbuf - p));
-      p += sprintf(p, ":%d", ntohs(v4->sin_port));
-      break;
-    case AF_INET6:
-      p += strlen(inet_ntop(AF_INET6, &(v6->sin6_addr),p, endbuf- p));
-      p += sprintf(p, ":%d", ntohs(v6->sin6_port));
-      break;
-    }
-  }
-  if (rtmp->Link.tcUrl.av_len > 0)
-    p += sprintf(p, "\n\t tcUrl=%-.*s", rtmp->Link.tcUrl.av_len, rtmp->Link.tcUrl.av_val);
-  if (rtmp->Link.pageUrl.av_len > 0)
-    p += sprintf(p, "\n\t pageUrl=%-.*s", rtmp->Link.pageUrl.av_len, rtmp->Link.pageUrl.av_val);
-  if (rtmp->Link.swfUrl.av_len > 0)
-    p += sprintf(p, "\n\t swfUrl=%-.*s", rtmp->Link.swfUrl.av_len, rtmp->Link.swfUrl.av_val);
-  if (rtmp->Link.playpath.av_len > 0)
-    p += sprintf(p, "\n\t playpath=%-.*s", rtmp->Link.playpath.av_len, rtmp->Link.playpath.av_val);
-  RTMP_Log(loglevel, "[%d]%s: %s", sockfd, prefix, buf);
-}
 
 void
 RTMP_TLS_Init()

@@ -136,7 +136,7 @@ int _st_io_init(void)
 #else
   WSADATA wsd;
   WSAStartup(MAKEWORD(2, 2), &wsd);
-  fdlim = 1024;
+  fdlim = 4096;
 #endif
 
   _st_osfd_limit = fdlim;

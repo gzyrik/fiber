@@ -47,6 +47,7 @@ typedef SOCKET socket_t;
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <dirent.h>
 #include <sys/socket.h>
 #include <sys/select.h>
 
@@ -211,6 +212,7 @@ public:
     Server& Post(const char* pattern, Handler handler);
 
     Server& Put(const char* pattern, Handler handler);
+    Server& Patch(const char* pattern, Handler handler);
     Server& Delete(const char* pattern, Handler handler);
     Server& Options(const char* pattern, Handler handler);
 
@@ -256,6 +258,7 @@ private:
     Handlers    get_handlers_;
     Handlers    post_handlers_;
     Handlers    put_handlers_;
+    Handlers    patch_handlers_;
     Handlers    delete_handlers_;
     Handlers    options_handlers_;
     Handler     error_handler_;
@@ -1501,6 +1504,12 @@ inline Server& Server::Put(const char* pattern, Handler handler)
     return *this;
 }
 
+inline Server& Server::Patch(const char* pattern, Handler handler)
+{
+    patch_handlers_.push_back(std::make_pair(std::regex(pattern), handler));
+    return *this;
+}
+
 inline Server& Server::Delete(const char* pattern, Handler handler)
 {
     delete_handlers_.push_back(std::make_pair(std::regex(pattern), handler));
@@ -1570,7 +1579,7 @@ inline void Server::stop()
 
 inline bool Server::parse_request_line(const char* s, Request& req)
 {
-    static std::regex re("(GET|HEAD|POST|PUT|DELETE|OPTIONS) (([^?]+)(?:\\?(.+?))?) (HTTP/1\\.[01])\r\n");
+    static std::regex re("(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) (([^?]+)(?:\\?(.+?))?) (HTTP/1\\.[01])\r\n");
 
     std::cmatch m;
     if (std::regex_match(s, m, re)) {
@@ -1791,6 +1800,8 @@ inline bool Server::routing(Request& req, Response& res)
         return dispatch_request(req, res, post_handlers_);
     } else if (req.method == "PUT") {
         return dispatch_request(req, res, put_handlers_);
+    } else if (req.method == "PATCH") {
+        return dispatch_request(req, res, patch_handlers_);
     } else if (req.method == "DELETE") {
         return dispatch_request(req, res, delete_handlers_);
     } else if (req.method == "OPTIONS") {
@@ -1849,7 +1860,7 @@ inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool
     req.set_header("REMOTE_ADDR", strm.get_remote_addr().c_str());
 
     // Body
-    if (req.method == "POST" || req.method == "PUT") {
+    if (req.method == "POST" || req.method == "PUT" || req.method == "PATCH") {
         if (!detail::read_content(strm, req)) {
             res.status = 400;
             write_response(strm, connection_close, req, res);
