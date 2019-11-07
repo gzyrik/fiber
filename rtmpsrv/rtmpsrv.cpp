@@ -8,13 +8,16 @@
 #define CPPHTTPLIB_ST_SUPPORT //必须开启 HOOK RTMP 内部的 sock 操作
 //#define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
-RTMP* HUB_Add(int32_t streamId, RTMP* r);
+void HUB_UpdateCreateMs(const std::string& fname, uint32_t createMs);
+uint32_t HUB_AddRTMP(int32_t streamId, RTMP* r, bool isPlayer);//返回开始的时刻
 void HUB_Remove(int32_t streamId, RTMP* r);
 void HUB_Publish(int32_t streamId, RTMPPacket* packet);
 static int _httpPort = 5562;
 int _rtmpPort = 0;
 typedef std::unordered_map<std::string, std::string> FileAddrMap;//文件regex-URL -> 推送服务地址
 static FileAddrMap _fileAddrs;
+static std::vector<st_thread_t> _joinThreads;//待回收的线程(包括RTMP服务和推送服务的线程)
+static std::unordered_set<st_thread_t> _childRtmps;//RTMP服务的子线程
 static void toURL(std::ostream& oss, const AVal& av)
 {
   if (!av.av_val || !av.av_len) return;
@@ -35,7 +38,7 @@ static std::string toPath(RTMP* r)
   fname.append(".flv");
   return fname;
 }
-static FILE* validFile(const std::string& fname)
+static FILE* OpenFLV(const std::string& fname)
 {
   char buf[13];
   FILE* fp;
@@ -46,9 +49,49 @@ static FILE* validFile(const std::string& fname)
     return nullptr;
   return fp;
 }
-static bool setupPush(RTMP* r)
+static RTMP* ConnectURL(std::string& url, bool write)
+{
+  RTMP* rtmp = new RTMP;
+  while (rtmp) {
+    RTMP_Init(rtmp);
+    if (!RTMP_SetupURL(rtmp, (char*)url.c_str()))
+      break;
+    if (write) RTMP_EnableWrite(rtmp);
+    if (!RTMP_Connect(rtmp, nullptr))
+      break;
+    if (!RTMP_ConnectStream(rtmp, 0))
+      break;
+    return rtmp;
+  }
+  delete rtmp;
+  return nullptr;
+}
+static void ProcessPackets(int32_t streamId, RTMP* rtmp, RTMPPacket* packet)
+{
+  while (_rtmpPort && RTMP_IsConnected(rtmp)
+    && RTMP_ReadPacket(rtmp, packet)) {
+    if (!RTMPPacket_IsReady(packet) || !packet->m_body)
+      continue;
+    if (RTMP_ServePacket(rtmp, packet))
+      HUB_Publish(streamId, packet);
+    RTMPPacket_Free(packet);
+  }
+  HUB_Remove(streamId, rtmp);
+}
+static void* pull_file_thread(RTMP* rtmp, int32_t streamId)
+{
+  RTMPPacket packet = {0};
+  ProcessPackets(streamId, rtmp, &packet);
+  RTMPPacket_Free(&packet);
+  RTMP_Close(rtmp);
+  delete rtmp;
+  _joinThreads.emplace_back(st_thread_self());
+  return nullptr;
+}
+static bool setupPush(int32_t streamId, RTMP* r)
 {
   std::string fname(toPath(r)), addr;
+  HUB_UpdateCreateMs(fname, RTMP_GetTime());
   for (auto& iter : _fileAddrs) {
     if (std::regex_match (fname, std::regex(iter.first))){
       addr = iter.second;
@@ -56,10 +99,11 @@ static bool setupPush(RTMP* r)
     }
   }
   if (addr.empty()) {
-    FILE* fp = validFile(fname);
-    if (!fp) return false;
-    fclose(fp);
-    addr = "127.0.0.1:" + std::to_string(_httpPort);
+    FILE* fp = OpenFLV(fname);
+    if (fp) {
+      fclose(fp);
+      addr = "http://127.0.0.1:" + std::to_string(_httpPort);
+    }
   }
   std::ostringstream oss;
   toURL(oss << " app=", r->Link.app);
@@ -68,15 +112,33 @@ static bool setupPush(RTMP* r)
   toURL(oss << " pageUrl=", r->Link.pageUrl);
   toURL(oss << " jtv=", r->Link.usherToken);
   toURL(oss << " playpath=", r->Link.playpath);
+  if (addr.find("http://") == 0) {//POST /pushs 启动新推送. 等待新推送连接上来,然后再分发
+    httplib::Client cli(addr);
+    auto res = cli.Post("/pushs", oss.str(), "text/plain");
+    if (res && res->status < 400)
+      return true;
+  }
+  else if (addr.find("rtmp://") == 0) {//向rtmpsrv建立新拉取,直接分发
+    RTMP *rtmp = nullptr;
+    std::string url = addr + oss.str();
+    do {
+      if (!(rtmp = ConnectURL(url, false)))
+        break;
+      //Puller的流ID由对应服务分配, 因此本地只能使用-streamId
+      st_thread_t t = st_thread([=] { return pull_file_thread(rtmp, -streamId); });
+      if (!t)
+        break;
 
-  httplib::Client cli(addr);
-  auto res = cli.Post("/pushs", oss.str(), "text/plain");//启动新文件的推送
-  if (!res || res->status >= 400)
-    return false;
-  return true;
+      HUB_AddRTMP(-streamId, rtmp, false);
+      _childRtmps.emplace(t);
+      return true;
+    } while (0);
+    if (rtmp) RTMP_Close(rtmp);
+    delete rtmp;
+  }
+  HUB_UpdateCreateMs(fname, 0);
+  return false;
 }
-static std::vector<st_thread_t> _joinThreads;//待回收的线程(包括RTMP服务和推送服务的线程)
-static std::unordered_set<st_thread_t> _childRtmps;//RTMP服务的子线程
 static void* serve_client_thread(void* sockfd)
 {
   int32_t streamId = 0;
@@ -90,7 +152,7 @@ static void* serve_client_thread(void* sockfd)
     goto cleanup;
   }
 
-  streamId = RTMP_AcceptStream(&rtmp, &packet);
+  streamId = RTMP_AcceptStream(&rtmp, &packet);//streamId是递增分配给客户端RTMP的
   if (!streamId) {
     RTMP_Log(RTMP_LOGERROR, "Accept failed");
     goto cleanup;
@@ -98,23 +160,17 @@ static void* serve_client_thread(void* sockfd)
 
   RTMP_PrintInfo(&rtmp, RTMP_LOGCRIT, "Accept");
 
-  if (!HUB_Add(streamId, &rtmp) && !setupPush(&rtmp)) {
+  if (!HUB_AddRTMP(streamId, &rtmp, RTMP_State(&rtmp)&RTMP_STATE_PLAYING)
+    && !setupPush(streamId, &rtmp)) {
     RTMP_Log(RTMP_LOGERROR, "setup push failed");
     goto cleanup;
   }
-  while (_rtmpPort && RTMP_IsConnected(&rtmp)
-    && RTMP_ReadPacket(&rtmp, &packet)) {
-    if (!RTMPPacket_IsReady(&packet) || !packet.m_body)
-      continue;
-    if (RTMP_ServePacket(&rtmp, &packet))
-      HUB_Publish(streamId, &packet);
-    RTMPPacket_Free(&packet);
-  }
+
+  ProcessPackets(streamId, &rtmp, &packet);
 
 cleanup:
   RTMPPacket_Free(&packet);
   RTMP_Close(&rtmp);
-  HUB_Remove(streamId, &rtmp);
   _joinThreads.emplace_back(st_thread_self());
   return nullptr;
 }
@@ -167,7 +223,7 @@ struct FileInfo{
   uint32_t ts, len;
 };
 static std::unordered_map<int, FileInfo> _files;
-static void* post_file_thread(RTMP* rtmp, FILE* fp)
+static void* push_file_thread(RTMP* rtmp, FILE* fp)
 {
   auto iter = _files.find(RTMP_Socket(rtmp));
   FileInfo& info = iter->second;
@@ -349,11 +405,9 @@ static void onDeleteRtmp(const httplib::Request& req, httplib::Response& res)
   st_thread_join(_rtmpThread, nullptr);
   _rtmpThread = nullptr;
 }
-
 static void onGetPushs(const httplib::Request& req, httplib::Response& res)
 {
 }
-
 static void onPostPushs(const httplib::Request& req, httplib::Response& res)
 {
   FILE* fp=nullptr;
@@ -368,27 +422,13 @@ static void onPostPushs(const httplib::Request& req, httplib::Response& res)
         << ':' << _rtmpPort << ' ' << req.body;
       url = oss.str();
     }
-    if (!(rtmp = new RTMP))
-      ERR_BREAK(503);
-
-    RTMP_Init(rtmp);
-    if (!RTMP_SetupURL(rtmp, (char*)url.c_str()))
-      ERR_BREAK(400);
-
-    if (!(fp = validFile(toPath(rtmp))))
+    if (!(rtmp = ConnectURL(url, true)))
       ERR_BREAK(500);
 
-    RTMP_EnableWrite(rtmp);
-    if (!RTMP_Connect(rtmp, nullptr))
-      ERR_BREAK(422);
-    //struct timeval tv;
-    //tv.tv_sec = 1, tv.tv_usec = 0;
-    //if (setsockopt(RTMP_Socket(rtmp), SOL_SOCKET, SO_SNDTIMEO, (char*)&tv, sizeof(tv)) < 0)
-    //  ERR_BREAK(503);
-    if (!RTMP_ConnectStream(rtmp, 0))
-      ERR_BREAK(422);
+    if (!(fp = OpenFLV(toPath(rtmp))))
+      ERR_BREAK(400);
 
-    st_thread_t t = st_thread([=] { return post_file_thread(rtmp, fp); });
+    st_thread_t t = st_thread([=] { return push_file_thread(rtmp, fp); });
     if (!t)
       ERR_BREAK(503);
 
@@ -399,10 +439,8 @@ static void onPostPushs(const httplib::Request& req, httplib::Response& res)
   } while(0);
   RTMP_Log(RTMP_LOGERROR, "POST /files failed");
   if (fp) fclose(fp);
-  if (rtmp) {
-    RTMP_Close(rtmp);
-    delete rtmp;
-  }
+  if (rtmp) RTMP_Close(rtmp);
+  delete rtmp;
 }
 static void onGetPushById(const httplib::Request& req, httplib::Response& res)
 {
@@ -430,20 +468,20 @@ static void onDeletePushById(const httplib::Request& req, httplib::Response& res
 }
 
 /*
-单服务结点 接口设计:
- - GET /files 获取regex-URL信息
- - PUT /files 更新全部文件regex-URL信息
- - PATCH /files 更新部分文件 regex-URL信息
+   单服务结点 接口设计:
+   - GET /files 获取regex-URL信息
+   - PUT /files 更新全部文件regex-URL信息
+   - PATCH /files 更新部分文件 regex-URL信息
 
- - GET /rtmp 获取RTMP信息
- - POST /rtmp 启动RTMP服务
- - DELETE /rtmp 关闭RTMP服务
+   - GET /rtmp 获取RTMP信息
+   - POST /rtmp 启动RTMP服务
+   - DELETE /rtmp 关闭RTMP服务
 
- - GET /pushs 获取所有的推送信息
- - POST /pushs 启动新的推送,返回ID
- - GET /pushs/ID 获取指定的推送信息
- - DELETE /pushs/ID 强制关闭指定的推送
-*/
+   - GET /pushs 获取所有的推送信息
+   - POST /pushs 启动新的推送,返回ID
+   - GET /pushs/ID 获取指定的推送信息
+   - DELETE /pushs/ID 强制关闭指定的推送
+   */
 
 int main()
 {

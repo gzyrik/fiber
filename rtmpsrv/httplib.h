@@ -104,9 +104,11 @@ struct ci {
 std::pair<std::string,int> make_addr(const std::string& addr)
 {
     int port = 80;
+    auto pos = addr.find("://");
+    pos =  (pos == addr.npos ? 0 : pos + 3);
     auto colon = addr.rfind(':');
     if (colon != addr.npos) port = std::stoi(addr.substr(colon+1));
-    return std::make_pair(addr.substr(0, colon), port);
+    return std::make_pair(addr.substr(pos, colon-pos), port);
 }
 
 } // namespace detail
@@ -1637,7 +1639,9 @@ inline void Server::write_response(Stream& strm, bool last_connection, const Req
             res.set_header("Content-Type", "text/plain");
         }
     }
-    res.set_header("Content-Length", std::to_string(res.body.size()).c_str());
+    if (!res.has_header("Content-Length") && res.get_header_value("Connection") != "keep-alive") {
+        res.set_header("Content-Length", std::to_string(res.body.size()).c_str());
+    }
     detail::write_headers(strm, res);
 
     // Body
