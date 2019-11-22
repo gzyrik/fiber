@@ -72,6 +72,7 @@ static TLS_CTX RTMP_TLS_ctx;
 static const int packetSize[] = { 12, 8, 4, 1 };
 
 bool RTMP_ctrlC;
+int32_t RTMP_streamNextId = 1;
 
 const char RTMPProtocolStrings[][7] = {
   "RTMP",
@@ -3356,8 +3357,7 @@ HandleInvoke(RTMP *r, bool bServer, RTMPPacket *packet, unsigned offset)
   }
   else if (AVMATCH(&method, &av_createStream))
   {
-    static int32_t streamID = 0;
-    SendResultNumber(r, txn, ++streamID);
+    SendResultNumber(r, txn, RTMP_streamNextId++);
   }
   else if (AVMATCH(&method, &av_releaseStream))
   {//TODO
@@ -4629,7 +4629,7 @@ RTMP_Serve(RTMP *r, int sockfd, void *sslCtx)
 void
 RTMP_Close(RTMP *r)
 {
-  CloseInternal(r, 0);
+  if (r) CloseInternal(r, 0);
 }
 
 static void

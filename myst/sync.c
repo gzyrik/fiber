@@ -42,8 +42,8 @@
 #include <stdlib.h>
 #include <time.h>
 #include <errno.h>
+#include <string.h>
 #include "common.h"
-
 
 extern time_t _st_curr_time;
 extern st_utime_t _st_last_tset;
@@ -368,5 +368,170 @@ int st_mutex_trylock(_st_mutex_t *lock)
   lock->owner = _ST_CURRENT_THREAD();
 
   return 0;
+}
+
+struct __st_chan_ctx {
+  void* ptr;
+  struct __st_chan_ctx* next;
+};
+struct _st_chan {
+  int ref_count;
+  struct _st_cond* cond;
+  size_t capacity, num; 
+  struct __st_chan_ctx *ctx[2];/* 0-pushing, 1-poping, ctx[0] = this if closed */
+  size_t elem_size;
+  /*< optional by elem_size >*/
+  size_t head;
+  char queue[0];
+};
+
+st_chan_t st_chan_new(size_t capacity, size_t elem_size)
+{
+  struct _st_chan *chan;
+  size_t qsize = capacity * elem_size;
+
+  chan = (struct _st_chan *) calloc(1,
+    qsize > 0 ? offsetof(struct _st_chan, queue) + qsize : offsetof(struct _st_chan, head));
+  if (chan) {
+    chan->capacity = capacity;
+    chan->elem_size = elem_size;
+    chan->ref_count = 1;
+  }
+  return chan;
+}
+
+static void chan_append_ctx(struct __st_chan_ctx* tail, struct __st_chan_ctx* ctx)
+{
+  while (tail->next) tail = tail->next;
+  tail->next = ctx;
+}
+
+static void chan_remove_ctx(struct __st_chan_ctx* prev, struct __st_chan_ctx* ctx)
+{
+  while (prev->next != ctx) prev = prev->next;
+  prev->next = ctx->next;
+}
+
+static int chan_wait(struct _st_chan* chan, int idx, void* ptr, st_utime_t dur)
+{
+  struct __st_chan_ctx ctx = {ptr, NULL};
+  if (!dur) {
+    errno = ETIME;
+    return -1;
+  }
+  else if (chan->ref_count == 1){
+    errno = EDEADLK;
+    return -1;
+  }
+
+  if (chan->ctx[idx])
+    chan_append_ctx(chan->ctx[idx], &ctx);
+  else
+    chan->ctx[idx] = &ctx;
+
+  if (chan->cond == NULL)
+    chan->cond = st_cond_new();
+  if (st_cond_timedwait(chan->cond, dur) < 0) {
+    if (chan == (st_chan_t)chan->ctx[0]) /* closed */
+      errno = EINTR;
+    else if (chan->ctx[idx] == &ctx)
+      chan->ctx[idx] = chan->ctx[idx]->next;
+    else
+      chan_remove_ctx(chan->ctx[idx], &ctx);
+    return -1;
+  }
+  if (chan == (st_chan_t)chan->ctx[0]) {
+    errno = EINTR; /* closed */
+    return -1;
+  }
+  return 0;
+}
+
+st_chan_t st_chan_addref(st_chan_t chan, int mustalive)
+{
+  if (!chan)
+    return NULL;
+  else if (mustalive && chan == (st_chan_t)chan->ctx[0])
+    return NULL; /* closed */
+  chan->ref_count++;
+  return chan;
+}
+
+int st_chan_alive(st_chan_t chan)
+{
+  return chan && chan != (st_chan_t)chan->ctx[0];
+}
+
+int st_chan_release(st_chan_t *p, int close)
+{
+  st_chan_t chan = *p;
+  if (!chan) return -1;
+  *p = NULL;
+  chan->ref_count--;
+  if (chan->ref_count == 0) {
+    if (chan->cond)
+      st_cond_destroy(chan->cond);
+    free(chan);
+    return 0;
+  }
+  else if (chan != (st_chan_t)chan->ctx[0] && close) {
+    chan->ctx[0] = (void*)chan;
+    if (chan->cond)
+      st_cond_broadcast(chan->cond);
+  }
+  return chan->ref_count;
+}
+
+int st_chan_push(st_chan_t chan, const void* ptr, st_utime_t timeout)
+{
+  if (!chan || chan == (st_chan_t)chan->ctx[0]) {
+    errno = EINVAL; /* closed */
+    return -1;
+  }
+  else if (chan->num < chan->capacity) {
+    if(chan->elem_size > 0 && ptr) {
+      memcpy(chan->queue + ((chan->num + chan->head) % chan->capacity)
+        * chan->elem_size, ptr, chan->elem_size);
+    }
+    chan->num++;
+    return chan->num;
+  }
+  else if (chan->ctx[1] == NULL) /* poping */
+    return chan_wait(chan, 0, (void*)ptr, timeout);
+
+  if (chan->elem_size > 0 && ptr &&
+    chan->ctx[1]->ptr != NULL && chan->ctx[1]->ptr != ptr) {
+    memcpy(chan->ctx[1]->ptr, ptr, chan->elem_size);
+  }
+  chan->ctx[1] = chan->ctx[1]->next;
+  return st_cond_signal(chan->cond);
+}
+
+int st_chan_pop(st_chan_t chan, void* ptr, st_utime_t timeout)
+{
+  if (chan->num > 0) {
+    if (chan->elem_size > 0) {
+      if (ptr)
+        memcpy(ptr, chan->queue + chan->head * chan->elem_size, chan->elem_size);
+      chan->head++;
+      if (chan->head >= chan->capacity)
+        chan->head = 0;
+    }
+    chan->num--;
+    return chan->num;
+  }
+  else if (!chan || chan == (st_chan_t)chan->ctx[0]) {
+    errno = EINVAL; /* closed */
+    return -1;
+  }
+  else if (chan->ctx[0] == NULL) /* pushing */
+    return chan_wait(chan, 1, ptr, timeout);
+
+  if (chan->elem_size > 0 && ptr && 
+    chan->ctx[0]->ptr != NULL && chan->ctx[0]->ptr != ptr) {
+    memcpy(ptr, chan->ctx[0]->ptr, chan->elem_size);
+  }
+  chan->ctx[0] = chan->ctx[0]->next;
+  return st_cond_signal(chan->cond);
 }
 

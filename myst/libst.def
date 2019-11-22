@@ -48,7 +48,13 @@ st_utime
 st_utime_last_clock 
 st_write 
 st_write_resid 
-st_writev 
+st_writev
+st_chan_new
+st_chan_addref
+st_chan_alive
+st_chan_release
+st_chan_push
+st_chan_pop
 _st_errno
 closesocket
 bind

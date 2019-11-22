@@ -63,6 +63,8 @@ struct iovec {
 #include <poll.h>
 typedef int SOCKET;
 #define WSAAPI
+#undef closesocket
+#define closesocket(s)	close(s)
 #endif
 #include <sys/types.h>
 #include <time.h>
@@ -104,6 +106,7 @@ typedef struct _st_thread * st_thread_t;
 typedef struct _st_cond *   st_cond_t;
 typedef struct _st_mutex *  st_mutex_t;
 typedef struct _st_netfd *  st_netfd_t;
+typedef struct _st_chan *   st_chan_t;
 #ifdef ST_SWITCH_CB
 typedef void (*st_switch_cb_t)(void);
 #endif
@@ -127,6 +130,7 @@ extern st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb);
 #endif
 
 extern st_thread_t st_thread_self(void);
+/** WARNING: MUST destruction local object manually before this */
 extern void st_thread_exit(void *retval);
 extern int st_thread_join(st_thread_t thread, void **retvalp);
 extern void st_thread_interrupt(st_thread_t thread);
@@ -152,6 +156,12 @@ extern int st_mutex_destroy(st_mutex_t lock);
 extern int st_mutex_lock(st_mutex_t lock);
 extern int st_mutex_unlock(st_mutex_t lock);
 extern int st_mutex_trylock(st_mutex_t lock);
+extern st_chan_t st_chan_new(size_t capacity, size_t elem_size);
+extern st_chan_t st_chan_addref(st_chan_t chan, int mustalive);
+extern int st_chan_alive(st_chan_t chan);
+extern int st_chan_release(st_chan_t *chan, int close);
+extern int st_chan_push(st_chan_t chan, const void* ptr, st_utime_t timeout);
+extern int st_chan_pop(st_chan_t chan, void* ptr, st_utime_t timeout);
 
 extern int st_key_create(int *keyp, void (*destructor)(void *));
 extern int st_key_getlimit(void);
@@ -226,16 +236,16 @@ extern void _st_iterate_threads(void);
 class st_go {
   mutable int stack_size_;
   const char* file_; const int lineno_;
-  typedef std::function<void()> detached_type;
-  typedef std::function<void*()> joinable_type;
+  typedef std::function<void()> detached_t;
+  typedef std::function<void*()> joinable_t;
   static void* __st_detached_functor(void* p) {
-    auto f= reinterpret_cast<detached_type*>(p);
+    auto f= reinterpret_cast<detached_t*>(p);
     (*f)();
     delete f;
     return nullptr;
   }
   static void* __st_joinable_functor(void* p) {
-    auto f= reinterpret_cast<joinable_type*>(p);
+    auto f= reinterpret_cast<joinable_t*>(p);
     void* ret = (*f)();
     delete f;
     return ret;
@@ -247,216 +257,57 @@ public:
   { (void)file_, (void)lineno_; }
   const st_go& operator,(int stack_size) const
   { stack_size_ = stack_size; return *this; }
-  const st_go& operator,(detached_type const&f) const {
-    st_thread_create(__st_detached_functor,
-      new detached_type(f), false, stack_size_);
+  template <typename T> const st_go& operator,(T &&f) const {
+    auto* p = new detached_t(std::move(f));
+    st_thread_create(__st_detached_functor, p, false, stack_size_);
     return *this;
   }
 };
-inline st_thread_t st_thread(std::function<void*()>const & f, int stack_size = 0) {
-  return st_thread_create(st_go::__st_joinable_functor,
-    new st_go::joinable_type(f), true, stack_size);
+template <typename T> st_thread_t st_thread(T &&f, int stack_size = 0) {
+  auto* p = new st_go::joinable_t(std::move(f));
+  return st_thread_create(st_go::__st_joinable_functor, p, true, stack_size);
 }
 #if !defined(go) && !defined(ST_NOT_DEFINE_GO)
 #define go st_go(__FILE__, __LINE__),
 #endif
 
-#include <memory>
+/* 模仿 golang 实现相似的 chan */
 class st_chan {
 protected:
-class __st_pipe {//无缓冲的管线
-  struct __st_cxt { //阻塞的上下文
-    void* value; __st_cxt* next;
-    void append(__st_cxt* cxt) {
-      auto tail = this;
-      while (tail->next) tail = tail->next;
-      tail->next = cxt;
-    }
-    void remove(__st_cxt* cxt) {
-      auto prev = this;
-      while (prev->next) {
-        if (prev->next == cxt) {
-          prev->next = cxt->next;
-          return;
-        }
-        prev = prev->next;
-      }
-    }
-  } *pushing_, *poping_;//阻塞的单向队列
-  bool closed_; st_cond_t cond_;
-  virtual void assign(void* a, const void* b) = 0;
-  bool wait(__st_cxt*& waiting, void* t, st_utime_t dur) {
-    if (!dur) return false;
-    __st_cxt cxt = {t, nullptr};
-    if (waiting) waiting->append(&cxt);
-    else waiting = &cxt;
-    if (!cond_) cond_ = st_cond_new();
-    if (st_cond_timedwait(cond_, dur) < 0) {
-      if (closed_) ;
-      else if (waiting == &cxt) waiting = waiting->next;
-      else waiting->remove(&cxt);
-      return false;
-    }
-    return !closed_;
-  }
+  mutable st_chan_t chan_;
+  mutable int ret_;
+  st_chan(): chan_(nullptr), ret_(0) {}
 public:
-  virtual bool push(const void* t, st_utime_t dur=ST_UTIME_NO_TIMEOUT) {
-    if (closed_) return false;
-    else if (!poping_)
-      return wait(pushing_, (void*)t, dur);
-    if (poping_->value && t && poping_->value != t)
-      assign(poping_->value, t);
-    poping_ = poping_->next;
-    st_cond_signal(cond_);
-    return true;
-  }
-  virtual bool pop(void* t, st_utime_t dur=ST_UTIME_NO_TIMEOUT) {
-    if (closed_) return false;
-    else if (!pushing_)
-      return wait(poping_, t, dur);
-    if (t && pushing_->value && t != pushing_->value)
-      assign(t, pushing_->value);
-    pushing_ = pushing_->next;
-    st_cond_signal(cond_);
-    return true;
-  }
-  void close() {
-    if (closed_) return;
-    closed_ = true;
-    if (cond_) st_cond_broadcast(cond_);
-  }
-  explicit __st_pipe()
-    : pushing_(nullptr), poping_(nullptr),
-    closed_(false), cond_(nullptr) {}
-  virtual ~__st_pipe() {
-    if (cond_) st_cond_destroy(cond_);
-  }
+  st_chan(const st_chan& ch): chan_(st_chan_addref(ch.chan_, true)), ret_(ch.ret_) {}
+  st_chan(st_chan&& ch): chan_(ch.chan_), ret_(ch.ret_) { ch.chan_ = nullptr; }
+  ~st_chan() { st_chan_release(&chan_, false); }
+  void close() const { st_chan_release(&chan_, true); }
+  void release() const { st_chan_release(&chan_, false); }
+  int push(st_utime_t timeout = ST_UTIME_NO_TIMEOUT) const { return ret_ = st_chan_push(chan_, nullptr, timeout); }
+  int pop(st_utime_t timeout = ST_UTIME_NO_TIMEOUT) const { return ret_ = st_chan_pop(chan_, nullptr, timeout); }
+  operator bool() const { return !ret_ && chan_ && st_chan_alive(chan_); }
+  const st_chan& operator<< (std::nullptr_t/*ignore*/) const { ret_ = push(); return *this; }
+  const st_chan& operator>> (std::nullptr_t/*ignore*/) const { ret_ = pop(); return *this; }
+  const st_chan& operator= (std::nullptr_t/*ignore*/) const { release(); return *this; }
+  const st_chan& operator= (const st_chan& ch) const
+  { release(); chan_ = st_chan_addref(ch.chan_, true); ret_ = ch.ret_; return *this; }
 };
-  mutable std::shared_ptr<__st_pipe> queue_;
-  mutable bool failed_ = false;//>>或<<操作失败
-public:
-  const st_chan& operator= (std::nullptr_t/*ignore*/) const {
-    queue_.reset();
-    return *this;
-  }
-  const st_chan& operator<< (std::nullptr_t/*ignore*/) const {
-    if (!queue_ || !queue_->push(nullptr))
-      failed_ = true;
-    return *this;
-  }
-  const st_chan& operator>> (std::nullptr_t/*ignore*/) const {
-    if (!queue_ || !queue_->pop(nullptr))
-      failed_ = true;
-    return *this;
-  }
-  bool push(std::nullptr_t/*ignore*/, st_utime_t dur) const {
-    if (!queue_) return false;
-    return queue_->push(nullptr, dur);
-  }
-  bool pop(std::nullptr_t/*ignore*/, st_utime_t dur) const {
-    if (!queue_) return false;
-    return queue_->pop(nullptr, dur);
-  }
-  bool push(const void* t, st_utime_t dur) const {
-    if (!queue_) return false;
-    return queue_->push(t, dur);
-  }
-  bool pop(void* t, st_utime_t dur) const {
-    if (!queue_) return false;
-    return queue_->pop(t, dur);
-  }
-  void close() const {
-    if (queue_) queue_->close();
-    queue_.reset();
-  }
-  operator bool() const { return (bool)queue_ && !failed_; }
-};
-#include <queue>
-/* 模仿 golang 实现相似的 chan */
+
+/* 只允许可使用 memcpy 的简单数据类型 */
 template <class T> class __st_chan final : public st_chan {
-  struct mypipe : public __st_pipe {
-    void assign(void* a, const void* b) override {
-      *reinterpret_cast<T*>(a) = *reinterpret_cast<const T*>(b);
-    }
-  };
-  struct myqueue : public mypipe { //带缓冲的队列
-    const size_t capacity_;
-    std::queue<T> queue_;
-    bool push(const void* t, st_utime_t dur) override {
-      if (queue_.size() >= capacity_)
-        return __st_pipe::push(t, dur);
-      queue_.emplace(*(T*)t);
-      return true;
-    }
-    bool pop(void* t, st_utime_t dur) override {
-      if (queue_.empty()) 
-        return __st_pipe::pop(t, dur);
-      else if (t)
-        std::swap(*(T*)t, queue_.front());
-      queue_.pop();
-      return true;
-    }
-    explicit myqueue(size_t capacity) : capacity_(capacity){}
-  };
 public:
-  using st_chan::operator>>;
-  using st_chan::operator<<;
-  explicit __st_chan(size_t capacity = 0) {
-    if (capacity > 0)
-      queue_ = std::make_shared<myqueue>(capacity);
-    else
-      queue_ = std::make_shared<mypipe>();
-  }
-  const __st_chan& operator= (std::nullptr_t/*ignore*/) const {
-    queue_.reset();
-    return *this;
-  }
-  const __st_chan& operator<< (const T& t) const {
-    if (!queue_ || !queue_->push(&t))
-      failed_ = true;
-    return *this;
-  }
-  const __st_chan& operator>> (T& t) const {
-    if (!queue_ || !queue_->pop(&t))
-      failed_ = true;
-    return *this;
-  }
-  bool push(const T& t, st_utime_t dur) const {
-    if (!queue_) return false;
-    return queue_->push(&t, dur);
-  }
-  bool pop(T& t, st_utime_t dur) const {
-    if (!queue_) return false;
-    return queue_->pop(&t, dur);
-  }
+  static_assert(std::is_pod<T>::value, "T not POD type");
+  explicit __st_chan(size_t capacity = 0) { chan_ = st_chan_new(capacity, sizeof(T)); }
+  int push(const T& t, st_utime_t timeout = ST_UTIME_NO_TIMEOUT) const { return st_chan_push(chan_, &t, timeout); }
+  int pop(T& t, st_utime_t timeout = ST_UTIME_NO_TIMEOUT) const { return st_chan_pop(chan_, &t, timeout); }
+  const __st_chan& operator<< (const T& t) const { ret_ = push(t); return *this; }
+  const __st_chan& operator>> (T& t) const { ret_ = pop(t); return *this; }
+  using st_chan::operator=; using st_chan::operator>>; using st_chan::operator<<;
 };
 template <> class __st_chan<void> final : public st_chan {
-  struct myqueue : public __st_pipe {
-    const size_t capacity_;
-    size_t queue_;
-    void assign(void*, const void*) override {}
-    bool push(const void*, st_utime_t dur) override {
-      if (queue_ >= capacity_)
-        return __st_pipe::push(nullptr, dur);
-      queue_++;
-      return true;
-    }
-    bool pop(void*, st_utime_t dur) override {
-      if (queue_ == 0) 
-        return __st_pipe::pop(nullptr, dur);
-      --queue_;
-      return true;
-    }
-    explicit myqueue(size_t capacity)
-      : capacity_(capacity), queue_(0){}
-  };
 public:
-  explicit __st_chan(size_t capacity = 0){
-    queue_ = std::make_shared<myqueue>(capacity);
-  }
-  using st_chan::operator=;
-  using st_chan::operator>>;
-  using st_chan::operator<<;
+  explicit __st_chan(size_t capacity = 0) { chan_ = st_chan_new(capacity, 0); }
+  using st_chan::operator=; using st_chan::operator>>; using st_chan::operator<<;
 };
 #if !defined(chan) && !defined(ST_NOT_DEFINE_CHAN)
 template <typename T>

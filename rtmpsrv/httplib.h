@@ -161,6 +161,7 @@ struct Response {
     int         status;
     Headers     headers;
     std::string body;
+    socket_t    sock;
 
     bool has_header(const char* key) const;
     std::string get_header_value(const char* key) const;
@@ -519,6 +520,7 @@ inline bool read_and_close_socket(socket_t sock, size_t keep_alive_max_count, T 
 {
     bool ret = false;
 
+    SocketStream strm(sock);
     if (keep_alive_max_count > 0) {
         auto keep_alive_count = keep_alive_max_count;
         while (keep_alive_count > 0 &&
@@ -526,7 +528,6 @@ inline bool read_and_close_socket(socket_t sock, size_t keep_alive_max_count, T 
                    CPPHTTPLIB_KEEPALIVE_TIMEOUT_SECOND,
                    CPPHTTPLIB_KEEPALIVE_TIMEOUT_USECOND) > 0) {
             keep_alive_count--;
-            SocketStream strm(sock);
             auto connection_close = (keep_alive_count == 0);
 
             ret = callback(strm, keep_alive_count, connection_close);
@@ -535,7 +536,6 @@ inline bool read_and_close_socket(socket_t sock, size_t keep_alive_max_count, T 
             }
         }
     } else {
-        SocketStream strm(sock);
         size_t dummy_keep_alive_count = 0;
         auto dummy_connection_close = true;
         ret = callback(strm, dummy_keep_alive_count, dummy_connection_close);
@@ -2256,7 +2256,7 @@ inline bool read_and_close_socket_ssl(
     SSL_connect_or_accept(ssl);
 
     bool ret = false;
-
+    SSLSocketStream strm(sock, ssl);
     if (keep_alive_max_count > 0) {
         auto keep_alive_count = keep_alive_max_count;
         while (keep_alive_count > 0 &&
@@ -2264,7 +2264,6 @@ inline bool read_and_close_socket_ssl(
                    CPPHTTPLIB_KEEPALIVE_TIMEOUT_SECOND,
                    CPPHTTPLIB_KEEPALIVE_TIMEOUT_USECOND) > 0) {
             keep_alive_count--;
-            SSLSocketStream strm(sock, ssl);
             auto connection_close = (keep_alive_count == 0);
 
             ret = callback(strm, keep_alive_count, connection_close);
@@ -2273,7 +2272,6 @@ inline bool read_and_close_socket_ssl(
             }
         }
     } else {
-        SSLSocketStream strm(sock, ssl);
         size_t dummy_keep_alive_count = 0;
         auto dummy_connection_close = true;
         ret = callback(strm, keep_alive_count, dummy_connection_close);

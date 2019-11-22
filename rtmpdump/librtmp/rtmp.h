@@ -67,6 +67,7 @@ extern "C" {
 extern const char RTMPProtocolStringsLower[][7];
 extern const AVal RTMP_DefaultFlashVer;
 extern bool RTMP_ctrlC;
+extern int32_t RTMP_streamNextId;
 
 uint32_t RTMP_GetTime(void);
 
