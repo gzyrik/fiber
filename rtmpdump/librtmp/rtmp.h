@@ -201,7 +201,7 @@ void RTMPPacket_Free(RTMPPacket *p);
   } RTMP_LNK;
 
   /* state for read() wrapper */
-  typedef struct RTMP_READ
+  typedef struct RTMPReader
   {
     char *buf;
     char *bufpos;
@@ -230,7 +230,8 @@ void RTMPPacket_Free(RTMPPacket *p);
     uint32_t nInitialFrameSize;
     uint32_t nIgnoredFrameCounter;
     uint32_t nIgnoredFlvFrameCounter;
-  } RTMP_READ;
+  } RTMPReader;
+  int RTMPPacket_Read(RTMPPacket *packet, RTMPReader* r, char *buf, int buflen);
 
   typedef struct RTMP_METHOD RTMP_METHOD;
   typedef struct RTMP RTMP;
@@ -281,7 +282,7 @@ void RTMPPacket_Free(RTMPPacket *p);
     int m_unackd;
     AVal m_clientID;
 
-    RTMP_READ m_read;
+    RTMPReader m_read;
     RTMPPacket m_write;
     RTMPSockBuf m_sb;
     RTMP_LNK Link;

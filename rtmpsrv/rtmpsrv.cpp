@@ -8,11 +8,7 @@
 #define CPPHTTPLIB_ST_SUPPORT //必须开启 HOOK RTMP 内部的 sock 操作
 //#define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
-void HUB_MarkFlvStart(const std::string& app, const std::string& playpath, uint32_t startMs);
-uint32_t HUB_AddRTMP(RTMP* r, int32_t streamId, bool isPlayer);//返回对应FLV源的开始时刻
-uint32_t HUB_AddSock(int sock, const std::string& app, const std::string& playpath, int32_t streamId, bool isPlayer);//返回对应FLV源的开始时刻
-void HUB_Remove(int32_t streamId, RTMP* r, int sock=0);
-void HUB_Publish(int32_t streamId, RTMPPacket* packet);
+#include "rtmphub.h"
 static int _httpPort = 5562;
 int _rtmpPort = 0;
 typedef std::unordered_map<std::string, std::string> FileAddrMap;//文件regex-URL -> 推送服务地址
@@ -81,7 +77,7 @@ static void ProcessPackets(int32_t streamId, RTMP* rtmp, RTMPPacket* packet)
       HUB_Publish(streamId, packet);
     RTMPPacket_Free(packet);
   }
-  HUB_Remove(streamId, rtmp);
+  HUB_Remove(streamId);
 }
 static void* pull_file_thread(RTMP* rtmp, int32_t streamId)
 {
@@ -129,11 +125,11 @@ static bool setupPushing(const std::string& app, const std::string& playpath, in
       if (!(rtmp = ConnectURL(url, false)))
         break;
       //Puller的流ID由对应服务分配, 因此本地只能使用-streamId
-      st_thread_t t = st_thread([=] { return pull_file_thread(rtmp, -streamId); });
+      st_thread_t t = st_go::create([=] { return pull_file_thread(rtmp, -streamId); });
       if (!t)
         break;
 
-      HUB_AddRTMP(rtmp, -streamId, false);
+      HUB_AddRtmp(*rtmp, -streamId, false);
       _childRtmps.emplace(t);
       return true;
     } while (0);
@@ -169,9 +165,10 @@ static void* serve_client_thread(void* sockfd)
 
   RTMP_PrintInfo(&rtmp, RTMP_LOGCRIT, "Accept");
 
-  if (!HUB_AddRTMP(&rtmp, streamId, RTMP_State(&rtmp)&RTMP_STATE_PLAYING)
+  if (!HUB_AddRtmp(rtmp, streamId, RTMP_State(&rtmp)&RTMP_STATE_PLAYING)
     && !setupPushing(&rtmp, streamId)) {
     RTMP_Log(RTMP_LOGERROR, "setup push failed");
+    HUB_Remove(streamId);
     goto cleanup;
   }
 
@@ -347,37 +344,48 @@ static bool UpdateFileAddrs(const std::string& body, FileAddrMap& fileAddrs)
   }
   return true;
 }
-
+static void FindFlvFiles(const std::string& dir, std::unordered_map<std::string, std::string>& files)
+{
+  static const std::regex flv(R"(.*\.flv)");
+  auto& flist = files[dir];
+#ifdef _WIN32
+  struct _finddata_t finfo;
+  auto handle = _findfirst((dir + "/*").c_str(), &finfo);
+  if (handle != -1) {
+    do {
+      if (finfo.name[0] == '.')
+        ;
+      else if (finfo.attrib & _A_SUBDIR)
+        FindFlvFiles(dir + "/" + finfo.name, files);
+      else if (std::regex_match (finfo.name, flv))
+        flist.append(finfo.name).push_back(',');
+    } while (_findnext(handle, &finfo) == 0);
+    _findclose(handle);
+  }
+#else
+  DIR *dirp = opendir (dir.c_str());
+  if (dirp) {
+    struct dirent *entry = readdir (dirp);
+    while (entry) {
+      if (entry->d_name[0] == '.')
+        ;
+      else if (entry->d_type == DT_DIR) 
+        FindFlvFiles(dir + "/" + entry->d_name, files);
+      else if (std::regex_match (entry->d_name, flv))
+        flist.append(entry->d_name).push_back(',');
+      entry=readdir (dirp);
+    }
+    closedir (dirp);
+  }
+#endif
+}
 static void onGetFiles(const httplib::Request& req, httplib::Response& res)
 {
   std::unordered_map<std::string, std::string> files;
   for (auto& iter: _fileAddrs)
     files[iter.second].append(iter.first).push_back(',');
 
-  auto& local = files["."];
-#ifdef _WIN32
-  struct _finddata_t finfo;
-  auto handle = _findfirst("*.flv", &finfo);
-  if (handle != -1) {
-    do {
-      local.append(finfo.name).push_back(',');
-    } while (_findnext(handle, &finfo) == 0);
-    _findclose(handle);
-  }
-#else
-  std::regex flv(R"(.*\.flv)");
-  DIR *dirp = opendir (".");
-  if (dirp) {
-    struct dirent *entry=readdir (dirp);
-    while (entry) {
-      if (std::regex_match (entry->d_name, flv))
-        local.append(entry->d_name).push_back(',');
-      entry=readdir (dirp);
-    }
-    closedir (dirp);
-  }
-#endif
-
+  FindFlvFiles(".", files);
   std::ostringstream oss;
   for (auto& iter: files){
     if (iter.second.empty()) continue;
@@ -437,7 +445,7 @@ static void onPostPushs(const httplib::Request& req, httplib::Response& res)
     if (!(fp = openFile(rtmp)))
       ERR_BREAK(400);
 
-    st_thread_t t = st_thread([=] { return push_file_thread(rtmp, fp); });
+    st_thread_t t = st_go::create([=] { return push_file_thread(rtmp, fp); });
     if (!t)
       ERR_BREAK(503);
 
@@ -475,12 +483,47 @@ static void onDeletePushById(const httplib::Request& req, httplib::Response& res
   //st_thread_interrupt(thread);
   st_thread_join(thread, nullptr);
 }
+struct HttpPlayer : public HubPlayer
+{
+  std::shared_ptr<httplib::Stream> stream;
+  char chunked[64];
+  char buf[4096];
+  RTMPReader read;
+  virtual bool UpdateChunkSize(int chunkSize) override { return true; }
+  virtual bool SendPacket(RTMPPacket* packet) override {
+    if (stream.unique()) return false;
+    do {
+      int ret = RTMPPacket_Read(packet, &read, buf, sizeof(buf)-2);
+      if (ret <= 0) break;
+      size_t slen = sprintf(chunked, "%x\r\n",ret);
+      if (stream->write(chunked, slen) < 0)
+        return false;
+      buf[ret++] = '\r'; buf[ret++] = '\n';
+      if (stream->write(buf, ret) < 0)
+        return false;
+      packet = NULL;
+    } while (read.buf != NULL);
+    return true;
+  }
+public:
+  HttpPlayer(std::shared_ptr<httplib::Stream>& s):stream(s){
+    memset(&read, 0, sizeof(read));
+  }
+  virtual ~HttpPlayer() override {
+    stream->close();
+    if (read.buf != NULL)
+      free(read.buf);
+  }
+};
 static void onHttpGetFlv(const httplib::Request& req, httplib::Response& res)
 {
   int32_t streamId = RTMP_streamNextId++;
-  if (!HUB_AddSock(res.sock, req.matches[1], req.matches[2], streamId, true)
-    && !setupPushing(req.matches[1], req.matches[2], streamId)) {
+  const auto& app=req.matches[1], playpath = req.matches[2];
+  if (!HUB_AddPlayer(app, playpath, streamId,
+    std::unique_ptr<HubPlayer>(new HttpPlayer(res.stream)))
+    && !setupPushing(app, playpath, streamId)) {
     RTMP_Log(RTMP_LOGERROR, "setup push failed");
+    HUB_Remove(streamId);
     res.status = 400;
     return;
   }
@@ -515,14 +558,27 @@ int main()
   httplib::Server http;
   RTMP_debuglevel = RTMP_LOGWARNING;
   http.Get("/", [&](const httplib::Request& req, httplib::Response& res){
-    const char * help = 
-      "curl -X POST 127.0.0.1:5562/rtmp -d 1\n"
-      "curl -X DELETE 127.0.0.1:5562/rtmp\n"
+    const char * help = u8""
+      "- GET /files   all regex-URL-List\r\n"
+      "- PUT /files   set regex-URL-List\r\n"
+      "- PATCH /files update regex-URL-List\r\n"
+      "\r\n"
+      "- GET /rtmp    RTMP-SRV stats\r\n"
+      "- POST /rtmp   start RTMP-SRV\r\n"
+      "- DELETE /rtmp close RTMP-SRV\r\n"
+      "\r\n"
+      "- GET /pushs    all pushing stats\r\n"
+      "- POST /pushs   start new pushing task\r\n"
+      "- GET /pushs/ID pushing task ID stats\r\n"
+      "- DELETE /pushs/ID force close pushing task ID\r\n"
+      "\r\nExamples:\r\n"
+      "curl -X POST 127.0.0.1:5562/rtmp -d 1\r\n"
+      "curl -X DELETE 127.0.0.1:5562/rtmp\r\n"
       "ffmpeg -i theory.flv -f segment -segment_time 10 "
-      "-segment_list theory.m3u8 theory/theory%d.ts\n"
+      "-segment_list theory.m3u8 theory/theory%d.ts\r\n"
       "./ffmpeg -f avfoundation -framerate 30 -i 0 "
-      "-vcodec libx264 -f flv rtmp://127.0.0.1/app/xxx\n"
-      "./rtmpdump  -r rtmp://127.0.0.1/app/xxx -o xxx.flv\n";
+      "-vcodec libx264 -f flv rtmp://127.0.0.1/app/xxx\r\n"
+      "./rtmpdump  -r rtmp://127.0.0.1/app/xxx -o xxx.flv\r\n";
     res.set_content(help, "text/html");
   })
   .Post("/loglevel", [&](const httplib::Request& req, httplib::Response& res) {

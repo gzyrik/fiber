@@ -20,6 +20,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="httplib.h" />
+    <ClInclude Include="rtmphub.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="rtmphub.cpp" />

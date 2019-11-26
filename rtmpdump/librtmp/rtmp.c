@@ -1319,6 +1319,10 @@ RTMP_DeleteStream(RTMP *r)
   r->m_stream_id = -1;
 }
 
+/* Read from the stream until we get a media packet.
+ * Returns -3 if Play.Close/Stop, -2 if fatal error, -1 if no more media
+ * packets, 0 if ignorable error, >0 if there is a media packet
+ */
 int
 RTMP_GetNextMediaPacket(RTMP *r, RTMPPacket *packet)
 {
@@ -1338,6 +1342,7 @@ RTMP_GetNextMediaPacket(RTMP *r, RTMPPacket *packet)
     if (!bHasMediaPacket)
     {
       RTMPPacket_Free(packet);
+      r->m_read.status = RTMP_READ_EOF;
     }
     else if (r->m_pausing == 3)
     {

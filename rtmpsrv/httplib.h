@@ -38,7 +38,6 @@
 #define strcasecmp _stricmp
 #endif
 
-typedef SOCKET socket_t;
 #else
 #include <pthread.h>
 #include <unistd.h>
@@ -51,7 +50,7 @@ typedef SOCKET socket_t;
 #include <sys/socket.h>
 #include <sys/select.h>
 
-typedef int socket_t;
+typedef int SOCKET;
 #define INVALID_SOCKET (-1)
 #define closesocket close
 #endif
@@ -156,12 +155,25 @@ struct Request {
     MultipartFile get_file_value(const char* key) const;
 };
 
+class Stream {
+public:
+    virtual ~Stream() {}
+    virtual void close() = 0;
+    virtual int read(char* ptr, size_t size) = 0;
+    virtual int write(const char* ptr, size_t size1) = 0;
+    virtual int write(const char* ptr) = 0;
+    virtual std::string get_remote_addr() = 0;
+
+    template <typename ...Args>
+    void write_format(const char* fmt, const Args& ...args);
+};
+
 struct Response {
     std::string version;
     int         status;
     Headers     headers;
     std::string body;
-    socket_t    sock;
+    std::shared_ptr<Stream> stream;
 
     bool has_header(const char* key) const;
     std::string get_header_value(const char* key) const;
@@ -174,30 +186,18 @@ struct Response {
     Response() : status(-1) {}
 };
 
-class Stream {
-public:
-    virtual ~Stream() {}
-    virtual int read(char* ptr, size_t size) = 0;
-    virtual int write(const char* ptr, size_t size1) = 0;
-    virtual int write(const char* ptr) = 0;
-    virtual std::string get_remote_addr() = 0;
-
-    template <typename ...Args>
-    void write_format(const char* fmt, const Args& ...args);
-};
-
 class SocketStream : public Stream {
 public:
-    SocketStream(socket_t sock);
+    SocketStream(SOCKET sock);
     virtual ~SocketStream();
 
     virtual int read(char* ptr, size_t size);
     virtual int write(const char* ptr, size_t size);
     virtual int write(const char* ptr);
     virtual std::string get_remote_addr();
-
+    virtual void close() { ::closesocket(sock_); }
 private:
-    socket_t sock_;
+    SOCKET sock_;
 };
 
 class Server {
@@ -235,14 +235,14 @@ public:
     void stop();
 
 protected:
-    bool process_request(Stream& strm, size_t& keep_alive_count, bool& connection_close);
+    bool process_request(std::shared_ptr<Stream>& strm, size_t& keep_alive_count, bool& connection_close);
 
     size_t keep_alive_max_count_;
 
 private:
     typedef std::vector<std::pair<std::regex, Handler>> Handlers;
 
-    socket_t create_server_socket(const char* host, int port, int socket_flags) const;
+    SOCKET create_server_socket(const char* host, int port, int socket_flags) const;
     int bind_internal(const char* host, int port, int socket_flags);
     bool listen_internal();
 
@@ -253,10 +253,10 @@ private:
     bool parse_request_line(const char* s, Request& req);
     void write_response(Stream& strm, bool last_connection, const Request& req, Response& res);
 
-    virtual bool read_and_close_socket(socket_t sock);
+    virtual bool read_and_close_socket(SOCKET sock);
 
     bool        is_running_;
-    socket_t    svr_sock_;
+    SOCKET    svr_sock_;
     std::string base_dir_;
     Handlers    get_handlers_;
     Handlers    post_handlers_;
@@ -315,26 +315,27 @@ protected:
     const std::string host_and_port_;
 
 private:
-    socket_t create_client_socket() const;
+    SOCKET create_client_socket() const;
     bool read_response_line(Stream& strm, Response& res);
     void write_request(Stream& strm, Request& req);
 
-    virtual bool read_and_close_socket(socket_t sock, Request& req, Response& res);
+    virtual bool read_and_close_socket(SOCKET sock, Request& req, Response& res);
 };
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 class SSLSocketStream : public Stream {
 public:
-    SSLSocketStream(socket_t sock, SSL* ssl);
+    SSLSocketStream(SOCKET sock, SSL* ssl);
     virtual ~SSLSocketStream();
 
     virtual int read(char* ptr, size_t size);
     virtual int write(const char* ptr, size_t size);
     virtual int write(const char* ptr);
     virtual std::string get_remote_addr();
+    virtual void close() { ::closesocket(sock_); }
 
 private:
-    socket_t sock_;
+    SOCKET sock_;
     SSL* ssl_;
 };
 
@@ -348,7 +349,7 @@ public:
     virtual bool is_valid() const;
 
 private:
-    virtual bool read_and_close_socket(socket_t sock);
+    virtual bool read_and_close_socket(SOCKET sock);
 
     SSL_CTX* ctx_;
     std::mutex ctx_mutex_;
@@ -366,7 +367,7 @@ public:
     virtual bool is_valid() const;
 
 private:
-    virtual bool read_and_close_socket(socket_t sock, Request& req, Response& res);
+    virtual bool read_and_close_socket(SOCKET sock, Request& req, Response& res);
 
     SSL_CTX* ctx_;
     std::mutex ctx_mutex_;
@@ -464,12 +465,12 @@ private:
     std::string glowable_buffer_;
 };
 
-inline int close_socket(socket_t sock)
+inline int close_socket(SOCKET sock)
 {
     return closesocket(sock);
 }
 
-inline int select_read(socket_t sock, size_t sec, size_t usec)
+inline int select_read(SOCKET sock, size_t sec, size_t usec)
 {
 #ifndef CPPHTTPLIB_ST_SUPPORT
     fd_set fds;
@@ -486,7 +487,7 @@ inline int select_read(socket_t sock, size_t sec, size_t usec)
 #endif
 }
 
-inline bool wait_until_socket_is_ready(socket_t sock, size_t sec, size_t usec)
+inline bool wait_until_socket_is_ready(SOCKET sock, size_t sec, size_t usec)
 {
 #ifndef CPPHTTPLIB_ST_SUPPORT
     fd_set fdsr;
@@ -516,11 +517,11 @@ inline bool wait_until_socket_is_ready(socket_t sock, size_t sec, size_t usec)
 }
 
 template <typename T>
-inline bool read_and_close_socket(socket_t sock, size_t keep_alive_max_count, T callback)
+inline bool read_and_close_socket(SOCKET sock, size_t keep_alive_max_count, T callback)
 {
     bool ret = false;
 
-    SocketStream strm(sock);
+    std::shared_ptr<Stream> strm = std::make_shared<SocketStream>(sock);
     if (keep_alive_max_count > 0) {
         auto keep_alive_count = keep_alive_max_count;
         while (keep_alive_count > 0 &&
@@ -545,7 +546,7 @@ inline bool read_and_close_socket(socket_t sock, size_t keep_alive_max_count, T 
     return ret;
 }
 
-inline int shutdown_socket(socket_t sock)
+inline int shutdown_socket(SOCKET sock)
 {
 #ifdef _WIN32
     return shutdown(sock, SD_BOTH);
@@ -555,7 +556,7 @@ inline int shutdown_socket(socket_t sock)
 }
 
 template <typename Fn>
-socket_t create_socket(const char* host, int port, Fn fn, int socket_flags = 0)
+SOCKET create_socket(const char* host, int port, Fn fn, int socket_flags = 0)
 {
 #ifdef _WIN32
 #define SO_SYNCHRONOUS_NONALERT 0x20
@@ -632,7 +633,7 @@ socket_t create_socket(const char* host, int port, Fn fn, int socket_flags = 0)
     return INVALID_SOCKET;
 }
 
-inline void set_nonblocking(socket_t sock, bool nonblocking)
+inline void set_nonblocking(SOCKET sock, bool nonblocking)
 {
 #ifdef _WIN32
     auto flags = nonblocking ? 1UL : 0UL;
@@ -652,7 +653,7 @@ inline bool is_connection_error()
 #endif
 }
 
-inline std::string get_remote_addr(socket_t sock) {
+inline std::string get_remote_addr(SOCKET sock) {
     struct sockaddr_storage addr;
     socklen_t len = sizeof(addr);
 
@@ -1443,7 +1444,7 @@ inline void Stream::write_format(const char* fmt, const Args& ...args)
 }
 
 // Socket stream implementation
-inline SocketStream::SocketStream(socket_t sock): sock_(sock)
+inline SocketStream::SocketStream(SOCKET sock): sock_(sock)
 {
 }
 
@@ -1678,10 +1679,10 @@ inline bool Server::handle_file_request(Request& req, Response& res)
     return false;
 }
 
-inline socket_t Server::create_server_socket(const char* host, int port, int socket_flags) const
+inline SOCKET Server::create_server_socket(const char* host, int port, int socket_flags) const
 {
     return detail::create_socket(host, port,
-        [](socket_t sock, struct sockaddr *ai_addr, socklen_t ai_addrlen) -> bool {
+        [](SOCKET sock, struct sockaddr *ai_addr, socklen_t ai_addrlen) -> bool {
             if (::bind(sock, ai_addr, ai_addrlen)) {
                   return false;
             }
@@ -1739,7 +1740,7 @@ inline bool Server::listen_internal()
             continue;
         }
         */
-        socket_t sock = accept(svr_sock_, NULL, NULL);
+        SOCKET sock = accept(svr_sock_, NULL, NULL);
 
         if (sock == INVALID_SOCKET) {
             if (svr_sock_ != INVALID_SOCKET) {
@@ -1828,12 +1829,12 @@ inline bool Server::dispatch_request(Request& req, Response& res, Handlers& hand
     return false;
 }
 
-inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool& connection_close)
+inline bool Server::process_request(std::shared_ptr<Stream>& strm, size_t& keep_alive_count, bool& connection_close)
 {
     const auto bufsiz = 2048;
     char buf[bufsiz];
 
-    detail::stream_line_reader reader(strm, buf, bufsiz);
+    detail::stream_line_reader reader(*strm, buf, bufsiz);
 
     // Connection has been closed on client
     if (!reader.getline()) {
@@ -1843,12 +1844,13 @@ inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool
     Request req;
     Response res;
 
+    res.stream = strm;
     res.version = "HTTP/1.1";
 
     // Request line and headers
-    if (!parse_request_line(reader.ptr(), req) || !detail::read_headers(strm, req.headers)) {
+    if (!parse_request_line(reader.ptr(), req) || !detail::read_headers(*strm, req.headers)) {
         res.status = 400;
-        write_response(strm, connection_close, req, res);
+        write_response(*strm, connection_close, req, res);
         return true;
     }
 
@@ -1861,13 +1863,13 @@ inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool
         keep_alive_count++;
     }
 
-    req.set_header("REMOTE_ADDR", strm.get_remote_addr().c_str());
+    req.set_header("REMOTE_ADDR", strm->get_remote_addr().c_str());
 
     // Body
     if (req.method == "POST" || req.method == "PUT" || req.method == "PATCH") {
-        if (!detail::read_content(strm, req)) {
+        if (!detail::read_content(*strm, req)) {
             res.status = 400;
-            write_response(strm, connection_close, req, res);
+            write_response(*strm, connection_close, req, res);
             return ret;
         }
 
@@ -1878,7 +1880,7 @@ inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool
             detail::decompress(req.body);
 #else
             res.status = 415;
-            write_response(strm, connection_close, req, res);
+            write_response(*strm, connection_close, req, res);
             return ret;
 #endif
         }
@@ -1890,7 +1892,7 @@ inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool
             if (!detail::parse_multipart_boundary(content_type, boundary) ||
                 !detail::parse_multipart_formdata(boundary, req.body, req.files)) {
                 res.status = 400;
-                write_response(strm, connection_close, req, res);
+                write_response(*strm, connection_close, req, res);
                 return ret;
             }
         }
@@ -1908,7 +1910,7 @@ inline bool Server::process_request(Stream& strm, size_t& keep_alive_count, bool
     } else {
         res.status = 404;
     }
-    write_response(strm, connection_close, req, res);
+    write_response(*strm, connection_close, req, res);
     return ret;
 }
 
@@ -1917,12 +1919,12 @@ inline bool Server::is_valid() const
     return true;
 }
 
-inline bool Server::read_and_close_socket(socket_t sock)
+inline bool Server::read_and_close_socket(SOCKET sock)
 {
     return detail::read_and_close_socket(
         sock,
         keep_alive_max_count_,
-        [this](Stream& strm, size_t& keep_alive_count, bool& connection_close) {
+        [this,sock](std::shared_ptr<Stream>& strm, size_t& keep_alive_count, bool& connection_close) {
             return process_request(strm, keep_alive_count, connection_close);
         });
 }
@@ -1945,10 +1947,10 @@ inline bool Client::is_valid() const
     return true;
 }
 
-inline socket_t Client::create_client_socket() const
+inline SOCKET Client::create_client_socket() const
 {
     return detail::create_socket(host_.c_str(), port_,
-        [=](socket_t sock, struct sockaddr *ai_addr, socklen_t ai_addrlen) -> bool {
+        [=](SOCKET sock, struct sockaddr *ai_addr, socklen_t ai_addrlen) -> bool {
             detail::set_nonblocking(sock, true);
 
             auto ret = connect(sock, ai_addr, ai_addrlen);
@@ -2080,13 +2082,13 @@ inline bool Client::process_request(Stream& strm, Request& req, Response& res, b
     return true;
 }
 
-inline bool Client::read_and_close_socket(socket_t sock, Request& req, Response& res)
+inline bool Client::read_and_close_socket(SOCKET sock, Request& req, Response& res)
 {
     return detail::read_and_close_socket(
         sock,
         0,
-        [&](Stream& strm, size_t& keep_alive_count, bool& connection_close) {
-            return process_request(strm, req, res, connection_close);
+        [&](std::shared_ptr<Stream>& strm, size_t& keep_alive_count, bool& connection_close) {
+            return process_request(*strm, req, res, connection_close);
         });
 }
 
@@ -2231,7 +2233,7 @@ namespace detail {
 
 template <typename U, typename V, typename T>
 inline bool read_and_close_socket_ssl(
-    socket_t sock, size_t keep_alive_max_count,
+    SOCKET sock, size_t keep_alive_max_count,
     // TODO: OpenSSL 1.0.2 occasionally crashes...
     // The upcoming 1.1.0 is going to be thread safe.
     SSL_CTX* ctx, std::mutex& ctx_mutex,
@@ -2302,7 +2304,7 @@ static SSLInit sslinit_;
 } // namespace detail
 
 // SSL socket stream implementation
-inline SSLSocketStream::SSLSocketStream(socket_t sock, SSL* ssl)
+inline SSLSocketStream::SSLSocketStream(SOCKET sock, SSL* ssl)
     : sock_(sock), ssl_(ssl)
 {
 }
@@ -2365,7 +2367,7 @@ inline bool SSLServer::is_valid() const
     return ctx_;
 }
 
-inline bool SSLServer::read_and_close_socket(socket_t sock)
+inline bool SSLServer::read_and_close_socket(SOCKET sock)
 {
     return detail::read_and_close_socket_ssl(
         sock,
@@ -2373,7 +2375,7 @@ inline bool SSLServer::read_and_close_socket(socket_t sock)
         ctx_, ctx_mutex_,
         SSL_accept,
         [](SSL* /*ssl*/) {},
-        [this](Stream& strm, bool last_connection, bool& connection_close) {
+        [this](std::shared_ptr<Stream>& strm, bool last_connection, bool& connection_close) {
             return process_request(strm, last_connection, connection_close);
         });
 }
@@ -2397,7 +2399,7 @@ inline bool SSLClient::is_valid() const
     return ctx_;
 }
 
-inline bool SSLClient::read_and_close_socket(socket_t sock, Request& req, Response& res)
+inline bool SSLClient::read_and_close_socket(SOCKET sock, Request& req, Response& res)
 {
     return is_valid() && detail::read_and_close_socket_ssl(
         sock, 0,
@@ -2406,7 +2408,7 @@ inline bool SSLClient::read_and_close_socket(socket_t sock, Request& req, Respon
         [&](SSL* ssl) {
             SSL_set_tlsext_host_name(ssl, host_.c_str());
         },
-        [&](Stream& strm, bool /*last_connection*/, bool& connection_close) {
+        [&](std::shared_ptr<Stream>& strm, bool /*last_connection*/, bool& connection_close) {
             return process_request(strm, req, res, connection_close);
         });
 }

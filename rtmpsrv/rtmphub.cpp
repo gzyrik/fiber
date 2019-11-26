@@ -6,8 +6,7 @@
 #include <string>
 #include <cstring>
 #include <unordered_map>
-#include "st.h"
-extern int _rtmpPort;
+#include "rtmphub.h"
 //RTMP only do live, others using HLS
 typedef std::unordered_map<std::string, struct Hub*> HubMap;//playpath->Hub
 typedef HubMap::iterator HubIter;
@@ -15,44 +14,67 @@ typedef std::unordered_map<int32_t, HubIter> StreamMap;//streamId -> Hub
 struct Kbps
 {
 };
-struct App {
+struct App
+{
   HubMap hubs;
   Kbps kbps;
 };
 typedef std::unordered_map<std::string, struct App> AppMap;
 typedef AppMap::iterator AppIter;
-struct Node {
-  RTMP* rtmp;
-  int sock;
-  uint32_t startMs;
-};
 static Kbps _kbps;
 static StreamMap _streams;
 static std::unordered_map<std::string, App> _apps;
 struct Hub //转播结点
 {
   const AppIter appIter;
-  Hub(const AppIter& app=_apps.end()) : appIter(app)
-  {
+  Hub(const AppIter& app=_apps.end()) : appIter(app), streamId(0), startMs(0) {
     memset(&meta, 0, sizeof(meta));
   }
-  ~Hub()
-  {
-    clear_gop();
+  ~Hub() {
+    RTMPPacket_Free(&meta);
+    ClearGop();
   }
-  Node pusher;
-  std::unordered_map<int32_t, Node> players;
 
   RTMPPacket meta;
   std::vector<RTMPPacket> gop;
-  void clear_gop() {
+
+  void ClearGop() {
     for(auto& packet : gop) RTMPPacket_Free(&packet);
     gop.clear();
   }
+
   Kbps kbps;
+  int32_t streamId;//pusher Id
+  std::unique_ptr<HubPusher> pusher;
+  uint32_t startMs;
+  std::unordered_map<int32_t, std::unique_ptr<HubPlayer> > players;
+};
+class RtmpPlayer : public HubPlayer
+{
+  RTMP& rtmp;
+  const int32_t streamId;
+  virtual bool SendPacket(RTMPPacket* packet) override {
+    packet->m_nInfoField2 = streamId;
+    return RTMP_SendPacket(&rtmp, packet, false);
+  }
+  virtual bool UpdateChunkSize(int chunkSize) override {
+    rtmp.m_outChunkSize = chunkSize;
+    return RTMP_SendChunkSize(&rtmp);
+  }
+public:
+  RtmpPlayer(RTMP& r, int32_t id) : rtmp(r), streamId(id) {}
+  virtual ~RtmpPlayer() override { RTMP_Close(&rtmp); }
+};
+class RtmpPusher : public HubPusher
+{
+  RTMP& rtmp;
+  virtual int GetChunkSize() override { return rtmp.m_inChunkSize; }
+public:
+  RtmpPusher (RTMP& r) : rtmp(r) {}
+  virtual ~RtmpPusher() override { RTMP_Close(&rtmp); }
 };
 
-void HUB_Remove(int32_t streamId, RTMP* r, int sock)
+void HUB_Remove(int32_t streamId)
 {
   auto iter = _streams.find(streamId);
   if (iter == _streams.end())
@@ -61,43 +83,37 @@ void HUB_Remove(int32_t streamId, RTMP* r, int sock)
   _streams.erase(iter);
 
   auto& hub = *(hubIter->second);
-  if (hub.pusher.rtmp == r || hub.pusher.sock == sock) {
-    hub.pusher.rtmp = nullptr;
-    hub.pusher.sock = 0;
-    RTMP_Log(RTMP_LOGCRIT, "Pusher[%d] Removed", streamId);
-    // pusher closed then notify its players
-    const auto& playpath = hubIter->first;
-    AVal aval={(char*)playpath.data(), (int)playpath.size()};
-    for (auto& i : hub.players) {
-      if (!_rtmpPort) break;
-      auto& p = i.second;
-      if (p.rtmp) RTMP_SendPlayStop(p.rtmp, &aval);
+  auto* app = hub.appIter->first.c_str();
+  auto* playpath = hubIter->first.c_str();
+  if (hub.players.erase(streamId) > 0) {
+    if (hub.players.size() > 0) 
+      RTMP_Log(RTMP_LOGCRIT, "%s/%s: Player[%d] Removed, Remaind %d", app, playpath, streamId, (int)hub.players.size());
+    else if (hub.pusher){
+      RTMP_Log(RTMP_LOGCRIT, "%s/%s: Player[%d] Removed, Close Pusher[%d]", app, playpath, streamId, hub.streamId);
+      hub.pusher = nullptr;
     }
   }
-  else if (hub.players.erase(streamId) > 0) {
-    auto n = hub.players.size();
-    if (n > 0) 
-      RTMP_Log(RTMP_LOGCRIT, "Player[%d] Removed, Remaind %d", streamId, (int)n);
-    else if (hub.pusher.rtmp || hub.pusher.sock){// no player then close the pusher
-      if (hub.pusher.rtmp) RTMP_Close(hub.pusher.rtmp);
-      if (hub.pusher.sock) closesocket(hub.pusher.sock);
-      RTMP_Log(RTMP_LOGCRIT, "Player[%d] Removed, Close %s Pusher", streamId, hubIter->first.c_str());
-      hub.pusher.rtmp = nullptr;
-      hub.pusher.sock = 0;
-    }
-  }
-  else
-    return;
 
-  if (!hub.pusher.rtmp && !hub.pusher.sock && hub.players.empty()) {//remove the empty app
+  if (hub.streamId == streamId) {
+    RTMP_Log(RTMP_LOGCRIT, "%s/%s: Pusher[%d] Removed, Close All Players", app, playpath, streamId);
+    hub.startMs = 0;
+    hub.streamId = 0;
+    hub.pusher = nullptr;
+    hub.players.clear();
+  }
+
+  if (!hub.pusher && hub.players.empty()) {//remove the empty app
     auto appIter = hub.appIter;
+    std::string path(playpath);
     auto& hubs = appIter->second.hubs;
-    RTMP_Log(RTMP_LOGCRIT, "Remove playpath: %s",hubIter->first.c_str());
     delete hubIter->second;
     hubs.erase(hubIter);
-    if (hubs.empty()){
-      RTMP_Log(RTMP_LOGCRIT, "Remove App: %s",appIter->first.c_str());
+    if (hubs.empty()) {
+      RTMP_Log(RTMP_LOGCRIT, "* Remove App: %s", app);
       _apps.erase(appIter);
+    }
+    else {
+      RTMP_Log(RTMP_LOGCRIT, "* Remove playpath: %s/%s", app, path.c_str());
     }
   }
 }
@@ -114,11 +130,11 @@ void HUB_MarkFlvStart(const std::string& app, const std::string& playpath, uint3
     if (!startMs) return;
     hubIter = hubs.emplace(playpath, new Hub(_apps.find(app))).first;
   }
-  hubIter->second->pusher.startMs = startMs;//startMs > 0 是推流源已启动的标志
+  hubIter->second->startMs = startMs;//startMs > 0 是推流源已启动的标志
 }
 static uint32_t HUB_Add(const std::string& app, const std::string& playpath,
-  int32_t streamId, bool isPlayer, RTMP* r, int sock)
-{//返回对应FLV源的开始时刻
+  int32_t streamId, std::unique_ptr<HubPlayer>&& player, std::unique_ptr<HubPusher>&& pusher) //返回对应FLV源的开始时刻
+{
   auto& hubs = _apps[app].hubs;
   auto hubIter = hubs.find(playpath);
   if (hubIter == hubs.end())
@@ -126,53 +142,52 @@ static uint32_t HUB_Add(const std::string& app, const std::string& playpath,
   _streams[streamId] = hubIter;
 
   auto& hub = *(hubIter->second);
-  if (isPlayer) {
-    auto& p = hub.players[streamId];
-    p.rtmp = r;
-    p.sock = sock;
-    p.startMs = RTMP_GetTime();
-    RTMP_Log(RTMP_LOGCRIT, "[%d]%s/%s: add Player[%d]", sock, app.c_str(), playpath.c_str(), streamId);
-    if (hub.pusher.rtmp && r->m_outChunkSize != hub.pusher.rtmp->m_inChunkSize) {
-      r->m_outChunkSize = hub.pusher.rtmp->m_inChunkSize;
-      RTMP_SendChunkSize(r);
-    }
-    if (hub.meta.m_nBodySize) {
-      hub.meta.m_nInfoField2 = streamId;
-      RTMP_SendPacket(r, &hub.meta, false);
-    }
-    for(auto& packet : hub.gop){
-      if (!_rtmpPort) break;
-      packet.m_nInfoField2 = streamId;
-      RTMP_SendPacket(r, &packet, false);
-    }
-  }
-  else if (hub.pusher.rtmp != r || hub.pusher.sock != sock) {
-    RTMP_Log(RTMP_LOGCRIT, "[%d]%s/%s: add Pusher[%d]", sock, app.c_str(), playpath.c_str(), streamId);
-    hub.pusher.rtmp = r;
-    hub.pusher.sock = sock;
-    hub.pusher.startMs = RTMP_GetTime();
-    for(auto& i : hub.players){
-      if (!_rtmpPort) break;
-      auto& p = i.second;
-      if (p.rtmp && p.rtmp->m_outChunkSize != r->m_inChunkSize){
-        p.rtmp->m_outChunkSize = r->m_inChunkSize;
-        RTMP_SendChunkSize(p.rtmp);
+  if (player) {
+    RTMP_Log(RTMP_LOGCRIT, "%s/%s: add Player[%d]", app.c_str(), playpath.c_str(), streamId);
+    if (hub.pusher) {
+      player->UpdateChunkSize(hub.pusher->GetChunkSize());
+      if (hub.meta.m_nBodySize > 0) 
+        player->SendPacket(&hub.meta);
+      for (auto& packet : hub.gop) {
+        if (!_rtmpPort) break;
+        player->SendPacket(&packet);
       }
     }
+    std::swap(hub.players[streamId], player);
   }
-  return hub.pusher.startMs;
+  if (pusher) {
+    int chunkSize = pusher->GetChunkSize();
+    RTMP_Log(RTMP_LOGCRIT, "%s/%s: Update Pusher[%d] chunkSize=%d", app.c_str(), playpath.c_str(), streamId, chunkSize);
+    hub.streamId = streamId;
+    hub.startMs = RTMP_GetTime();
+
+    for(auto& iter : hub.players){
+      if (!_rtmpPort) break;
+      iter.second->UpdateChunkSize(chunkSize);
+    }
+    std::swap(hub.pusher, pusher);
+  }
+  return hub.startMs;
 }
-uint32_t HUB_AddRTMP(RTMP* r, int32_t streamId, bool isPlayer)
+uint32_t HUB_AddPlayer(const std::string& app, const std::string& playpath,
+  int32_t streamId, std::unique_ptr<HubPlayer>&& player) 
 {
-  return HUB_Add(
-    std::string(r->Link.app.av_val, r->Link.app.av_len),
-    std::string(r->Link.playpath.av_val, r->Link.playpath.av_len),
-    streamId, isPlayer, r, RTMP_Socket(r));
+  return HUB_Add(app, playpath, streamId, std::move(player), nullptr);
 }
-uint32_t HUB_AddSock(int sock, const std::string& app, const std::string& playpath, int32_t streamId, bool isPlayer)
+uint32_t HUB_SetPusher(const std::string& app, const std::string& playpath,
+  int32_t streamId, std::unique_ptr<HubPusher>&& pusher)
 {
-  return HUB_Add(app, playpath, streamId, isPlayer, nullptr, sock);
+  return HUB_Add(app, playpath, streamId, nullptr, std::move(pusher));
 }
+uint32_t HUB_AddRtmp(RTMP& r, int32_t streamId, bool isPlayer)
+{
+  const std::string app(r.Link.app.av_val, r.Link.app.av_len);
+  const std::string playpath(r.Link.playpath.av_val, r.Link.playpath.av_len);
+  return HUB_Add(app, playpath, streamId,
+    std::unique_ptr<HubPlayer>(isPlayer ? new RtmpPlayer(r, streamId) : nullptr),
+    std::unique_ptr<HubPusher>(!isPlayer ? new RtmpPusher(r) : nullptr));
+}
+
 void HUB_Publish(int32_t streamId, RTMPPacket* packet)
 {
   auto iter = _streams.find(streamId);
@@ -191,20 +206,21 @@ void HUB_Publish(int32_t streamId, RTMPPacket* packet)
     break;
   case RTMP_PACKET_TYPE_VIDEO:
     if (packet->m_body[0] & 0x10) //is key frame ?
-      hub.clear_gop();
+      hub.ClearGop();
     hub.gop.emplace_back(*packet);
     break;
   default:
     return;
   }
-  for(auto& i : hub.players){
-    if (!_rtmpPort) break;
-    packet->m_nInfoField2 = i.first;
-    auto& p = i.second;
-    if (p.rtmp)
-      RTMP_SendPacket(p.rtmp, packet, false);
-    else if (p.sock)
-      send(p.sock, packet->m_body, packet->m_nBodySize, 0);
+  auto piter = hub.players.begin();
+  while (_rtmpPort && piter != hub.players.end()) {
+    auto cur = piter++;
+    if (!cur->second->SendPacket(packet))
+      hub.players.erase(cur);
   }
-  packet->m_body = NULL;
+  packet->m_body = NULL;//move to hub.meta or hub.gop
+  if (hub.pusher && hub.players.empty()) {
+    RTMP_Log(RTMP_LOGCRIT, "All Player Removed, Close Pusher[%d]", hub.streamId);
+    hub.pusher = nullptr;
+  }
 }

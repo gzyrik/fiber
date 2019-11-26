@@ -250,7 +250,6 @@ class st_go {
     delete f;
     return ret;
   }
-  friend st_thread_t st_thread(std::function<void*()>const & f, int stack_size);
 public:
   st_go(const char* file, int lineno) : stack_size_(0),
   file_(file),lineno_(lineno)
@@ -262,11 +261,11 @@ public:
     st_thread_create(__st_detached_functor, p, false, stack_size_);
     return *this;
   }
+  template <typename T> static st_thread_t create(T &&f, int stack_size = 0) {
+    auto* p = new joinable_t(std::move(f));
+    return st_thread_create(__st_joinable_functor, p, true, stack_size);
+  }
 };
-template <typename T> st_thread_t st_thread(T &&f, int stack_size = 0) {
-  auto* p = new st_go::joinable_t(std::move(f));
-  return st_thread_create(st_go::__st_joinable_functor, p, true, stack_size);
-}
 #if !defined(go) && !defined(ST_NOT_DEFINE_GO)
 #define go st_go(__FILE__, __LINE__),
 #endif
