@@ -1,14 +1,16 @@
 #include <stdlib.h>
 #include <stdio.h>
-#include <librtmp/rtmp.h>
-#include <librtmp/log.h>
 #include <vector>
 #include <string>
 #include <cstring>
+#include <memory>
 #include <unordered_map>
+#include <librtmp/rtmp.h>
+#include <librtmp/log.h>
 #include "rtmphub.h"
 //RTMP only do live, others using HLS
-typedef std::unordered_map<std::string, struct Hub*> HubMap;//playpath->Hub
+typedef std::unique_ptr<struct Hub> HubPtr;
+typedef std::unordered_map<std::string, HubPtr> HubMap;//playpath->Hub
 typedef HubMap::iterator HubIter;
 typedef std::unordered_map<int32_t, HubIter> StreamMap;//streamId -> Hub
 struct Kbps
@@ -45,35 +47,24 @@ struct Hub //转播结点
 
   Kbps kbps;
   int32_t streamId;//pusher Id
-  std::unique_ptr<HubPusher> pusher;
+  HubPusherPtr pusher;
   uint32_t startMs;
-  std::unordered_map<int32_t, std::unique_ptr<HubPlayer> > players;
+  std::unordered_map<int32_t, HubPlayerPtr> players;
 };
-class RtmpPlayer : public HubPlayer
-{
-  RTMP& rtmp;
-  const int32_t streamId;
-  virtual bool SendPacket(RTMPPacket* packet) override {
-    packet->m_nInfoField2 = streamId;
-    return RTMP_SendPacket(&rtmp, packet, false);
+static void EraseHub(HubIter hubIter)
+{//remove the empty app
+  auto& hub = *(hubIter->second);
+  auto appIter = hub.appIter;
+  const std::string path(hubIter->first);
+  auto& hubs = appIter->second.hubs;
+  hubs.erase(hubIter);
+  if (hubs.empty()) {
+    RTMP_Log(RTMP_LOGCRIT, "* Remove App: %s", appIter->first.c_str());
+    _apps.erase(appIter);
   }
-  virtual bool UpdateChunkSize(int chunkSize) override {
-    rtmp.m_outChunkSize = chunkSize;
-    return RTMP_SendChunkSize(&rtmp);
-  }
-public:
-  RtmpPlayer(RTMP& r, int32_t id) : rtmp(r), streamId(id) {}
-  virtual ~RtmpPlayer() override { RTMP_Close(&rtmp); }
-};
-class RtmpPusher : public HubPusher
-{
-  RTMP& rtmp;
-  virtual int GetChunkSize() override { return rtmp.m_inChunkSize; }
-public:
-  RtmpPusher (RTMP& r) : rtmp(r) {}
-  virtual ~RtmpPusher() override { RTMP_Close(&rtmp); }
-};
-
+  else 
+    RTMP_Log(RTMP_LOGCRIT, "* Remove playpath: %s/%s", appIter->first.c_str(), path.c_str());
+}
 void HUB_Remove(int32_t streamId)
 {
   auto iter = _streams.find(streamId);
@@ -86,115 +77,115 @@ void HUB_Remove(int32_t streamId)
   auto* app = hub.appIter->first.c_str();
   auto* playpath = hubIter->first.c_str();
   if (hub.players.erase(streamId) > 0) {
-    if (hub.players.size() > 0) 
-      RTMP_Log(RTMP_LOGCRIT, "%s/%s: Player[%d] Removed, Remaind %d", app, playpath, streamId, (int)hub.players.size());
-    else if (hub.pusher){
-      RTMP_Log(RTMP_LOGCRIT, "%s/%s: Player[%d] Removed, Close Pusher[%d]", app, playpath, streamId, hub.streamId);
+    if (hub.players.size() > 0) { 
+      RTMP_Log(RTMP_LOGCRIT, "%s/%s\tPlayer[%d] Removed, Remaind %d",
+        app, playpath, streamId, (int)hub.players.size());
+    } else if (hub.pusher) {
+      RTMP_Log(RTMP_LOGCRIT, "%s/%s\tPlayer[%d] Removed, Close Pusher[%d]",
+        app, playpath, streamId, hub.streamId);
       hub.pusher = nullptr;
+      return; //避免递归,导致hubIter失效
     }
   }
 
   if (hub.streamId == streamId) {
-    RTMP_Log(RTMP_LOGCRIT, "%s/%s: Pusher[%d] Removed, Close All Players", app, playpath, streamId);
+    RTMP_Log(RTMP_LOGCRIT, "%s/%s\tPusher[%d] Removed, Close All Players", app, playpath, streamId);
     hub.startMs = 0;
     hub.streamId = 0;
     hub.pusher = nullptr;
+    for(auto& iter : hub.players)
+      _streams.erase(iter.first);
     hub.players.clear();
   }
-
-  if (!hub.pusher && hub.players.empty()) {//remove the empty app
-    auto appIter = hub.appIter;
-    std::string path(playpath);
-    auto& hubs = appIter->second.hubs;
-    delete hubIter->second;
-    hubs.erase(hubIter);
-    if (hubs.empty()) {
-      RTMP_Log(RTMP_LOGCRIT, "* Remove App: %s", app);
-      _apps.erase(appIter);
-    }
-    else {
-      RTMP_Log(RTMP_LOGCRIT, "* Remove playpath: %s/%s", app, path.c_str());
-    }
-  }
+  if (!hub.streamId && hub.players.empty()) 
+    EraseHub(hubIter);
 }
-void HUB_MarkFlvStart(const std::string& app, const std::string& playpath, uint32_t startMs)
-{
-  auto appIter = _apps.find(app);
-  if (appIter == _apps.end()){
-    if (!startMs) return;
-    appIter = _apps.emplace(app, App()).first;
-  }
-  auto& hubs = appIter->second.hubs;
-  auto hubIter = hubs.find(playpath);
-  if (hubIter == hubs.end()){
-    if (!startMs) return;
-    hubIter = hubs.emplace(playpath, new Hub(_apps.find(app))).first;
-  }
-  hubIter->second->startMs = startMs;//startMs > 0 是推流源已启动的标志
-}
-static uint32_t HUB_Add(const std::string& app, const std::string& playpath,
-  int32_t streamId, std::unique_ptr<HubPlayer>&& player, std::unique_ptr<HubPusher>&& pusher) //返回对应FLV源的开始时刻
+bool HUB_MarkBegin(const std::string& app, const std::string& playpath)
 {
   auto& hubs = _apps[app].hubs;
   auto hubIter = hubs.find(playpath);
   if (hubIter == hubs.end())
-    hubIter = hubs.emplace(playpath, new Hub(_apps.find(app))).first;
+    hubIter = hubs.emplace(playpath, HubPtr(new Hub(_apps.find(app)))).first;
+  auto& hub = *(hubIter->second);
+  if (hub.startMs != 0) return false;
+  hub.startMs = RTMP_GetTime();//startMs > 0 是推流源已启动的标志
+  RTMP_Log(RTMP_LOGCRIT, "%s/%s\t Mark startMs=%u", app.c_str(), playpath.c_str(), hub.startMs);
+  return true;
+}
+bool HUB_MarkEnd(const std::string& app, const std::string& playpath)
+{
+  auto appIter = _apps.find(app);
+  if (appIter == _apps.end())
+    return true;
+  auto& hubs = appIter->second.hubs;
+  auto hubIter = hubs.find(playpath);
+  if (hubIter == hubs.end())
+    return true;
+  auto& hub = *(hubIter->second);
+  if (hub.streamId || !hub.players.empty())
+    return false;
+  EraseHub(hubIter);
+  return true;
+}
+static uint32_t HUB_Add(const std::string& app, const std::string& playpath,
+  int32_t streamId, HubPlayerPtr&& player, HubPusherPtr&& pusher) 
+{//返回对应FLV源的开始时刻
+  auto& hubs = _apps[app].hubs;
+  auto hubIter = hubs.find(playpath);
+  if (hubIter == hubs.end())
+    hubIter = hubs.emplace(playpath, HubPtr(new Hub(_apps.find(app)))).first;
   _streams[streamId] = hubIter;
 
   auto& hub = *(hubIter->second);
   if (player) {
-    RTMP_Log(RTMP_LOGCRIT, "%s/%s: add Player[%d]", app.c_str(), playpath.c_str(), streamId);
-    if (hub.pusher) {
-      player->UpdateChunkSize(hub.pusher->GetChunkSize());
-      if (hub.meta.m_nBodySize > 0) 
-        player->SendPacket(&hub.meta);
-      for (auto& packet : hub.gop) {
-        if (!_rtmpPort) break;
-        player->SendPacket(&packet);
-      }
+    bool ret = true;
+    if (hub.pusher)
+      ret = player->UpdateChunkSize(hub.pusher->GetChunkSize());
+    if (ret && hub.meta.m_nBodySize > 0) 
+      ret = player->SendPacket(&hub.meta);
+    for (auto& packet : hub.gop) {
+      if (!ret) break;
+      ret = player->SendPacket(&packet);
     }
-    std::swap(hub.players[streamId], player);
+
+    if (ret) {
+      RTMP_Log(RTMP_LOGCRIT, "%s/%s\tAdd Player[%d]", app.c_str(), playpath.c_str(), streamId);
+      std::swap(hub.players[streamId], player);
+    }
+    else 
+      RTMP_Log(RTMP_LOGCRIT, "%s/%s\tFailed Player[%d]", app.c_str(), playpath.c_str(), streamId);
   }
   if (pusher) {
     int chunkSize = pusher->GetChunkSize();
-    RTMP_Log(RTMP_LOGCRIT, "%s/%s: Update Pusher[%d] chunkSize=%d", app.c_str(), playpath.c_str(), streamId, chunkSize);
     hub.streamId = streamId;
     hub.startMs = RTMP_GetTime();
 
-    for(auto& iter : hub.players){
-      if (!_rtmpPort) break;
+    for(auto& iter : hub.players)
       iter.second->UpdateChunkSize(chunkSize);
-    }
+
+    RTMP_Log(RTMP_LOGCRIT, "%s/%s\tUpdate Pusher[%d] chunkSize=%d startMs=%u",
+      app.c_str(), playpath.c_str(), streamId, chunkSize, hub.startMs);
     std::swap(hub.pusher, pusher);
   }
   return hub.startMs;
 }
 uint32_t HUB_AddPlayer(const std::string& app, const std::string& playpath,
-  int32_t streamId, std::unique_ptr<HubPlayer>&& player) 
+  int32_t streamId, HubPlayerPtr&& player) 
 {
   return HUB_Add(app, playpath, streamId, std::move(player), nullptr);
 }
 uint32_t HUB_SetPusher(const std::string& app, const std::string& playpath,
-  int32_t streamId, std::unique_ptr<HubPusher>&& pusher)
+  int32_t streamId, HubPusherPtr&& pusher)
 {
   return HUB_Add(app, playpath, streamId, nullptr, std::move(pusher));
 }
-uint32_t HUB_AddRtmp(RTMP& r, int32_t streamId, bool isPlayer)
-{
-  const std::string app(r.Link.app.av_val, r.Link.app.av_len);
-  const std::string playpath(r.Link.playpath.av_val, r.Link.playpath.av_len);
-  return HUB_Add(app, playpath, streamId,
-    std::unique_ptr<HubPlayer>(isPlayer ? new RtmpPlayer(r, streamId) : nullptr),
-    std::unique_ptr<HubPusher>(!isPlayer ? new RtmpPusher(r) : nullptr));
-}
-
-void HUB_Publish(int32_t streamId, RTMPPacket* packet)
+bool HUB_Publish(int32_t streamId, RTMPPacket* packet)
 {
   auto iter = _streams.find(streamId);
   if (iter == _streams.end())
-    return;
+    return false;
 
-  packet->m_headerType = RTMP_PACKET_SIZE_LARGE;
+  //packet->m_headerType = RTMP_PACKET_SIZE_LARGE;
   auto& hub = *(iter->second->second);
   switch(packet->m_packetType) {
   case RTMP_PACKET_TYPE_INFO:
@@ -210,17 +201,24 @@ void HUB_Publish(int32_t streamId, RTMPPacket* packet)
     hub.gop.emplace_back(*packet);
     break;
   default:
-    return;
+    return false;
   }
+  bool erased = false;
   auto piter = hub.players.begin();
-  while (_rtmpPort && piter != hub.players.end()) {
+  while (piter != hub.players.end()) {
     auto cur = piter++;
-    if (!cur->second->SendPacket(packet))
+    if (!cur->second->SendPacket(packet)){
+      _streams.erase(cur->first);
       hub.players.erase(cur);
+      erased = true;
+    }
   }
   packet->m_body = NULL;//move to hub.meta or hub.gop
-  if (hub.pusher && hub.players.empty()) {
+
+  if (erased && hub.pusher && hub.players.empty()) {
     RTMP_Log(RTMP_LOGCRIT, "All Player Removed, Close Pusher[%d]", hub.streamId);
     hub.pusher = nullptr;
+    return false;
   }
+  return true;
 }

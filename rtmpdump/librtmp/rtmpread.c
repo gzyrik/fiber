@@ -867,7 +867,7 @@ fail:
         r->bufpos = r->buf + sizeof(flvHeader);
         r->buflen = HEADERBUF -  sizeof(flvHeader);
       }
-      if (r->timestamp == 0 && packet != NULL)
+      if (packet != NULL)
       {
         nRead = ReadPacket(packet, r, r->bufpos, r->buflen);
         packet = NULL;

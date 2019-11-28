@@ -1,0 +1,3 @@
+app/a0 	rtmp://127.0.0.1:1935/app/a1
+app/a1 	http://127.0.0.1:5562/tasks/app/a2
+app/a2 	http://127.0.0.1:5562/app/xxx.flv

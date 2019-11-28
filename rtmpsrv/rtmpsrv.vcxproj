@@ -21,6 +21,7 @@
   <ItemGroup>
     <ClInclude Include="httplib.h" />
     <ClInclude Include="rtmphub.h" />
+    <ClInclude Include="rtmpsrv.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="rtmphub.cpp" />
@@ -90,7 +91,6 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
-      <WarningLevel>Level3</WarningLevel>
       <AdditionalIncludeDirectories>..\rtmpdump;..\myst;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>

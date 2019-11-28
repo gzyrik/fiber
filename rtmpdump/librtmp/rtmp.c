@@ -293,6 +293,58 @@ RTMPPacket_Free(RTMPPacket *p)
     }
 }
 
+bool
+RTMPPacket_ReadFile(RTMPPacket *p, void* fp, size_t (*readf)(void* fp, char* buf, size_t))
+{
+  unsigned bodySize;
+  char buf[11], *enc, *pend;
+  if (readf(fp, buf, 11) != 11)
+    return FALSE;
+
+  bodySize = AMF_DecodeInt24(buf+1);
+  p->m_packetType = buf[0];
+  p->m_nBodySize = 0;
+  if (p->m_packetType != RTMP_PACKET_TYPE_AUDIO
+    && p->m_packetType != RTMP_PACKET_TYPE_VIDEO
+    && p->m_packetType != RTMP_PACKET_TYPE_INFO) {
+    if (readf(fp, NULL, bodySize + 4) != bodySize + 4)
+      return FALSE;
+    return TRUE;
+  }
+
+  p->m_nTimeStamp = AMF_DecodeInt24(buf+4) | ((unsigned)buf[7] << 24);
+  p->m_headerType = (!p->m_nTimeStamp || p->m_packetType == RTMP_PACKET_TYPE_INFO)
+    ? RTMP_PACKET_SIZE_LARGE : RTMP_PACKET_SIZE_MEDIUM;
+  p->m_nBodySize = bodySize;
+  if (p->m_packetType == RTMP_PACKET_TYPE_INFO)
+    p->m_nBodySize += 1+2+av_setDataFrame.av_len;
+  if (!p->m_body || p->m_nBodySize > p->m_nBytesRead) {
+    RTMPPacket_Free(p);
+    RTMPPacket_Alloc(p, p->m_nBodySize);
+    p->m_nBytesRead = p->m_nBodySize;
+  }
+
+  enc = p->m_body;
+  pend = enc + p->m_nBodySize;
+  if (p->m_packetType == RTMP_PACKET_TYPE_INFO)
+    enc = AMF_EncodeString(enc, pend, &av_setDataFrame);
+
+  if (readf(fp, enc, bodySize) != bodySize)
+    return FALSE;
+  if (readf(fp, NULL, 4) != 4)
+    return FALSE;
+  if (p->m_packetType == RTMP_PACKET_TYPE_INFO) {
+    AMFObject obj;
+    AMFObjectProperty prop;
+    AMF_Decode(&obj, enc, bodySize, FALSE);
+    AMF_Dump(&obj);
+    if (RTMP_FindFirstMatchingProperty(&obj, &av_duration, &prop))
+      p->m_nInfoField2 = (uint32_t)prop.p_vu.p_number;
+    AMF_Reset(&obj);
+  }
+  return TRUE;
+}
+
 void
 RTMPPacket_Dump(RTMPPacket *p)
 {
@@ -418,7 +470,7 @@ RTMP_Init(RTMP *r)
 #endif
 
   memset(r, 0, sizeof(RTMP));
-  r->m_sb.sb_socket = -1;
+  r->m_sb.sb_socket = INVALID_SOCKET;
   r->m_inChunkSize = RTMP_DEFAULT_CHUNKSIZE;
   r->m_outChunkSize = RTMP_DEFAULT_CHUNKSIZE;
   r->m_nBufferMS = 30000;
@@ -449,7 +501,7 @@ RTMP_IsConnected(RTMP *r)
   return r->m_sb.sb_socket != -1;
 }
 
-int
+SOCKET
 RTMP_Socket(RTMP *r)
 {
   return r->m_sb.sb_socket;
@@ -4623,7 +4675,7 @@ RTMP_SendPacket(RTMP *r, RTMPPacket *packet, bool queue)
 }
 
 bool
-RTMP_Serve(RTMP *r, int sockfd, void *sslCtx)
+RTMP_Serve(RTMP *r, SOCKET sockfd, void *sslCtx)
 {
   r->m_sb.sb_socket = sockfd;
   if (sslCtx && !RTMP_TLS_Accept(r, sslCtx))
@@ -4836,11 +4888,11 @@ RTMPSockBuf_Close(RTMPSockBuf *sb)
       sb->sb_ssl = NULL;
     }
 #endif
-  if (sb->sb_socket != -1)
+  if (sb->sb_socket != INVALID_SOCKET)
     {
       closesocket(sb->sb_socket);
-      RTMP_Log(RTMP_LOGCRIT, "[%d]Closed", sb->sb_socket);
-      sb->sb_socket = -1;
+      RTMP_Log(RTMP_LOGCRIT, "[%zu]Closed", (size_t)sb->sb_socket);
+      sb->sb_socket = INVALID_SOCKET;
     }
   return 0;
 }

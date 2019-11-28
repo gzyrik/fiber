@@ -116,7 +116,9 @@ static int _st_hook_init()
     _ST_HOOK_LIST
     select_f = &__select;
     poll_f = &__libc_poll;
+#ifdef MD_HAVE_EPOLL
     epoll_wait_f = &__epoll_wait_nocancel;
+#endif
 #undef X
 #endif
   }
@@ -132,7 +134,9 @@ static int _st_hook_init()
     || !gethostbyname_r_f
     || !gethostbyname2_r_f
     || !gethostbyaddr_r_f
+#ifdef MD_HAVE_EPOLL
     || !epoll_wait_f
+#endif
 #endif
 #endif
     )
@@ -321,33 +325,51 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
 #endif
 int WSAAPI setsockopt(SOCKET sockfd, int level, int optname, const SOCKOPTVAL_T *optval, socklen_t optlen)
 {
-  int err = setsockopt_f(sockfd, level, optname, optval, optlen);
-  if (err == 0 && level == SOL_SOCKET
-    && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
-    && optlen == sizeof(struct timeval)) {
+  if (level == SOL_SOCKET && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)) {
     _st_netfd_t* fd = _st_netfd(sockfd);
-    if (fd) {
-      struct timeval* tv = (struct timeval*)optval;
-      st_utime_t us = tv->tv_sec * 1000000 + tv->tv_usec;
+    while (fd) {
+      st_utime_t us;
+      if (optlen == sizeof(struct timeval)) {
+        struct timeval* tv = (struct timeval*)optval;
+        us = tv->tv_sec * 1000000 + tv->tv_usec;
+      }
+      else if (optlen == sizeof(st_utime_t))
+        us = *(st_utime_t*)optval;
+      else if (optlen == sizeof(unsigned))
+        us = 1000LL * (*(unsigned*)optval);
+      else if (optlen == sizeof(unsigned long))
+        us = 1000LL * (*(unsigned long*)optval);
+      else
+        return -1;
+
       if (optname == SO_RCVTIMEO)
         fd->rcv_timeo = us;
       else 
         fd->snd_timeo = us;
+      return 0;
     }
   }
-  return err;
+  return setsockopt_f(sockfd, level, optname, optval, optlen);
 }
 int WSAAPI getsockopt(SOCKET sockfd, int level, int optname, SOCKOPTVAL_T *optval, socklen_t *optlen)
 {
-  if (level == SOL_SOCKET
-    && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)
-    && *optlen == sizeof(struct timeval)) {
+  if (level == SOL_SOCKET && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO)) {
     _st_netfd_t* fd = _st_netfd(sockfd);
-    if (fd) {
+    while (fd) {
       st_utime_t us = (optname == SO_RCVTIMEO ? fd->rcv_timeo : fd->snd_timeo);
-      struct timeval* tv = (struct timeval*)optval;
-      tv->tv_sec  = us /1000000;
-      tv->tv_usec = us - tv->tv_sec *1000000;
+      if (*optlen == sizeof(struct timeval)) {
+        struct timeval* tv = (struct timeval*)optval;
+        tv->tv_sec  = us /1000000;
+        tv->tv_usec = us - tv->tv_sec *1000000;
+      }
+      else if (*optlen == sizeof(st_utime_t))
+        *(st_utime_t*)optval = us;
+      else if (*optlen == sizeof(unsigned))
+        *(unsigned*)optval = (unsigned)(us/1000);
+      else if (*optlen == sizeof(unsigned long))
+        *(unsigned long*)optval = (unsigned long)(us/1000);
+      else
+        return -1;
       return 0;
     }
   }

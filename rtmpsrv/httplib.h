@@ -118,10 +118,11 @@ typedef std::multimap<std::string, std::string, detail::ci>  Headers;
 
 template<typename uint64_t, typename... Args>
 std::pair<std::string, std::string> make_range_header(uint64_t value, Args... args);
-
+class Stream;
+typedef std::shared_ptr<Stream> StreamPtr;
 typedef std::multimap<std::string, std::string>                Params;
 typedef std::smatch                                            Match;
-typedef std::function<void (uint64_t current, uint64_t total)> Progress;
+typedef std::function<bool(std::shared_ptr<Stream>&, bool chunked)> Transfer;
 
 struct MultipartFile {
     std::string filename;
@@ -142,7 +143,7 @@ struct Request {
     MultipartFiles files;
     Match          matches;
 
-    Progress       progress;
+    Transfer       transfer;
 
     bool has_header(const char* key) const;
     std::string get_header_value(const char* key) const;
@@ -157,15 +158,78 @@ struct Request {
 
 class Stream {
 public:
+    class Listen {
+    public:
+        virtual ~Listen() = default;
+        virtual void on_closed() = 0;
+    };
     virtual ~Stream() {}
+    virtual void set_listen(Listen* listen) = 0;
     virtual void close() = 0;
     virtual int read(char* ptr, size_t size) = 0;
     virtual int write(const char* ptr, size_t size1) = 0;
     virtual int write(const char* ptr) = 0;
     virtual std::string get_remote_addr() = 0;
+    virtual SOCKET sockfd() = 0;
 
     template <typename ...Args>
     void write_format(const char* fmt, const Args& ...args);
+    bool write_chunk(const char* buf, const size_t size1) {
+        char chunked[128];
+        int n, slen = sprintf(chunked, "%x\r\n", (unsigned)size1);
+        for (int i=0; i < slen; i+= n) {
+            if ((n = write(chunked + i, slen - i)) < 0)
+                return false;
+        }
+        for (int i=0; i < (int)size1; i += n) {
+            if ((n = write(buf + i, size1 - i)) < 0)
+                return false;
+        }
+        for (int i=slen-2; i < slen; i+= n) {
+            if ((n = write(chunked + i, slen - i)) < 0)
+                return false;
+        }
+        return true;
+    }
+    bool ok() const { return ok_; }
+    bool read_line(std::string& line) {
+        char byte;
+        do {
+            if (read(&byte, 1) != 1)
+                return ok_ = false;
+            line.push_back(byte);
+        } while (byte != '\n');
+        return true;
+    }
+    int read_chunk(char* buf, const size_t size) {
+        int n, i=0;
+        for (;  ok_ && i < size; i += n) {
+            if (chunked_ == 0) {
+                std::string line;
+                if (!read_line(line) || (chunked_ = std::stoi(line, 0, 16)) <= 0){
+                    ok_ = false;
+                    break;
+                }
+            }
+            n = size - i;
+            if ((n = read(buf + i, n < chunked_ ? n : chunked_)) < 0){
+                ok_ = false;
+                break;
+            }
+            if ((chunked_ -= n) <= 0) {
+                std::string line;
+                if (!read_line(line) || line != "\r\n") {
+                    ok_ = false;
+                    break;
+                }
+            }
+        }
+        return i;
+    }
+protected:
+    int chunked_;
+    bool ok_;
+    Stream() : chunked_(0), ok_(true) {}
 };
 
 struct Response {
@@ -173,13 +237,13 @@ struct Response {
     int         status;
     Headers     headers;
     std::string body;
-    std::shared_ptr<Stream> stream;
+    Transfer transfer;
 
     bool has_header(const char* key) const;
     std::string get_header_value(const char* key) const;
-    void set_header(const char* key, const char* val);
+    void set_header(const char* key, const std::string& val);
 
-    void set_redirect(const char* uri);
+    void set_redirect(const std::string& uri);
     void set_content(const char* s, size_t n, const char* content_type);
     void set_content(const std::string& s, const char* content_type);
 
@@ -195,9 +259,17 @@ public:
     virtual int write(const char* ptr, size_t size);
     virtual int write(const char* ptr);
     virtual std::string get_remote_addr();
-    virtual void close() { ::closesocket(sock_); }
+    virtual void set_listen(Listen* listen) { listen_ = listen; } 
+    virtual void close() {
+        if (sock_ == INVALID_SOCKET) return;
+        ::closesocket(sock_);
+        sock_ = INVALID_SOCKET;
+        if (listen_) listen_->on_closed();
+    }
+    virtual SOCKET sockfd() { return sock_; }
 private:
     SOCKET sock_;
+    Listen* listen_;
 };
 
 class Server {
@@ -283,17 +355,17 @@ public:
 
     virtual bool is_valid() const;
 
-    std::shared_ptr<Response> Get(const char* path, Progress progress = nullptr);
-    std::shared_ptr<Response> Get(const char* path, const Headers& headers, Progress progress = nullptr);
+    std::shared_ptr<Response> Get(const std::string& path, Transfer transfer = nullptr);
+    std::shared_ptr<Response> Get(const std::string& path, const Headers& headers, Transfer transfer = nullptr);
 
     std::shared_ptr<Response> Head(const char* path);
     std::shared_ptr<Response> Head(const char* path, const Headers& headers);
 
-    std::shared_ptr<Response> Post(const char* path, const std::string& body, const char* content_type);
-    std::shared_ptr<Response> Post(const char* path, const Headers& headers, const std::string& body, const char* content_type);
+    std::shared_ptr<Response> Post(const std::string& path, const std::string& body, const char* content_type);
+    std::shared_ptr<Response> Post(const std::string& path, const Headers& headers, const std::string& body, const char* content_type);
 
-    std::shared_ptr<Response> Post(const char* path, const Params& params);
-    std::shared_ptr<Response> Post(const char* path, const Headers& headers, const Params& params);
+    std::shared_ptr<Response> Post(const std::string& path, const Params& params);
+    std::shared_ptr<Response> Post(const std::string& path, const Headers& headers, const Params& params);
 
     std::shared_ptr<Response> Put(const char* path, const std::string& body, const char* content_type);
     std::shared_ptr<Response> Put(const char* path, const Headers& headers, const std::string& body, const char* content_type);
@@ -307,7 +379,7 @@ public:
     bool send(Request& req, Response& res);
 
 protected:
-    bool process_request(Stream& strm, Request& req, Response& res, bool& connection_close);
+    bool process_request(std::shared_ptr<Stream>& strm, Request& req, Response& res, bool& connection_close);
 
     const std::string host_;
     const int         port_;
@@ -332,11 +404,19 @@ public:
     virtual int write(const char* ptr, size_t size);
     virtual int write(const char* ptr);
     virtual std::string get_remote_addr();
-    virtual void close() { ::closesocket(sock_); }
+    virtual void set_listen(Listen* listen) { listen_ = listen; } 
+    virtual void close() {
+        if (sock_ == INVALID_SOCKET) return;
+        ::closesocket(sock_);
+        sock_ = INVALID_SOCKET;
+        if (listen_) listen_->on_closed();
+    }
+    virtual SOCKET sockfd() { return sock_; }
 
 private:
     SOCKET sock_;
     SSL* ssl_;
+    Listen* listen_;
 };
 
 class SSLServer : public Server {
@@ -467,7 +547,7 @@ private:
 
 inline int close_socket(SOCKET sock)
 {
-    return closesocket(sock);
+    return sock != INVALID_SOCKET ? closesocket(sock) : 0;
 }
 
 inline int select_read(SOCKET sock, size_t sec, size_t usec)
@@ -532,7 +612,7 @@ inline bool read_and_close_socket(SOCKET sock, size_t keep_alive_max_count, T ca
             auto connection_close = (keep_alive_count == 0);
 
             ret = callback(strm, keep_alive_count, connection_close);
-            if (!ret || connection_close) {
+            if (!strm || !ret || connection_close) {
                 break;
             }
         }
@@ -541,8 +621,7 @@ inline bool read_and_close_socket(SOCKET sock, size_t keep_alive_max_count, T ca
         auto dummy_connection_close = true;
         ret = callback(strm, dummy_keep_alive_count, dummy_connection_close);
     }
-
-    close_socket(sock);
+    if (strm) strm->close();
     return ret;
 }
 
@@ -653,13 +732,21 @@ inline bool is_connection_error()
 #endif
 }
 
-inline std::string get_remote_addr(SOCKET sock) {
+inline std::string get_remote_addr(SOCKET sock, int* port = nullptr) {
     struct sockaddr_storage addr;
     socklen_t len = sizeof(addr);
 
     if (!getpeername(sock, (struct sockaddr*)&addr, &len)) {
-        char ipstr[NI_MAXHOST];
+        if (port) {
+            if (addr.ss_family == AF_INET) 
+                *port = ntohs(reinterpret_cast<struct sockaddr_in*>(&addr)->sin_port);
+            else if (addr.ss_family == AF_INET6)
+                *port = ntohs(reinterpret_cast<struct sockaddr_in6*>(&addr)->sin6_port);
+            else
+                *port = 0;
+        }
 
+        char ipstr[NI_MAXHOST];
         if (!getnameinfo((struct sockaddr*)&addr, len,
             ipstr, sizeof(ipstr), nullptr, 0, NI_NUMERICHOST)) {
             return ipstr;
@@ -839,7 +926,7 @@ inline bool read_headers(Stream& strm, Headers& headers)
     return true;
 }
 
-inline bool read_content_with_length(Stream& strm, std::string& out, size_t len, Progress progress)
+inline bool read_content_with_length(Stream& strm, std::string& out, size_t len)
 {
     out.assign(len, 0);
     size_t r = 0;
@@ -850,10 +937,6 @@ inline bool read_content_with_length(Stream& strm, std::string& out, size_t len,
         }
 
         r += n;
-
-        if (progress) {
-            progress(r, len);
-        }
     }
 
     return true;
@@ -890,7 +973,7 @@ inline bool read_content_chunked(Stream& strm, std::string& out)
 
     while (chunk_len > 0){
         std::string chunk;
-        if (!read_content_with_length(strm, chunk, chunk_len, nullptr)) {
+        if (!read_content_with_length(strm, chunk, chunk_len)) {
             return false;
         }
 
@@ -921,22 +1004,21 @@ inline bool read_content_chunked(Stream& strm, std::string& out)
 }
 
 template <typename T>
-bool read_content(Stream& strm, T& x, Progress progress = Progress())
+bool read_content(std::shared_ptr<Stream>& strm, T& x, Transfer transfer = nullptr)
 {
     auto len = get_header_value_int(x.headers, "Content-Length", 0);
-
+    const auto& encoding = get_header_value(x.headers, "Transfer-Encoding", "");
+    bool chunked = !strcasecmp(encoding, "chunked");
     if (len) {
-        return read_content_with_length(strm, x.body, len, progress);
+        return read_content_with_length(*strm, x.body, len);
+    } if (transfer) {
+        return transfer(strm, chunked);
     } else {
-        const auto& encoding = get_header_value(x.headers, "Transfer-Encoding", "");
-
-        if (!strcasecmp(encoding, "chunked")) {
-            return read_content_chunked(strm, x.body);
-        } else {
-            return read_content_without_length(strm, x.body);
-        }
+        if (chunked)
+            return read_content_chunked(*strm, x.body);
+        else 
+            return read_content_without_length(*strm, x.body);
     }
-
     return true;
 }
 
@@ -1389,12 +1471,12 @@ inline std::string Response::get_header_value(const char* key) const
     return detail::get_header_value(headers, key, "");
 }
 
-inline void Response::set_header(const char* key, const char* val)
+inline void Response::set_header(const char* key, const std::string& val)
 {
     headers.emplace(key, val);
 }
 
-inline void Response::set_redirect(const char* url)
+inline void Response::set_redirect(const std::string& url)
 {
     set_header("Location", url);
     status = 302;
@@ -1444,7 +1526,8 @@ inline void Stream::write_format(const char* fmt, const Args& ...args)
 }
 
 // Socket stream implementation
-inline SocketStream::SocketStream(SOCKET sock): sock_(sock)
+inline SocketStream::SocketStream(SOCKET sock)
+    : sock_(sock), listen_(nullptr)
 {
 }
 
@@ -1844,7 +1927,6 @@ inline bool Server::process_request(std::shared_ptr<Stream>& strm, size_t& keep_
     Request req;
     Response res;
 
-    res.stream = strm;
     res.version = "HTTP/1.1";
 
     // Request line and headers
@@ -1867,7 +1949,7 @@ inline bool Server::process_request(std::shared_ptr<Stream>& strm, size_t& keep_
 
     // Body
     if (req.method == "POST" || req.method == "PUT" || req.method == "PATCH") {
-        if (!detail::read_content(*strm, req)) {
+        if (!detail::read_content(strm, req)) {
             res.status = 400;
             write_response(*strm, connection_close, req, res);
             return ret;
@@ -1898,6 +1980,7 @@ inline bool Server::process_request(std::shared_ptr<Stream>& strm, size_t& keep_
         }
     }
 
+    bool do_transfer = false;
     if (routing(req, res)) {
         if (res.status == -1) res.status = 200;
         const auto& res_connection = res.get_header_value("Connection");
@@ -1906,11 +1989,14 @@ inline bool Server::process_request(std::shared_ptr<Stream>& strm, size_t& keep_
         else if (res_connection== "keep-alive") {
             connection_close = false;
             keep_alive_count++;
+            do_transfer = res.get_header_value("Transfer-Encoding") == "chunked";
         }
     } else {
         res.status = 404;
     }
     write_response(*strm, connection_close, req, res);
+    if (do_transfer)
+        return res.transfer(strm, true);
     return ret;
 }
 
@@ -1924,7 +2010,7 @@ inline bool Server::read_and_close_socket(SOCKET sock)
     return detail::read_and_close_socket(
         sock,
         keep_alive_max_count_,
-        [this,sock](std::shared_ptr<Stream>& strm, size_t& keep_alive_count, bool& connection_close) {
+        [this](std::shared_ptr<Stream>& strm, size_t& keep_alive_count, bool& connection_close) {
             return process_request(strm, keep_alive_count, connection_close);
         });
 }
@@ -2050,13 +2136,13 @@ inline void Client::write_request(Stream& strm, Request& req)
     }
 }
 
-inline bool Client::process_request(Stream& strm, Request& req, Response& res, bool& connection_close)
+inline bool Client::process_request(std::shared_ptr<Stream>& strm, Request& req, Response& res, bool& connection_close)
 {
     // Send request
-    write_request(strm, req);
+    write_request(*strm, req);
 
     // Receive response and headers
-    if (!read_response_line(strm, res) || !detail::read_headers(strm, res.headers)) {
+    if (!read_response_line(*strm, res) || !detail::read_headers(*strm, res.headers)) {
         return false;
     }
 
@@ -2066,7 +2152,7 @@ inline bool Client::process_request(Stream& strm, Request& req, Response& res, b
 
     // Body
     if (req.method != "HEAD") {
-        if (!detail::read_content(strm, res, req.progress)) {
+        if (!detail::read_content(strm, res, req.transfer)) {
             return false;
         }
 
@@ -2088,22 +2174,22 @@ inline bool Client::read_and_close_socket(SOCKET sock, Request& req, Response& r
         sock,
         0,
         [&](std::shared_ptr<Stream>& strm, size_t& keep_alive_count, bool& connection_close) {
-            return process_request(*strm, req, res, connection_close);
+            return process_request(strm, req, res, connection_close);
         });
 }
 
-inline std::shared_ptr<Response> Client::Get(const char* path, Progress progress)
+inline std::shared_ptr<Response> Client::Get(const std::string& path, Transfer transfer)
 {
-    return Get(path, Headers(), progress);
+    return Get(path, Headers(), transfer);
 }
 
-inline std::shared_ptr<Response> Client::Get(const char* path, const Headers& headers, Progress progress)
+inline std::shared_ptr<Response> Client::Get(const std::string& path, const Headers& headers, Transfer transfer)
 {
     Request req;
     req.method = "GET";
     req.path = path;
     req.headers = headers;
-    req.progress = progress;
+    req.transfer = transfer;
 
     auto res = std::make_shared<Response>();
 
@@ -2128,13 +2214,13 @@ inline std::shared_ptr<Response> Client::Head(const char* path, const Headers& h
 }
 
 inline std::shared_ptr<Response> Client::Post(
-    const char* path, const std::string& body, const char* content_type)
+    const std::string& path, const std::string& body, const char* content_type)
 {
     return Post(path, Headers(), body, content_type);
 }
 
 inline std::shared_ptr<Response> Client::Post(
-    const char* path, const Headers& headers, const std::string& body, const char* content_type)
+    const std::string& path, const Headers& headers, const std::string& body, const char* content_type)
 {
     Request req;
     req.method = "POST";
@@ -2149,12 +2235,12 @@ inline std::shared_ptr<Response> Client::Post(
     return send(req, *res) ? res : nullptr;
 }
 
-inline std::shared_ptr<Response> Client::Post(const char* path, const Params& params)
+inline std::shared_ptr<Response> Client::Post(const std::string& path, const Params& params)
 {
     return Post(path, Headers(), params);
 }
 
-inline std::shared_ptr<Response> Client::Post(const char* path, const Headers& headers, const Params& params)
+inline std::shared_ptr<Response> Client::Post(const std::string& path, const Headers& headers, const Params& params)
 {
     std::string query;
     for (auto it = params.begin(); it != params.end(); ++it) {
@@ -2258,7 +2344,7 @@ inline bool read_and_close_socket_ssl(
     SSL_connect_or_accept(ssl);
 
     bool ret = false;
-    SSLSocketStream strm(sock, ssl);
+    std::shared_ptr<Stream> strm = std::make_shared<SSLSocketStream>(sock, ssl);
     if (keep_alive_max_count > 0) {
         auto keep_alive_count = keep_alive_max_count;
         while (keep_alive_count > 0 &&
@@ -2286,8 +2372,7 @@ inline bool read_and_close_socket_ssl(
         SSL_free(ssl);
     }
 
-    close_socket(sock);
-
+    strm->close();
     return ret;
 }
 
@@ -2305,7 +2390,7 @@ static SSLInit sslinit_;
 
 // SSL socket stream implementation
 inline SSLSocketStream::SSLSocketStream(SOCKET sock, SSL* ssl)
-    : sock_(sock), ssl_(ssl)
+    : sock_(sock), ssl_(ssl), listen_(nullptr)
 {
 }
 

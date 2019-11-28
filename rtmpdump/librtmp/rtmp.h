@@ -28,7 +28,11 @@
 #if !defined(NO_CRYPTO) && !defined(CRYPTO)
 #define CRYPTO
 #endif
-
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+typedef int SOCKET;
+#endif
 #include <errno.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -126,7 +130,7 @@ typedef struct RTMPPacket
 
 typedef struct RTMPSockBuf
 {
-  int sb_socket;
+  SOCKET sb_socket;
   int sb_size;		/* number of unprocessed bytes in buffer */
   char *sb_start;		/* pointer into sb_pBuffer of next byte to process */
   char sb_buf[RTMP_BUFFER_CACHE_SIZE];	/* data read from socket */
@@ -138,6 +142,7 @@ void RTMPPacket_Reset(RTMPPacket *p);
 void RTMPPacket_Dump(RTMPPacket *p);
 bool RTMPPacket_Alloc(RTMPPacket *p, uint32_t bobySize);
 void RTMPPacket_Free(RTMPPacket *p);
+bool RTMPPacket_ReadFile(RTMPPacket *p, void* fp, size_t (*readf)(void* fp, char* buf, size_t));
 
 #define RTMPPacket_IsReady(a)	((a)->m_nBytesRead == (a)->m_nBodySize)
 #define RTMPPacket_IsMedia(a)	((a)->m_packetType == RTMP_PACKET_TYPE_AUDIO || \
@@ -328,7 +333,7 @@ bool RTMP_SendPacket(RTMP *r, RTMPPacket *packet, bool queue);
 int RTMP_SendChunk(RTMP *r, RTMPChunk *chunk);
 
 int RTMP_IsConnected(RTMP *r);
-int RTMP_Socket(RTMP *r);
+SOCKET RTMP_Socket(RTMP *r);
 int RTMP_State(RTMP* r);
 int RTMP_IsTimedout(RTMP *r);
 double RTMP_GetDuration(RTMP *r);
@@ -350,7 +355,7 @@ void RTMP_DeleteStream(RTMP *r);
  * @defgroup server only
  * @{
  */
-bool RTMP_Serve(RTMP *r, int sockfd, void *tlsCtx);
+bool RTMP_Serve(RTMP *r, SOCKET sockfd, void *tlsCtx);
 /* @return streamId */
 int RTMP_AcceptStream(RTMP *r, RTMPPacket *packet);
 /* @return true if media packet. */

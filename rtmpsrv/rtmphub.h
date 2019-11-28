@@ -1,26 +1,29 @@
 #ifndef __RTMP_HUB_H__
 #define __RTMP_HUB_H__
+#include <memory>
 class HubPlayer
 {
 public:
-  virtual ~HubPlayer(){}
+  virtual ~HubPlayer() = default;
   virtual bool UpdateChunkSize(int chunkSize) = 0;
   virtual bool SendPacket(struct RTMPPacket* packet) = 0;
 };
 class HubPusher
 {
 public:
-  virtual ~HubPusher(){}
+  virtual ~HubPusher() = default;
   virtual int GetChunkSize() = 0;
 };
-void HUB_MarkFlvStart(const std::string& app, const std::string& playpath, uint32_t startMs);
+typedef std::unique_ptr<HubPlayer> HubPlayerPtr;
+typedef std::unique_ptr<HubPusher> HubPusherPtr;
+
+bool HUB_MarkBegin(const std::string& app, const std::string& playpath);
+bool HUB_MarkEnd(const std::string& app, const std::string& playpath);
 //返回对应Pusher的开始时刻
 uint32_t HUB_AddPlayer(const std::string& app, const std::string& playpath,
-  int32_t streamId, std::unique_ptr<HubPlayer>&& player);
+  int32_t streamId, HubPlayerPtr&& player);
 uint32_t HUB_SetPusher(const std::string& app, const std::string& playpath,
-  int32_t streamId, std::unique_ptr<HubPusher>&& pusher);
+  int32_t streamId, HubPusherPtr&& pusher);
 void HUB_Remove(int32_t streamId);
-void HUB_Publish(int32_t streamId, RTMPPacket* packet);
-uint32_t HUB_AddRtmp(RTMP& r, int32_t streamId, bool isPlayer);
-extern int _rtmpPort;
+bool HUB_Publish(int32_t streamId, RTMPPacket* packet);
 #endif

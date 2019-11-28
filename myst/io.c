@@ -471,6 +471,10 @@ int st_connect(_st_netfd_t *fd, const struct sockaddr *addr, int addrlen,
                st_utime_t timeout)
 {
   int n, err = 0;
+#ifdef _WIN32
+  if (timeout ==  ST_UTIME_NO_TIMEOUT)//fix window bug, force 60s timeout
+    timeout = 60 * 1000000LL;
+#endif
 
   while (_ST_SYS_CALL(connect)(fd->osfd, addr, addrlen) < 0) {
     _IO_GET_ERRNO();
