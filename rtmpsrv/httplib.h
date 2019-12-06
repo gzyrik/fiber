@@ -1980,7 +1980,7 @@ inline bool Server::process_request(std::shared_ptr<Stream>& strm, size_t& keep_
         }
     }
 
-    bool do_transfer = false;
+    bool do_chunked = false;
     if (routing(req, res)) {
         if (res.status == -1) res.status = 200;
         const auto& res_connection = res.get_header_value("Connection");
@@ -1989,14 +1989,14 @@ inline bool Server::process_request(std::shared_ptr<Stream>& strm, size_t& keep_
         else if (res_connection== "keep-alive") {
             connection_close = false;
             keep_alive_count++;
-            do_transfer = res.get_header_value("Transfer-Encoding") == "chunked";
+            do_chunked = res.get_header_value("Transfer-Encoding") == "chunked";
         }
     } else {
         res.status = 404;
     }
     write_response(*strm, connection_close, req, res);
-    if (do_transfer)
-        return res.transfer(strm, true);
+    if (res.transfer)
+        return res.transfer(strm, do_chunked);
     return ret;
 }
 

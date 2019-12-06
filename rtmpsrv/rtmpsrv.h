@@ -221,6 +221,7 @@ public:
   virtual ~HttpPlayer() override {
     if (stream) {
       stream->set_listen(nullptr);
+      stream->write_chunk(nullptr, 0);
       stream->close();
     }
     if (read.buf != NULL)

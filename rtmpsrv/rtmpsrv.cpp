@@ -538,16 +538,13 @@ static void onGetChunkedFlv(const httplib::Request& req, httplib::Response& res)
    5. SRV0 读取本地文件a/xxx.flv, 并发送 httpflv 流
    6. SRV2 并向SRV1推流
         rtmp://SRV1/app/a1
-文件对应表, 任务列表:
-SRV0: app/a0, app/a/xxx.flv
-    ./app/a/xxx.flv
-    app/a0 rtmp://SRV1/app/a1
-SRV1: app/a1
-    app/a1 http://SRV2/tasks/app/a2
-SRV2: app/a2
-    app/a2 http://SRV0/app/a/xxx.flv
- 
-验证结果
+文件映射:
+app/a0 	rtmp://SRV1/app/a1
+app/a1 	http://SRV2/tasks/app/a2
+app/a2 	http://SRV0/app/xxx.flv
+
+令SRV0=SRV1=SRV2=127.0.0.1, 并实现于 Makefile 中的 test 部分
+    make test
 */
 
 int main(int argc, char* argv[])
@@ -588,7 +585,10 @@ int main(int argc, char* argv[])
       "./rtmpdump  -r rtmp://127.0.0.1/app/xxx -o xxx.flv\r\n";
     res.set_content(help, "text/html");
   })
-  .Post("/loglevel", [&](const httplib::Request& req, httplib::Response& res) {
+  .Get("/quit", [](const httplib::Request& req, httplib::Response& res) {
+    res.transfer = [](httplib::StreamPtr&, bool) { exit(0); return false; };
+  })
+  .Post("/loglevel", [](const httplib::Request& req, httplib::Response& res) {
     if (!RTMP_LogSetLevel2(req.body.c_str()))
       res.status = 400;
   })
