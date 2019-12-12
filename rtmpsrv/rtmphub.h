@@ -5,6 +5,7 @@ class HubPlayer
 {
 public:
   virtual ~HubPlayer() = default;
+  virtual bool onlyListen() { return false; }//只剩侦听者时,将自动断开推流源
   virtual bool UpdateChunkSize(int chunkSize) = 0;
   virtual bool SendPacket(struct RTMPPacket* packet) = 0;
 };

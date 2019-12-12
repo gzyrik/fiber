@@ -6,25 +6,25 @@
 class RtmpPlayer : public HubPlayer
 {
   RTMP& rtmp;
-  virtual bool SendPacket(RTMPPacket* packet) override {
+  bool SendPacket(RTMPPacket* packet) override {
     packet->m_nInfoField2 = rtmp.m_stream_id;
     return RTMP_SendPacket(&rtmp, packet, false);
   }
-  virtual bool UpdateChunkSize(int chunkSize) override {
+  bool UpdateChunkSize(int chunkSize) override {
     rtmp.m_outChunkSize = chunkSize;
     return RTMP_SendChunkSize(&rtmp);
   }
 public:
   RtmpPlayer(RTMP& r) : rtmp(r) {}
-  virtual ~RtmpPlayer() override { RTMP_Close(&rtmp); }
+  ~RtmpPlayer() override { RTMP_Close(&rtmp); }
 };
 class RtmpPusher : public HubPusher
 {
   RTMP& rtmp;
-  virtual int GetChunkSize() override { return rtmp.m_inChunkSize; }
+  int GetChunkSize() override { return rtmp.m_inChunkSize; }
 public:
   RtmpPusher (RTMP& r) : rtmp(r) {}
-  virtual ~RtmpPusher() override { RTMP_Close(&rtmp); }
+  ~RtmpPusher() override { RTMP_Close(&rtmp); }
 };
 
 class RtmpStream {
@@ -76,11 +76,11 @@ public:
 class FilePusher : public HubPusher
 {
   const int32_t streamId;
-  virtual int GetChunkSize() override { return 128; }
+  int GetChunkSize() override { return 128; }
 public:
   FilePusher(int32_t id) : streamId(id) {}
-  //‰æùÈù†!HUB_Publish()ÁªìÊùüsend_rtmp
-  virtual ~FilePusher() override { HUB_Remove(streamId); }
+  //“¿øø!HUB_Publish()Ω· ¯send_rtmp
+  ~FilePusher() override { HUB_Remove(streamId); }
 };
 
 static std::ostream& toURL(std::ostream& oss,  const std::string& url)
@@ -107,7 +107,7 @@ static FILE* openFile(const std::string& path)
   fclose(fp);
   return nullptr;
 }
-static RTMP* ConnectURL(std::string& url, bool write)
+static RTMP* connectURL(std::string& url, bool write)
 {
   RTMP* rtmp = new RTMP;
   while (rtmp) {
@@ -124,9 +124,8 @@ static RTMP* ConnectURL(std::string& url, bool write)
   delete rtmp;
   return nullptr;
 }
-static void FindFlvFiles(const std::string& dir, std::unordered_map<std::string, std::string>& files)
+static void findFiles(const std::regex& reg, const std::string& dir, std::unordered_map<std::string, std::string>& files)
 {
-  static const std::regex flv(R"(.*\.flv)", std::regex::icase);
   auto& flist = files[dir];
 #ifdef _WIN32
   struct _finddata_t finfo;
@@ -136,8 +135,8 @@ static void FindFlvFiles(const std::string& dir, std::unordered_map<std::string,
       if (finfo.name[0] == '.')
         ;
       else if (finfo.attrib & _A_SUBDIR)
-        FindFlvFiles(dir + "/" + finfo.name, files);
-      else if (std::regex_match (finfo.name, flv))
+        findFiles(reg, dir + "/" + finfo.name, files);
+      else if (std::regex_match (finfo.name, reg))
         flist.append(finfo.name).push_back(',');
     } while (_findnext(handle, &finfo) == 0);
     _findclose(handle);
@@ -150,32 +149,50 @@ static void FindFlvFiles(const std::string& dir, std::unordered_map<std::string,
       if (entry->d_name[0] == '.')
         ;
       else if (entry->d_type == DT_DIR)
-        FindFlvFiles(dir + "/" + entry->d_name, files);
-      else if (std::regex_match (entry->d_name, flv))
+        findFiles(reg, dir + "/" + entry->d_name, files);
+      else if (std::regex_match (entry->d_name, reg))
         flist.append(entry->d_name).push_back(',');
       else if (entry->d_type == 0) //d_type isnot POSIX, always retry 
-        FindFlvFiles(dir + "/" + entry->d_name, files);
+        findFiles(reg, dir + "/" + entry->d_name, files);
       entry=readdir (dirp);
     }
     closedir (dirp);
   }
 #endif
 }
+static std::string readStr(std::istream& is)
+{//∂¡»°∑˚∫≈∑∂Œßƒ⁄◊÷∑˚¥Æ
+  std::string str;
+  is >> str;
+  if (!str.empty()) {
+    char c = str[0];
+    if (ispunct(c) && c != '$' && c != '-' && c != '>' && c != '|' && c!= '/') {
+      switch(c) {
+      case '<': c = '>'; break;
+      case '(': c = ')'; break;
+      case '{': c = '}'; break;
+      case '[': c = ']'; break;
+      default: break;
+      }
+      std::string args;
+      std::getline(is, args, c);
+      str.erase(str.begin());
+      str.append(args);
+    }
+  }
+  return str;
+}
 typedef std::unordered_map<std::string, std::string> FileAddrMap;
-static bool UpdateFileAddrs(const std::string& body, FileAddrMap& fileAddrs)
+static bool updateFileAddrs(const std::string& body, FileAddrMap& fileAddrs)
 {
   std::istringstream iss(body);
-  while (iss) {
-    std::string url, addr;
-    iss >> url >> addr;
-    if (url.empty())
-      break;
-    else if (addr.empty())
-      return false;
-    else if (addr != "-")
-      fileAddrs[url] = addr;
-    else
+  std::string url;
+  while ((iss >> url) && !url.empty()) {
+    auto addr = readStr(iss);
+    if (addr.empty())
       fileAddrs.erase(url);
+    else
+      fileAddrs[url] = addr;
   }
   return true;
 }
@@ -200,8 +217,8 @@ struct HttpPlayer : public HubPlayer, public httplib::Stream::Listen
   const int32_t streamId;
   httplib::StreamPtr stream;
   RTMPReader read;
-  virtual bool UpdateChunkSize(int chunkSize) override { return stream != nullptr; }
-  virtual bool SendPacket(RTMPPacket* packet) override {
+  bool UpdateChunkSize(int chunkSize) override { return stream != nullptr; }
+  bool SendPacket(RTMPPacket* packet) override {
     if (!stream) return false; //closed by httplib
     do {
       char buf[4096];
@@ -218,7 +235,7 @@ public:
     memset(&read, 0, sizeof(read));
     s->set_listen(this);
   }
-  virtual ~HttpPlayer() override {
+  ~HttpPlayer() override {
     if (stream) {
       stream->set_listen(nullptr);
       stream->write_chunk(nullptr, 0);
@@ -227,10 +244,194 @@ public:
     if (read.buf != NULL)
       free(read.buf);
   }
-  virtual void on_closed() override {
+  void on_closed() override {
     if (!stream) return;
     stream = nullptr;
     HUB_Remove(streamId);
+  }
+};
+static bool existFile(const std::string& input, const std::string& mode)
+{
+#ifdef _WIN32
+  const int F_OK=0,W_OK=2,R_OK=4,X_OK=0;
+#endif
+  int flags = F_OK;
+  for (const auto& c : mode)
+  {
+    switch(c) {
+    case 'R': case 'r': flags |= R_OK; break;
+    case 'W': case 'w': flags |= W_OK; break;
+    case 'X': case 'x': flags |= X_OK; break;
+    default: break;
+    }
+  }
+  return access(input.c_str(), flags) == 0;
+}
+static bool checkFFmpeg(const std::string& addr, std::vector<std::string>& argv, std::string& redirect)
+{
+  std::istringstream iss(addr);
+  std::string format, input;
+  bool param = false;
+  while (iss) {
+    const auto& v = readStr(iss);
+    if (v.empty())
+      break;
+    else if (v[0] == '>') {
+      redirect = v.substr(1);
+      redirect.append(readStr(iss));
+      if (!iss.eof()) {
+        RTMP_Log(RTMP_LOGERROR, "Invalid ffmpeg redirect: %s", addr.c_str());
+        return false;
+      }
+      break;
+    }
+
+    argv.emplace_back(v);
+    if (v == "-i") {
+      argv.emplace_back(input = readStr(iss));
+      param = false;
+      //check input
+      if (format == "avfoundation"){//MacOS µƒ…Ë±∏
+        //TODO
+      }
+      else if (!existFile(input, "r")) {
+        RTMP_Log(RTMP_LOGERROR, "Invalid ffmpeg input: %s", input.c_str());
+        return false;
+      }
+    }
+    else if (v == "-f") {
+      argv.emplace_back(format = readStr(iss));
+      param = false;
+    }
+    else if (v[0] == '-')
+      param = true;
+    else if (param)
+      param = false;
+    else {
+      RTMP_Log(RTMP_LOGERROR, "can't specify output: %s", addr.c_str());
+      return false;
+    }
+  }
+  if (input.empty()) { 
+    RTMP_Log(RTMP_LOGERROR, "None ffmpeg inputs: %s", addr.c_str());
+    return false;
+  }
+  return true;
+}
+static std::string lastErrorStr(int errCode = 0)
+{
+#ifdef _WIN32
+  LPSTR lpMsgBuf;
+  if (!errCode) errCode = GetLastError(); 
+  FormatMessageA(
+    FORMAT_MESSAGE_ALLOCATE_BUFFER | 
+    FORMAT_MESSAGE_FROM_SYSTEM |
+    FORMAT_MESSAGE_IGNORE_INSERTS,
+    nullptr, errCode,
+    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+    (LPSTR)&lpMsgBuf, 0, nullptr);
+  std::string ret(lpMsgBuf);
+  LocalFree(lpMsgBuf);
+  while (!ret.empty()) {
+    if ((ret.back()&0x80) || !isspace(ret.back()))
+      break;
+    ret.pop_back();
+  }
+  return ret;
+#else
+  return std::string(strerror(errCode));
+#endif
+}
+static size_t spawnTask(const char* cmd, const std::vector<std::string>& params, const std::string& redirect)
+{
+#ifdef _WIN32
+  std::ostringstream oss;
+  for (auto& s : params) oss << s << ' ';
+  STARTUPINFO si = {0};
+  PROCESS_INFORMATION pi = {0};
+  HANDLE hOutput = INVALID_HANDLE_VALUE;
+  if (!redirect.empty()) {
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+    hOutput = CreateFileA(redirect.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ,
+      &sa, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hOutput == INVALID_HANDLE_VALUE) {
+      RTMP_Log(RTMP_LOGERROR, "CreateFile(%s): %s", redirect.c_str(), lastErrorStr().c_str());
+      return 0;
+    }
+
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdError = hOutput;
+    si.hStdOutput = hOutput;
+  }
+  const auto& argv = oss.str();
+  si.cb = sizeof(si);
+  if (!CreateProcessA(cmd, (LPSTR)argv.c_str(), nullptr,  nullptr,
+      true, CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &si, &pi)) {
+    RTMP_Log(RTMP_LOGERROR, "CreateProcess(%s,%s): %s", cmd, argv.c_str(), lastErrorStr().c_str());
+    return 0;
+  }
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  CloseHandle(hOutput);
+  return (size_t)pi.dwProcessId;
+#else
+  int status;
+  pid_t pid = fork();
+  if (pid < 0) {
+    perror("fork");
+    return 0;
+  }
+  else if (pid == 0) {
+    char** argv = new char*[params.size()+1];
+    for (size_t i = 0; i < params.size(); i++)
+      argv[i] = (char*)params[i].c_str();
+    argv[params.size()] = nullptr;
+
+    if (!redirect.empty()) {
+      int hOutput = ::open(redirect.c_str(), O_CREAT|O_WRONLY|O_APPEND,
+        S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
+      if (hOutput < 0) {
+        RTMP_Log(RTMP_LOGERROR, "open(%s): %s", redirect.c_str(), lastErrorStr().c_str());
+        exit(127);
+      }
+      if (dup2(hOutput, STDERR_FILENO) < 0)
+        perror("dup2(STDERR_FILENO)");
+      else if (dup2(hOutput, STDOUT_FILENO) < 0)
+        perror("dup2(STDOUT_FILENO)");
+      ::close(hOutput);
+    }
+    execv(cmd, argv);
+    fprintf(stderr, "exec %s: %s\n", cmd, strerror(errno));
+    _exit(127);
+  }
+  else if (waitpid(pid, &status, WNOHANG) != 0) {
+    perror("waitpid");
+    return 0;
+  }
+  return (size_t)pid;
+#endif
+}
+static int killTask(size_t pid)
+{
+#ifdef _WIN32
+  return GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, (DWORD)pid)
+    ? 0 : GetLastError();
+#else
+  return kill((pid_t)pid, SIGTERM) ? errno : 0;
+#endif
+}
+struct ffmpegTask : public HubPlayer {
+  bool SendPacket(RTMPPacket* packet) override { return true; }
+  bool UpdateChunkSize(int chunkSize) override { return true; }
+  size_t pid;
+  ffmpegTask(size_t p) : pid(p) {}
+  bool onlyListen() override { return true; }
+  ~ffmpegTask() override {
+    auto ret = killTask(pid);
+    RTMP_Log(ret ? RTMP_LOGERROR : RTMP_LOGCRIT, "kill %zu: %s", pid, lastErrorStr(ret).c_str());
   }
 };
 static void* send_stream_thread(RtmpStreamPtr fp, int streamId);

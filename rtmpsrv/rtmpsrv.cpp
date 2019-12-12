@@ -10,6 +10,7 @@
 #include "httplib.h"
 #include "rtmpsrv.h"
 static int _rtmpPort = 1935;
+static const char* _ffmpeg = nullptr;
 static st_thread_t _rtmpThread = nullptr;
 static FileAddrMap _fileAddrs;//文件regex-URL -> 源地址,支持regex替换
 static std::unordered_map<SOCKET, TaskInfo> _tasks;//推流或拉流中的任务
@@ -40,7 +41,7 @@ static bool doRtmpSource(const std::string& addr,
   RTMP *rtmp = nullptr;
   do {
     auto url = addr;
-    if (!(rtmp = ConnectURL(url, false)))//url已包含app,playpath
+    if (!(rtmp = connectURL(url, false)))//url已包含app,playpath
       break;
     st_thread_t t = st_go::create([=] {
       return pull_stream_thread(rtmp, fakeId);
@@ -107,44 +108,68 @@ static bool doHttpSource(const std::string& addr,
     RTMP_Log(RTMP_LOGERROR, "Invalid file addr: %s", addr.c_str());
   return false;
 }
+static bool doFFmpegSource(const std::string& addr,
+  const std::string& app, const std::string& playpath, int32_t fakeId)
+{
+  std::string reout;
+  std::vector<std::string> argv;
+  argv.emplace_back("ffmpeg"), argv.emplace_back("-re"), argv.emplace_back("-hide_banner");
+  if (!checkFFmpeg(addr.substr(7), argv, reout))
+    return false;
+  argv.emplace_back("-f"), argv.emplace_back("flv");
+  argv.emplace_back("rtmp://127.0.0.1:" + std::to_string(_rtmpPort) + "/" + app + "/" + playpath);
+
+  auto pid = spawnTask(_ffmpeg, argv, reout);
+  RTMP_Log(pid ? RTMP_LOGCRIT : RTMP_LOGERROR, "%zu=`%s'", pid, addr.c_str());
+  if (!pid) return false;
+
+  HUB_AddPlayer(app, playpath, fakeId, HubPlayerPtr(new ffmpegTask(pid)));
+  return true;
+}
 static bool setupPushing(const std::string& app, const std::string& playpath, int32_t streamId)
 {
   if (!HUB_MarkBegin(app, playpath))//先预设时间,防止重复请求源
     return false;
 
-  std::string path(app + "/" + playpath), addr;
+  const std::string path(app + "/" + playpath);
   for (auto& iter : _fileAddrs) {
     std::smatch matches;
-    if (std::regex_match (path, matches, std::regex(iter.first, std::regex::icase))){
-      addr = iter.second;
-      auto pos = addr.find('$');//支持替换 live/(\.*)   http://10.211.55.17/app/$1.flv
-      while (pos != addr.npos && pos + 1 < addr.size()) {
-        auto idx = addr[pos+1] - '0';
-        if (idx >= matches.size()) {
-          RTMP_Log(RTMP_LOGERROR, "Invalid path `%s'replace with URL: %s %s",
-            path.c_str(), iter.first.c_str(), iter.second.c_str());
-          goto clean;
-        }
-        addr.replace(pos, 2, matches[idx]);
-        pos = addr.find('$', pos+2);
+    if (!std::regex_match (path, matches, std::regex(iter.first, std::regex::icase)))
+      continue;
+    std::string addr = iter.second;
+    auto pos = addr.find('$');//支持替换 live/(\.*)   http://10.211.55.17/app/$1.flv
+    while (pos != addr.npos && pos + 1 < addr.size()) {
+      auto idx = addr[pos+1] - '0';
+      if (idx >= matches.size()) {
+        RTMP_Log(RTMP_LOGERROR, "Invalid path `%s'replace with URL: %s %s",
+          path.c_str(), iter.first.c_str(), iter.second.c_str());
+        goto clean;
       }
-      break;
+      addr.replace(pos, 2, matches[idx]);
+      pos = addr.find('$', pos+2);
     }
+    if (addr.find("http://") == 0) {//httpflv拉流 或 启动远程到自身的RTMP推流
+      if (doHttpSource(addr, app, playpath, -streamId))
+        return true;
+    }
+    else if (addr.find("rtmp://") == 0) {//向rtmpsrv直接拉流
+      if (doRtmpSource(addr, app, playpath, -streamId))
+        return true;
+    }
+    else if (addr.find("ffmpeg") == 0) {
+      if (!_rtmpThread)
+        RTMP_Log(RTMP_LOGERROR, "RTMP-SRV closed, can't accept ffmpeg: %s", addr.c_str());
+      else if (!_ffmpeg)
+        RTMP_Log(RTMP_LOGERROR, "No specify FFmpeg, can't accept ffmpeg: %s", addr.c_str());
+      else if (doFFmpegSource(addr, app, playpath, -streamId))
+        return true;
+    }
+    else
+      RTMP_Log(RTMP_LOGERROR, "Invalid addr `%s'", addr.c_str());
   }
-  if (addr.empty()) {//尝试读取本地文件
-    if (doFileSource(path + ".flv", app, playpath, -streamId))
-      return true;
-  }
-  else if (addr.find("http://") == 0) {//httpflv拉流 或 启动远程到自身的RTMP推流
-    if (doHttpSource(addr, app, playpath, -streamId))
-      return true;
-  }
-  else if (addr.find("rtmp://") == 0) {//向rtmpsrv直接拉流
-    if (doRtmpSource(addr, app, playpath, -streamId))
-      return true;
-  }
-  else if (!addr.empty())
-    RTMP_Log(RTMP_LOGERROR, "Invalid addr %s", addr.c_str());
+  //最后尝试读取本地文件
+  if (doFileSource(path + ".flv", app, playpath, -streamId))
+    return true;
 
 clean:
   HUB_MarkEnd(app, playpath);//失败或不存在源,复位开始时刻
@@ -189,6 +214,7 @@ static void* send_stream_thread(RtmpStreamPtr fp, int streamId)
     info.bytes += packet.m_nBodySize;
   }
 
+  RTMP_Log(RTMP_LOGCRIT, "%s", info.stats(iter->first).c_str());
   if (streamId) HUB_Remove(streamId);
   RTMPPacket_Free(&packet);
   if (info.thread == st_thread_self())//不是onDeleteTaskById()强制结束,由join_threads()回收
@@ -247,6 +273,7 @@ static void* serve_client_thread(void* fd)
     goto clean;
   }
   else {
+    RTMP_PrintInfo(&rtmp, RTMP_LOGCRIT, "Accept");
     const std::string app(rtmp.Link.app.av_val, rtmp.Link.app.av_len);
     const std::string playpath(rtmp.Link.playpath.av_val, rtmp.Link.playpath.av_len);
     if (RTMP_State(&rtmp)&RTMP_STATE_PLAYING) {
@@ -268,7 +295,6 @@ static void* serve_client_thread(void* fd)
     }
   }
 
-  RTMP_PrintInfo(&rtmp, RTMP_LOGCRIT, "Accept");
   //作为服务端, 接收并转发 RTMP 流
   while (_rtmpThread && RTMP_IsConnected(&rtmp)
     && RTMP_ReadPacket(&rtmp, &packet)) {
@@ -326,16 +352,20 @@ clean:
 #define ERR_BREAK(x) { res.status = x; break; }
 static void onGetFiles(const httplib::Request& req, httplib::Response& res)
 {
-  std::unordered_map<std::string, std::string> files;
-  for (auto& iter: _fileAddrs)
-    files[iter.second].append(iter.first).push_back(',');
-
-  FindFlvFiles(".", files);
   std::ostringstream oss;
-  for (auto& iter: files){
-    if (iter.second.empty()) continue;
-    iter.second.back() = '\n';
-    oss << iter.first << ' ' << iter.second;
+  for (auto& iter: _fileAddrs) {
+    oss << iter.first << "\t\"" << iter.second << "\"\n";
+  }
+  const auto& dir = req.get_param_value("localdir");
+  if (!dir.empty()) {
+    static const std::regex flv(R"(.*\.flv)", std::regex::icase);
+    std::unordered_map<std::string, std::string> files;
+    findFiles(flv, dir, files);
+    for (auto& iter: files){
+      if (iter.second.empty()) continue;
+      iter.second.pop_back();//erase ','
+      oss << iter.first << "\t\"" << iter.second << "\"\n";
+    }
   }
   res.set_content(oss.str(), "text");
 }
@@ -343,7 +373,7 @@ static void onGetFiles(const httplib::Request& req, httplib::Response& res)
 static void onPutFiles(const httplib::Request& req, httplib::Response& res)
 {
   FileAddrMap fileAddrs;
-  if (UpdateFileAddrs(req.body, fileAddrs))
+  if (updateFileAddrs(req.body, fileAddrs))
     std::swap(_fileAddrs, fileAddrs);
   else
     res.status = 400;
@@ -352,7 +382,7 @@ static void onPutFiles(const httplib::Request& req, httplib::Response& res)
 static void onPatchFiles(const httplib::Request& req, httplib::Response& res)
 {
   FileAddrMap fileAddrs(_fileAddrs);
-  if (UpdateFileAddrs(req.body, fileAddrs))
+  if (updateFileAddrs(req.body, fileAddrs))
     std::swap(_fileAddrs, fileAddrs);
   else
     res.status = 400;
@@ -434,7 +464,7 @@ static void onPostTasks(const httplib::Request& req, httplib::Response& res)
       url = oss.str();
     }
 
-    if (!(rtmp = ConnectURL(url, true)))
+    if (!(rtmp = connectURL(url, true)))
       ERR_BREAK(500);
     fakeId = RTMP_streamNextId++;
     if (HUB_AddPlayer(app, playpath, fakeId,
@@ -504,7 +534,7 @@ static void onGetChunkedFlv(const httplib::Request& req, httplib::Response& res)
 }
 /*
 接口设计:
-   - GET /files 获取regex-URL信息
+   - GET /filess?localdir=<DIR> 获取regex-URL信息
    - PUT /files 更新全部文件regex-URL信息
    - PATCH /files 更新部分文件 regex-URL信息
 
@@ -549,16 +579,22 @@ app/a2 	http://SRV0/app/xxx.flv
 
 int main(int argc, char* argv[])
 {
-  if (st_init() < 0){
+#ifndef _WIN32
+  if (SIG_ERR == signal(SIGCHLD, SIG_IGN)) {//避免僵尸子进程
+    perror("signal(SIGCHLD,SIG_IGN)");
+    return -1;
+  }
+#endif
+  if (st_init() < 0) {
     perror("st_init");
-    exit(-1);
+    return -1;
   }
   st_thread_t server = nullptr;
   httplib::Server http;
   RTMP_debuglevel = RTMP_LOGWARNING;
   http.Get("/", [&](const httplib::Request& req, httplib::Response& res){
     const char * help =
-      "- GET /files   all regex-URL-List\r\n"
+      "- GET /files?localdir=<DIR> all regex-URL-List\r\n"
       "- PUT /files   set regex-URL-List\r\n"
       "- PATCH /files update regex-URL-List\r\n"
       "RTMP Server:\r\n"
@@ -586,6 +622,7 @@ int main(int argc, char* argv[])
     res.set_content(help, "text/html");
   })
   .Get("/quit", [](const httplib::Request& req, httplib::Response& res) {
+    RTMP_Log(RTMP_LOGCRIT, "Quit ......");
     res.transfer = [](httplib::StreamPtr&, bool) { exit(0); return false; };
   })
   .Post("/loglevel", [](const httplib::Request& req, httplib::Response& res) {
@@ -617,6 +654,7 @@ int main(int argc, char* argv[])
     "OPTIONS:\r\n"
     " -h, --help      \tPrint this message\r\n"
     " --port=5562     \tHttp service port\r\n"
+    " --ffmpeg=<file> \tFFmpeg binary path\r\n"
     " --filecfg=<file>\tFile map config path\r\n"
     " --rootdir=<dir> \tHttp service root directory\r\n"
     " --rtmpsrv=1935  \tStart Rtmp service at port\r\n";
@@ -626,6 +664,8 @@ int main(int argc, char* argv[])
   for(int i=1;i<argc;++i) {
     if (!strncmp(argv[i], "--port=", 7))
       httpPort = std::atoi(argv[i]+7);
+    else if (!strncmp(argv[i], "--ffmpeg=", 9))
+      _ffmpeg = argv[i]+9;
     else if (!strncmp(argv[i], "--filecfg=", 10))
       fileCfg = argv[i]+10;
     else if (!strncmp(argv[i], "--rootdir=", 10))
@@ -640,7 +680,10 @@ int main(int argc, char* argv[])
       return -1;
     }
   }
-
+  if (_ffmpeg && !existFile(_ffmpeg, "x")){
+    RTMP_Log(RTMP_LOGERROR, "Invalid path of `--ffmpeg=%s'", _ffmpeg);
+    return -1;
+  }
   if (fileCfg) {
     std::stringstream body;
     std::ifstream t(fileCfg);
@@ -649,7 +692,7 @@ int main(int argc, char* argv[])
       return -1;
     }
     body << t.rdbuf();
-    if (!UpdateFileAddrs(body.str(), _fileAddrs)) {
+    if (!updateFileAddrs(body.str(), _fileAddrs)) {
       RTMP_Log(RTMP_LOGERROR, "Invalid format of `--filecfg=%s'", fileCfg);
       return -1;
     }

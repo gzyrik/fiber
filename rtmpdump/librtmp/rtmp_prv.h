@@ -26,4 +26,5 @@ int RTMPSockBuf_Close(RTMPSockBuf *sb);
 
 int RTMP_FindFirstMatchingProperty(AMFObject *obj, const AVal *name, AMFObjectProperty * p);
 int RTMP_GetNextMediaPacket(RTMP *r, RTMPPacket *packet);
+int HandleMetadata(RTMPReader *r, char *body, unsigned int len);
 #define STR2AVAL(av,str)	av.av_val = (char*)str; av.av_len = strlen(av.av_val)

@@ -241,6 +241,7 @@ void
 RTMP_PrintInfo(RTMP *rtmp, int loglevel, const char* prefix)
 {
   char buf[MAX_PRINT_LEN];
+  AVal *av;
   char* p=buf, *endbuf=buf+sizeof(buf);
   if (loglevel > RTMP_debuglevel)
     return;
@@ -250,7 +251,11 @@ RTMP_PrintInfo(RTMP *rtmp, int loglevel, const char* prefix)
     struct sockaddr_in *v4 = (struct sockaddr_in *)&sa;
     struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&sa;
     socklen_t sklen = sizeof(sa);
-    getpeername(RTMP_Socket(rtmp), (struct sockaddr*)&sa, &sklen);
+    /* client print local addr, server print peer addr */
+    if (rtmp->m_bSendCounter)
+      getsockname(RTMP_Socket(rtmp), (struct sockaddr*)&sa, &sklen);
+    else
+      getpeername(RTMP_Socket(rtmp), (struct sockaddr*)&sa, &sklen);
     switch(sa.ss_family) {
     case AF_INET:
       p += strlen(inet_ntop(AF_INET, &(v4->sin_addr), p, endbuf - p));
@@ -262,14 +267,26 @@ RTMP_PrintInfo(RTMP *rtmp, int loglevel, const char* prefix)
       break;
     }
   }
-  if (rtmp->Link.tcUrl.av_len > 0)
-    p += sprintf(p, "\n\t tcUrl=%-.*s", rtmp->Link.tcUrl.av_len, rtmp->Link.tcUrl.av_val);
-  if (rtmp->Link.pageUrl.av_len > 0)
-    p += sprintf(p, "\n\t pageUrl=%-.*s", rtmp->Link.pageUrl.av_len, rtmp->Link.pageUrl.av_val);
-  if (rtmp->Link.swfUrl.av_len > 0)
-    p += sprintf(p, "\n\t swfUrl=%-.*s", rtmp->Link.swfUrl.av_len, rtmp->Link.swfUrl.av_val);
-  if (rtmp->Link.playpath.av_len > 0)
-    p += sprintf(p, "\n\t playpath=%-.*s", rtmp->Link.playpath.av_len, rtmp->Link.playpath.av_val);
+  av = &rtmp->Link.tcUrl;
+  if (av->av_len > 0 && av->av_val && av->av_val[0])
+    p += sprintf(p, "\n\t tcUrl=%-.*s", av->av_len, av->av_val);
+  else {
+    av = &rtmp->Link.app;
+    if (av->av_len > 0 && av->av_val && av->av_val[0])
+      p += sprintf(p, "\n\t app=%-.*s", av->av_len, av->av_val);
+  }
+
+  av = &rtmp->Link.pageUrl;
+  if (av->av_len > 0 && av->av_val && av->av_val[0])
+    p += sprintf(p, "\n\t pageUrl=%-.*s", av->av_len, av->av_val);
+
+  av = &rtmp->Link.swfUrl;
+  if (av->av_len > 0 && av->av_val && av->av_val[0])
+    p += sprintf(p, "\n\t swfUrl=%-.*s", av->av_len, av->av_val);
+
+  av = &rtmp->Link.playpath;
+  if (av->av_len > 0 && av->av_val && av->av_val[0])
+    p += sprintf(p, "\n\t playpath=%-.*s", av->av_len, av->av_val);
 
   RTMP_Log(loglevel, "[%d]%s:%s %s", RTMP_Socket(rtmp), prefix,
     (RTMP_State(rtmp)&RTMP_STATE_PLAYING ? "Player":"Pusher"), buf);

@@ -343,7 +343,7 @@ bool RTMP_ResetRead(RTMP *rtmp, FILE *flvFile, int nSkipKeyFrames)
     rtmp->m_read.initialFrameType = initialFrameType;
     rtmp->m_read.initialFrame = initialFrame;
     rtmp->m_read.nInitialFrameSize = nInitialFrameSize;
-    rtmp->m_fDuration = duration;
+    rtmp->m_read.duration = duration;
   }
   return true;
 }
@@ -362,8 +362,6 @@ static const char flvHeader[] = { 'F', 'L', 'V', 0x01,
   0x00, 0x00, 0x00, 0x09,
   0x00, 0x00, 0x00, 0x00
 };
-#define HEADERBUF	(128*1024)
-
 static int ReadPacket(RTMPPacket *packet, RTMPReader* r, char *buf, int buflen)
 {
   uint32_t prevTagSize = 0;
@@ -374,10 +372,11 @@ static int ReadPacket(RTMPPacket *packet, RTMPReader* r, char *buf, int buflen)
   uint32_t nTimeStamp = 0;
   unsigned int len;
 
-  while (RTMPPacket_IsMedia(packet))
-  {
+  do {
     char *packetBody = packet->m_body;
     unsigned int nPacketLen = packet->m_nBodySize;
+    if (packet->m_packetType == RTMP_PACKET_TYPE_INFO)
+        HandleMetadata(r, packetBody, nPacketLen);
 
     const int setDataFrameLen = 1+2+av_setDataFrame.av_len;
     if (packet->m_packetType == RTMP_PACKET_TYPE_INFO && nPacketLen >= setDataFrameLen
@@ -827,7 +826,7 @@ stopKeyframeSearch:
 
     ret = size;
     break;
-  }
+  } while(0);
 
   if (recopy)
   {
@@ -854,7 +853,6 @@ fail:
   default:
     break;
   }
-
   /* first time thru */
   if (!(r->flags & RTMP_READ_HEADER))
   {
@@ -862,6 +860,8 @@ fail:
     {
       if (!r->buf)
       {
+#define HEADERBUF    (128*1024)
+#define HEADERBUF1   1024
         r->buf = malloc(HEADERBUF);
         memcpy(r->buf, flvHeader, sizeof(flvHeader));
         r->bufpos = r->buf + sizeof(flvHeader);
@@ -869,6 +869,8 @@ fail:
       }
       if (packet != NULL)
       {
+        char *mybuf = r->buf;
+        size_t mylen = r->bufpos - r->buf;
         nRead = ReadPacket(packet, r, r->bufpos, r->buflen);
         packet = NULL;
         if (nRead < 0) 
@@ -880,17 +882,21 @@ fail:
           goto fail;
         }
         /* buffer overflow, fix buffer and give up */
-        if (r->bufpos < r->buf || r->bufpos > r->buf + HEADERBUF) {
+        if (r->buf != mybuf) {
+          mylen += nRead;
+          mybuf = realloc(mybuf, mylen + r->buflen + HEADERBUF1);
+          memcpy(mybuf+mylen, r->bufpos, r->buflen);
           free(r->buf);
-          r->bufpos = r->buf = NULL;
-          r->buflen = 0;
-          r->status = RTMP_READ_ERROR;
-          goto fail;
+          r->buf = mybuf;
+          r->bufpos = mybuf + mylen + r->buflen;
+          r->buflen = HEADERBUF1;
         }
-        r->bufpos += nRead;
-        r->buflen -= nRead;
+        else {
+          r->bufpos += nRead;
+          r->buflen -= nRead;
+        }
       }
-      if (r->dataType != 5)
+      if (r->dataType != 5 && r->timestamp == 0)
         return 0;
       r->buf[4] = r->dataType;
       r->buflen = r->bufpos - r->buf;

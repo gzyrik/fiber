@@ -211,6 +211,7 @@ bool RTMPPacket_ReadFile(RTMPPacket *p, void* fp, size_t (*readf)(void* fp, char
     char *buf;
     char *bufpos;
     unsigned int buflen;
+    double duration;		/* duration of stream in seconds */
     uint32_t timestamp;
     uint8_t dataType;
     uint8_t flags;
@@ -279,7 +280,6 @@ bool RTMPPacket_ReadFile(RTMPPacket *p, void* fp, size_t (*readf)(void* fp, char
     double m_fVideoCodecs;	/* videoCodecs for the connect packet */
     double m_fEncoding;		/* AMF0 or AMF3 */
 
-    double m_fDuration;		/* duration of stream in seconds */
 
     int m_msgCounter;		/* RTMPT stuff */
     int m_polling;
@@ -331,6 +331,8 @@ void RTMP_SetupStream(RTMP *r, int protocol,
 bool RTMP_ReadPacket(RTMP *r, RTMPPacket *packet);
 bool RTMP_SendPacket(RTMP *r, RTMPPacket *packet, bool queue);
 int RTMP_SendChunk(RTMP *r, RTMPChunk *chunk);
+/* @return true if media packet. */
+bool RTMP_HandlePacket(RTMP *r, RTMPPacket *packet);
 
 int RTMP_IsConnected(RTMP *r);
 SOCKET RTMP_Socket(RTMP *r);
@@ -346,7 +348,7 @@ bool RTMP_Connect(RTMP *r, RTMPPacket *cp);
 /* @return streamId */
 int RTMP_ConnectStream(RTMP *r, int seekTime);
 /* @return true if media packet. */
-bool RTMP_ClientPacket(RTMP *r, RTMPPacket *packet);
+#define RTMP_ClientPacket(r, p) RTMP_HandlePacket(r, p)
 int RTMP_ReconnectStream(RTMP *r, int seekTime);
 int RTMP_ToggleStream(RTMP *r);
 void RTMP_DeleteStream(RTMP *r);
@@ -359,7 +361,7 @@ bool RTMP_Serve(RTMP *r, SOCKET sockfd, void *tlsCtx);
 /* @return streamId */
 int RTMP_AcceptStream(RTMP *r, RTMPPacket *packet);
 /* @return true if media packet. */
-bool RTMP_ServePacket(RTMP *r, RTMPPacket *packet);
+#define RTMP_ServePacket(r, p) RTMP_HandlePacket(r, p)
 bool RTMP_SendPlayStop(RTMP *r, const AVal* playpath);
 void *RTMP_TLS_AllocServerContext(const char* certFile, const char* keyFile);
 void RTMP_TLS_FreeServerContext(void *tlsCtx);
