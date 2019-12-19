@@ -53,7 +53,7 @@ static bool doRtmpSource(const std::string& addr,
 
     RTMP_PrintInfo(rtmp, RTMP_LOGCRIT, "PullTask");
     _tasks.emplace(RTMP_Socket(rtmp), TaskInfo(t, app, playpath, addr));
-    HUB_SetPusher(app, playpath, fakeId, HubPusherPtr(new RtmpPusher(*rtmp)));
+    HUB_SetPusher(app, playpath, fakeId, HubPusherPtr(new RtmpPusher(*rtmp, false)));//按需动态创建拉流
     return true;
   } while (0);
   if (rtmp) RTMP_Close(rtmp);
@@ -123,7 +123,7 @@ static bool doFFmpegSource(const std::string& addr,
   RTMP_Log(pid ? RTMP_LOGCRIT : RTMP_LOGERROR, "%zu=`%s'", pid, addr.c_str());
   if (!pid) return false;
 
-  HUB_AddPlayer(app, playpath, fakeId, HubPlayerPtr(new ffmpegTask(pid)));
+  HUB_AddPlayer(app, playpath, fakeId, HubPlayerPtr(new FFmpegTask(pid)));
   return true;
 }
 static bool setupPushing(const std::string& app, const std::string& playpath, int32_t streamId)
@@ -275,10 +275,16 @@ static void* serve_client_thread(void* fd)
   else {
     RTMP_PrintInfo(&rtmp, RTMP_LOGCRIT, "Accept");
     const std::string app(rtmp.Link.app.av_val, rtmp.Link.app.av_len);
-    const std::string playpath(rtmp.Link.playpath.av_val, rtmp.Link.playpath.av_len);
+    std::string playpath(rtmp.Link.playpath.av_val, rtmp.Link.playpath.av_len);
+    char prefix = 0;
+    if (!playpath.empty() && ispunct(playpath[0])) {
+      prefix = playpath[0];
+      playpath.erase(playpath.begin());
+    }
     if (RTMP_State(&rtmp)&RTMP_STATE_PLAYING) {
+      const bool onlyListen = (prefix == '.');//前缀'.', 则是旁听
       if (HUB_AddPlayer(app, playpath, streamId,
-          HubPlayerPtr(new RtmpPlayer(rtmp))) == 0
+          HubPlayerPtr(new RtmpPlayer(rtmp, onlyListen))) == 0
         && !setupPushing(app, playpath, streamId)) {
         RTMP_Log(RTMP_LOGERROR, "setup %s/%s failed", app.c_str(), playpath.c_str());
         goto clean;
@@ -291,7 +297,8 @@ static void* serve_client_thread(void* fd)
       oss << ':' << port << '/' << app << '/' << playpath;
       iter = _tasks.emplace(sockfd, TaskInfo(st_thread_self(), app, playpath,  oss.str())).first;
       info = &(iter->second);
-      HUB_SetPusher(app, playpath, streamId, HubPusherPtr(new RtmpPusher(rtmp)));
+      const bool canLiveAlone = (prefix == '.');//前缀'.', 则是可独播
+      HUB_SetPusher(app, playpath, streamId, HubPusherPtr(new RtmpPusher(rtmp, canLiveAlone)));
     }
   }
 
@@ -449,7 +456,13 @@ static void onGetTasks(const httplib::Request& req, httplib::Response& res)
 }
 static void onPostTasks(const httplib::Request& req, httplib::Response& res)
 {
-  const std::string &app=req.matches[1], &playpath = req.matches[2];
+  const std::string &app=req.matches[1];
+  std::string playpath = req.matches[2];
+  bool onlyListen = false;
+  if (!playpath.empty() && ispunct(playpath[0])) {
+    onlyListen = (playpath[0] == '.');//前缀'.', 则是旁听
+    playpath.erase(playpath.begin());
+  }
   RTMP* rtmp=nullptr;
   int32_t fakeId = 0;
   do {
@@ -468,7 +481,7 @@ static void onPostTasks(const httplib::Request& req, httplib::Response& res)
       ERR_BREAK(500);
     fakeId = RTMP_streamNextId++;
     if (HUB_AddPlayer(app, playpath, fakeId,
-        HubPlayerPtr(new RtmpPlayer(*rtmp))) == 0
+        HubPlayerPtr(new RtmpPlayer(*rtmp, onlyListen))) == 0
       && !setupPushing(app, playpath, fakeId)) {
       RTMP_Log(RTMP_LOGERROR, "setup %s/%s failed", app.c_str(), playpath.c_str());
       ERR_BREAK(500);
@@ -516,14 +529,23 @@ static void onDeleteTaskById(const httplib::Request& req, httplib::Response& res
 }
 static void onGetChunkedFlv(const httplib::Request& req, httplib::Response& res)
 {
-  const std::string &app=req.matches[1], &playpath = req.matches[2], &path = req.path;
+  const std::string &app=req.matches[1], &path = req.path;
+  std::string playpath = req.matches[2];
+  bool onlyListen = false;
+  if (req.has_param("onlyListen"))
+    onlyListen = (req.get_param_value("onlyListen") == "true");//仅旁听,可断开
+  else if (!playpath.empty() && ispunct(playpath[0])) {
+    onlyListen = (playpath[0] == '.');//前缀'.', 则是旁听
+    playpath.erase(playpath.begin());
+  }
+
   res.set_header("Content-Type","video/x-flv");
   res.set_header("Connection", "keep-alive");
   res.set_header("Transfer-Encoding","chunked");
   res.transfer = [=](httplib::StreamPtr& stream, bool chunked) {
     int32_t fakeId = RTMP_streamNextId++;
     if (!HUB_AddPlayer(app, playpath, fakeId,
-        HubPlayerPtr(new HttpPlayer(stream, fakeId)))
+        HubPlayerPtr(new HttpPlayer(stream, fakeId, onlyListen)))
       && !setupPushing(app, playpath, fakeId)) {
       RTMP_Log(RTMP_LOGERROR, "setup HTTP %s pushing failed", path.c_str());
       //不能调HUB_Remove, 因为此处 HTTP 会话没有结束, 须由断开后的回调清除
@@ -534,6 +556,10 @@ static void onGetChunkedFlv(const httplib::Request& req, httplib::Response& res)
 }
 /*
 接口设计:
+<PLAYPATH> 若首字符 ispunct, 则只作为控制含义,且不算播放地址内,目前支持
+   - '.'  推流时表示无接收时,也强制继续, canLiveAlone;
+          拉流时表示只侦听,当只剩侦听时将断开源推流, onlyListen;
+
    - GET /filess?localdir=<DIR> 获取regex-URL信息
    - PUT /files 更新全部文件regex-URL信息
    - PATCH /files 更新部分文件 regex-URL信息
@@ -547,7 +573,7 @@ static void onGetChunkedFlv(const httplib::Request& req, httplib::Response& res)
    - GET /tasks/<ID>    获取指定的任务统计
    - DELETE /tasks/<ID> 强制关闭指定的任务
 
-   - GET /<APP>/<PLAYPATH>.flv 拉取 httpflv 流
+   - GET /<APP>/<PLAYPATH>.flv?onlyListen=false 拉取 httpflv 流
      注意: <PLAYPATH> 不允许包含'/'
 
 测试用例:

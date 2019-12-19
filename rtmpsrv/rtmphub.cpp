@@ -77,17 +77,22 @@ void HUB_Remove(int32_t streamId)
   auto* app = hub.appIter->first.c_str();
   auto* playpath = hubIter->first.c_str();
   if (hub.streamId == streamId)
-    RTMP_Log(RTMP_LOGCRIT, "%s/%s\tPusher[%d] Removed, Close All Players", app, playpath, streamId);
+    RTMP_Log(RTMP_LOGCRIT, "%s/%s\tPusher[%d] removed, close all players", app, playpath, streamId);
   else if (hub.players.erase(streamId) > 0) {
     for (auto& iter : hub.players) {
-      if (!iter.second->onlyListen()){
-        RTMP_Log(RTMP_LOGCRIT, "%s/%s\tPlayer[%d] Removed, Remaind %d",
+      if (!iter.second->OnlyListen()){
+        RTMP_Log(RTMP_LOGCRIT, "%s/%s\tPlayer[%d] removed, remaind %d",
           app, playpath, streamId, (int)hub.players.size());
         return;
       }
     }
-    RTMP_Log(RTMP_LOGCRIT, "%s/%s\tPlayer[%d] Removed, Erase All %d",
-      app, playpath, streamId, (int)hub.players.size());
+    if (hub.pusher && hub.pusher->CanLiveAlone()){
+      RTMP_Log(RTMP_LOGCRIT, "%s/%s\tPlayer[%d] removed, pusher[%d] live, listens=%zu",
+        app, playpath, streamId, hub.streamId, hub.players.size());
+      return;
+    }
+    RTMP_Log(RTMP_LOGCRIT, "%s/%s\tPlayer[%d] removed, erase all listens=%zu",
+      app, playpath, streamId, hub.players.size());
     _streams.erase(hub.streamId); //强制删除推送者
   }
   else {// can't reach here.
@@ -207,7 +212,7 @@ bool HUB_Publish(int32_t streamId, RTMPPacket* packet)
   auto piter = hub.players.begin();
   while (piter != hub.players.end()) {
     auto cur = piter++;
-    if (!cur->second->SendPacket(packet)){
+    if (!cur->second->SendPacket(packet)) {
       _streams.erase(cur->first);
       hub.players.erase(cur);
       erased = true;
@@ -215,7 +220,11 @@ bool HUB_Publish(int32_t streamId, RTMPPacket* packet)
   }
   packet->m_body = NULL;//move to hub.meta or hub.gop
 
-  if (erased && hub.pusher && hub.players.empty()) {
+  if (erased && hub.pusher && !hub.pusher->CanLiveAlone()) {
+    for (auto& iter :hub.players) {
+      if (!iter.second->OnlyListen())
+        return true;
+    }
     RTMP_Log(RTMP_LOGCRIT, "All Player Removed, Close Pusher[%d]", hub.streamId);
     hub.pusher = nullptr;
     return false;

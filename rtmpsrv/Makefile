@@ -60,10 +60,10 @@ $(v)$(RM) test.log
 endef
 
 t0: FILES ='\
-  (.*)/a0 rtmp://$(RTMP_ADDR)/$$1/a1 \
+  (.*)/a0 rtmp://$(RTMP_ADDR)/$$1/.a1 \
   app/a1 http://$(HTTP_ADDR)/tasks/app/a2 \
   app/a2 http://$(HTTP_ADDR)/app/test.flv'
-t0: RTMP MYST rtmpsrv app/test.flv
+t0: rtmpsrv app/test.flv
 	@echo "** Test loopback starting, about 5 seconds ......" && echo
 	$(call test,app/a0.flv --output a.flv)
 	$(v)diff a.flv app/test.flv
@@ -71,7 +71,7 @@ t0: RTMP MYST rtmpsrv app/test.flv
 	$(v)$(RM) a.flv
 
 t1: FILES ='app/ff "ffmpeg -i app/test.flv >ff.log"'
-t1: RTMP MYST rtmpsrv app/test.flv
+t1: rtmpsrv app/test.flv
 	@echo "** Test ffmpeg starting, about 5 seconds ......" && echo
 	$(call test,app/ff.flv --output a.flv)
 	$(v)test `du -s a.flv|awk '{print $$1}'` \

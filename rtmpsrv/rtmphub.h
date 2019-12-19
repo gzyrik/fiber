@@ -5,7 +5,7 @@ class HubPlayer
 {
 public:
   virtual ~HubPlayer() = default;
-  virtual bool onlyListen() { return false; }//只剩侦听者时,将自动断开推流源
+  virtual bool OnlyListen() const = 0;//只剩侦听者时,将自动断开推流源
   virtual bool UpdateChunkSize(int chunkSize) = 0;
   virtual bool SendPacket(struct RTMPPacket* packet) = 0;
 };
@@ -13,6 +13,7 @@ class HubPusher
 {
 public:
   virtual ~HubPusher() = default;
+  virtual bool CanLiveAlone() const = 0;//只剩推送者时,是否继续存活
   virtual int GetChunkSize() = 0;
 };
 typedef std::unique_ptr<HubPlayer> HubPlayerPtr;

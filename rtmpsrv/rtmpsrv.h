@@ -6,6 +6,7 @@
 class RtmpPlayer : public HubPlayer
 {
   RTMP& rtmp;
+  const bool onlyListen;
   bool SendPacket(RTMPPacket* packet) override {
     packet->m_nInfoField2 = rtmp.m_stream_id;
     return RTMP_SendPacket(&rtmp, packet, false);
@@ -14,16 +15,19 @@ class RtmpPlayer : public HubPlayer
     rtmp.m_outChunkSize = chunkSize;
     return RTMP_SendChunkSize(&rtmp);
   }
+  bool OnlyListen() const override{ return onlyListen; }
 public:
-  RtmpPlayer(RTMP& r) : rtmp(r) {}
+  RtmpPlayer(RTMP& r, bool listen) : rtmp(r), onlyListen(listen) {}
   ~RtmpPlayer() override { RTMP_Close(&rtmp); }
 };
 class RtmpPusher : public HubPusher
 {
   RTMP& rtmp;
+  const bool live;
+  bool CanLiveAlone() const override { return live; };
   int GetChunkSize() override { return rtmp.m_inChunkSize; }
 public:
-  RtmpPusher (RTMP& r) : rtmp(r) {}
+  RtmpPusher (RTMP& r, bool live) : rtmp(r), live(live) {}
   ~RtmpPusher() override { RTMP_Close(&rtmp); }
 };
 
@@ -76,6 +80,7 @@ public:
 class FilePusher : public HubPusher
 {
   const int32_t streamId;
+  bool CanLiveAlone() const override { return false; }//按需动态请求文件
   int GetChunkSize() override { return 128; }
 public:
   FilePusher(int32_t id) : streamId(id) {}
@@ -214,9 +219,11 @@ struct TaskInfo {
 };
 struct HttpPlayer : public HubPlayer, public httplib::Stream::Listen
 {
+  const bool onlyListen;
   const int32_t streamId;
   httplib::StreamPtr stream;
   RTMPReader read;
+  bool OnlyListen() const override { return onlyListen; }
   bool UpdateChunkSize(int chunkSize) override { return stream != nullptr; }
   bool SendPacket(RTMPPacket* packet) override {
     if (!stream) return false; //closed by httplib
@@ -231,7 +238,9 @@ struct HttpPlayer : public HubPlayer, public httplib::Stream::Listen
     return true;
   }
 public:
-  HttpPlayer(httplib::StreamPtr& s, int32_t id) : stream(s), streamId(id) {
+  HttpPlayer(httplib::StreamPtr& s, int32_t id, bool listen)
+    : stream(s), streamId(id), onlyListen(listen)
+  {
     memset(&read, 0, sizeof(read));
     s->set_listen(this);
   }
@@ -423,13 +432,13 @@ static int killTask(size_t pid)
   return kill((pid_t)pid, SIGTERM) ? errno : 0;
 #endif
 }
-struct ffmpegTask : public HubPlayer {
+struct FFmpegTask : public HubPlayer {
   bool SendPacket(RTMPPacket* packet) override { return true; }
   bool UpdateChunkSize(int chunkSize) override { return true; }
   size_t pid;
-  ffmpegTask(size_t p) : pid(p) {}
-  bool onlyListen() override { return true; }
-  ~ffmpegTask() override {
+  FFmpegTask(size_t p) : pid(p) {}
+  bool OnlyListen() const override { return true; }
+  ~FFmpegTask() override {
     auto ret = killTask(pid);
     RTMP_Log(ret ? RTMP_LOGERROR : RTMP_LOGCRIT, "kill %zu: %s", pid, lastErrorStr(ret).c_str());
   }
