@@ -17,7 +17,7 @@
 #define PSTR_CMP(ps1,ps2)  ((ps1.len!=ps2.len) ? ps1.len-ps2.len:strncmp(ps1.ptr,ps2.ptr,ps1.len))
 
 static const char*
-load_next_entry(const char *p, const char **key, PSTR *val, int* line)
+load_next_entry(const char *p, const char **key, sdpstr *val, int* line)
 {
     const char* endl;
     if (!p[0]) {
@@ -57,7 +57,7 @@ failed:
 }
 
 static void
-split_values(PSTR *val, const char sep, const char *fmt, ...)
+split_values(sdpstr *val, const char sep, const char *fmt, ...)
 {
     va_list va;
     const char* p = val->ptr, *end = p+val->len;
@@ -65,11 +65,11 @@ split_values(PSTR *val, const char sep, const char *fmt, ...)
     va_start(va, fmt);
     while (*p == sep && p < end) p++;
     while (*fmt && p < end) {
-        PSTR* ps; int *i; long long int *l; second_t *t;
+        sdpstr* ps; int *i; long long int *l; second_t *t;
 
         switch (*fmt++) {
         case 's':
-            ps = va_arg(va, PSTR*);
+            ps = va_arg(va, sdpstr*);
             ps->ptr = p;
             while (p < end && *p != sep) p++;
             ps->len = p - ps->ptr;
@@ -179,22 +179,23 @@ int sdp_parse(struct sdp_t* sdp, const char *p, char** errptr)
 {
     int ret = 0, line = 0;
     const char *key;
-    PSTR value;
+    sdpstr value;
     count_t attribute_count, bw_count, repeat_count;
 
     memset(sdp, 0, sizeof(*sdp));
 
     /* Protocol version (mandatory, only 0 supported) */
     p = load_next_entry(p, &key, &value, &line);
-    if (key[0] != 'v' || value.len != 1 || !p) RET_ERR(VERSION);
-
-    sdp->proto_version = value.ptr[0] - '0';
-    if (sdp->proto_version != 0) RET_ERR(VERSION);
+    if (key[0] == 'v') {
+        if (value.len != 1 || !p) RET_ERR(VERSION);
+        sdp->proto_version = value.ptr[0] - '0';
+        if (sdp->proto_version != 0) RET_ERR(VERSION);
+    }
 
     /* Origin field (mandatory) */
     p = load_next_entry(p, &key, &value, &line);
-    if (key[0] != 'o' || !p) RET_ERR(ORIGIN);
-    else {
+    if (key[0] == 'o') {
+        if (!p) RET_ERR(ORIGIN);
         struct sdp_origin *o = &sdp->origin;
         split_values(&value, ' ', "sllsss", &o->username, &o->sess_id,
             &o->sess_version, &o->nettype, &o->addrtype, &o->addr);
@@ -203,8 +204,10 @@ int sdp_parse(struct sdp_t* sdp, const char *p, char** errptr)
 
     /* Session name field (mandatory) */
     p = load_next_entry(p, &key, &value, &line);
-    if (key[0] != 's' || !p) RET_ERR(SESSION);
-    sdp->session_name = value;
+    if (key[0] == 's') {
+        if (!p) RET_ERR(SESSION);
+        sdp->session_name = value;
+    }
     p = load_next_entry(p, &key, &value, &line);
 
     /* Information field */
@@ -306,7 +309,7 @@ clean:
     return ret;
 }
 
-int find_pstr(const char *key, const PSTR attr[], int nattr)
+int find_pstr(const char *key, const sdpstr attr[], int nattr)
 {
     int i, klen = (int)strlen(key);
 
@@ -420,7 +423,7 @@ int sdp_dump(char* payload, int s, const struct sdp_t *sdp)
     return p - payload;
 }
 union attr_t {
-    PSTR pstr;
+    sdpstr pstr;
     struct {
         char plname[32];
         int pltype;
@@ -429,11 +432,11 @@ union attr_t {
     };
 };
 static void
-pstr_parse(union attr_t * attr, const PSTR *a) { attr->pstr = *a; }
+pstr_parse(union attr_t * attr, const sdpstr *a) { attr->pstr = *a; }
 //static int
-//pstr_cmp(const union attr_t* a1, const PSTR* a2) { return PSTR_CMP(a1->pstr, a2[0]); }
+//pstr_cmp(const union attr_t* a1, const sdpstr* a2) { return PSTR_CMP(a1->pstr, a2[0]); }
 static int
-part_cmp(const union attr_t* a1, const PSTR* a) /* compare after ' '*/
+part_cmp(const union attr_t* a1, const sdpstr* a) /* compare after ' '*/
 {
     int i,j,n;
     for (i=0; i<a1->pstr.len && a1->pstr.ptr[i] != ' ';++i);
@@ -445,10 +448,10 @@ part_cmp(const union attr_t* a1, const PSTR* a) /* compare after ' '*/
 
 static void 
 answer_attr(const char* prefix,
-    struct sdp_media *m1, PSTR *a1,
-    const struct sdp_media *m2, const PSTR *a2,
-    void (*parse)(union attr_t*, const PSTR*),
-    int (*compare)(const union attr_t*,const PSTR*))
+    struct sdp_media *m1, sdpstr *a1,
+    const struct sdp_media *m2, const sdpstr *a2,
+    void (*parse)(union attr_t*, const sdpstr*),
+    int (*compare)(const union attr_t*,const sdpstr*))
 {
     union attr_t v1;
     int n1 = 0, k1 = find_pstr(prefix, a1, m1->attribute_count), n2, k2;
@@ -468,7 +471,7 @@ answer_attr(const char* prefix,
         if (k2 < 0) { /* delete attribute */
             m1->attribute_count-- ;
             if (n1 < m1->attribute_count)
-                memcpy(a1+n1, a1+m1->attribute_count, sizeof(PSTR));
+                memcpy(a1+n1, a1+m1->attribute_count, sizeof(sdpstr));
         }
         else {
             ++n1;
@@ -477,13 +480,13 @@ answer_attr(const char* prefix,
     }
 }
 static void
-rtpmap_parse(union attr_t * attr, const PSTR *a)
+rtpmap_parse(union attr_t * attr, const sdpstr *a)
 {
     _snscanf(a->ptr, a->len, "rtpmap:%d %[^/]/%d/%d",
         &attr->pltype, attr->plname, &attr->plfreq, &attr->channels);
 }
 static int
-rtpmap_cmp(const union attr_t* a1, const PSTR* a)
+rtpmap_cmp(const union attr_t* a1, const sdpstr* a)
 {
     union attr_t a2;
     _snscanf(a->ptr, a->len, "rtpmap:%d %[^/]/%d/%d",
@@ -511,9 +514,9 @@ int sdp_answer(struct sdp_t *sdp1, const struct sdp_t *sdp2)
         ++i;
 
         /* negotiate attribute */
-        PSTR* a1 = sdp1->attribute + m1->attribute_start;
+        sdpstr* a1 = sdp1->attribute + m1->attribute_start;
         const struct sdp_media* m2 = sdp2->media+j;
-        const PSTR *a2 = sdp2->attribute + m2->attribute_start;
+        const sdpstr *a2 = sdp2->attribute + m2->attribute_start;
 
         answer_attr("rtpmap:", m1, a1, m2, a2, rtpmap_parse, rtpmap_cmp);
         answer_attr("extmap:", m1, a1, m2, a2, pstr_parse, part_cmp);

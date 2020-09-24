@@ -51,8 +51,8 @@ define test
 $(setup)
 $(v)curl -X PUT $(HTTP_ADDR)/files -d $(FILES) || echo '** PUT /files Failed !'
 $(v)curl $(HTTP_ADDR)/files -s 
-$(v)curl -X POST $(HTTP_ADDR)/rtmpsrv?port=$(RTMP_PORT) -d 1
-@echo
+$(v)curl -X POST $(HTTP_ADDR)/rtmpsrv?port=$(RTMP_PORT) -d 1 || echo '** POST rtmpsrv Failed !'
+@echo && echo '** GET $1'
 $(v)-curl $(HTTP_ADDR)/$1
 $(v)-test -z "`curl $(HTTP_ADDR)/tasks -s`" || echo '** Get /Task Failed !'
 $(term)
@@ -66,6 +66,7 @@ t0: FILES ='\
 t0: rtmpsrv app/test.flv
 	@echo "** Test loopback starting, about 5 seconds ......" && echo
 	$(call test,app/a0.flv --output a.flv)
+#与原文件比较
 	$(v)diff a.flv app/test.flv
 	@echo && echo '** Test passed.'
 	$(v)$(RM) a.flv
@@ -74,7 +75,9 @@ t1: FILES ='app/ff "ffmpeg -i app/test.flv >ff.log"'
 t1: rtmpsrv app/test.flv
 	@echo "** Test ffmpeg starting, about 5 seconds ......" && echo
 	$(call test,app/ff.flv --output a.flv)
-	$(v)test `du -s a.flv|awk '{print $$1}'` \
+#计算 PSNR
+	$(v)ffmpeg -hide_banner -i app/test.flv -i a.flv  -lavfi psnr -f null - 2>&1 | grep 'PSNR'
+#	$(v)test `du -s a.flv|awk '{print $$1}'` \
 	     -ge `du -s app/test.flv|awk '{print $$1}'`
 	@echo && echo '** Test passed.'
 	$(v)$(RM) a.flv ff.log

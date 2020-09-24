@@ -40,17 +40,17 @@ enum {
     ERR_SDP_MEDIA_PROTO,
 };
 
-typedef struct { const char *ptr; int len; } PSTR;
+typedef struct { const char *ptr; int len; } sdpstr;
 
 struct sdp_connection {
-    PSTR nettype;
-    PSTR addrtype;
-    PSTR address;
+    sdpstr nettype;
+    sdpstr addrtype;
+    sdpstr address;
 };
 
 struct sdp_bandwidth {
-    PSTR bwtype;
-    PSTR bandwidth;
+    sdpstr bwtype;
+    sdpstr bandwidth;
 };
 
 struct sdp_time {
@@ -63,22 +63,22 @@ struct sdp_time {
 
 struct sdp_media {
     struct sdp_info {
-        PSTR type;
+        sdpstr type;
         int port;
         int port_n; /*< number of ports */
-        PSTR proto;
-        PSTR fmt;
+        sdpstr proto;
+        sdpstr fmt;
         count_t pltype_count;
         char pltype[MAX_SDP_MEDIA_PLTYPE];
     } info;
-    PSTR title;
+    sdpstr title;
     struct sdp_connection connection;
 
     /* start index of sdp_t.bw[] */
     count_t bw_start;
     count_t bw_count;
 
-    PSTR encrypt_key;
+    sdpstr encrypt_key;
 
     /* start index of sdp_t.attribute[] */
     count_t attribute_start;
@@ -91,23 +91,23 @@ struct sdp_t {
 
     struct sdp_origin {
         /* MUST NOT contain spaces, instead "-" */
-        PSTR username; 
+        sdpstr username; 
         ntptime_t sess_id;
         ntptime_t sess_version;
-        PSTR nettype;
-        PSTR addrtype;
-        PSTR addr;
+        sdpstr nettype;
+        sdpstr addrtype;
+        sdpstr addr;
     } origin;
 
-    PSTR session_name;
-    PSTR information;
-    PSTR uri;
+    sdpstr session_name;
+    sdpstr information;
+    sdpstr uri;
 
     count_t email_count;
-    PSTR email[MAX_SDP_EMAIL]; 
+    sdpstr email[MAX_SDP_EMAIL]; 
 
     count_t phone_count;
-    PSTR phone[MAX_SDP_PHONE]; 
+    sdpstr phone[MAX_SDP_PHONE]; 
 
     struct sdp_connection connection;
 
@@ -130,10 +130,10 @@ struct sdp_t {
         second_t offset;
     } zone_adjustment[MAX_SDP_ZONE_ADJUSTMENT];
 
-    PSTR encrypt_key;
+    sdpstr encrypt_key;
 
     count_t attribute_count;
-    PSTR attribute[MAX_SDP_ATTRIBUTE];
+    sdpstr attribute[MAX_SDP_ATTRIBUTE];
 
     count_t media_count;
     struct sdp_media media[MAX_SDP_MEDIA];
@@ -163,7 +163,7 @@ int sdp_dump(char* payload, int size, const struct sdp_t *sdp);
 /** find value by sequential search
  * @return -1 for failure, or value index for success
  */
-int find_pstr(const char *key, const PSTR attr[], int nattr);
+int find_pstr(const char *key, const sdpstr attr[], int nattr);
 
 #ifdef __cplusplus
 }

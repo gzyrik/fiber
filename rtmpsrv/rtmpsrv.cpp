@@ -9,15 +9,15 @@
 //#define CPPHTTPLIB_ZLIB_SUPPORT
 #include "httplib.h"
 #include "rtmpsrv.h"
-static int _rtmpPort = 1935;
-static const char* _ffmpeg = nullptr;
-static st_thread_t _rtmpThread = nullptr;
+static int _rtmpPort = 1935; //RTMP 服务端口
+static st_thread_t _rtmpThread = nullptr; //RTMP 服务侦听线程
 static FileAddrMap _fileAddrs;//文件regex-URL -> 源地址,支持regex替换
 static std::unordered_map<SOCKET, TaskInfo> _tasks;//推流或拉流中的任务
+static const char* _ffmpeg = nullptr; //FFmpeg 执行程序名
 //----------------------------------------------------------------------------------------------
 static bool doFileSource(const std::string& fname,
   const std::string& app, const std::string& playpath, int32_t fakeId)
-{
+{//启动文件读取任务作为媒体源
   FILE* fp = openFile(fname);
   if (!fp){
     RTMP_Log(RTMP_LOGERROR, "No exist local file %s", fname.c_str());
@@ -28,7 +28,7 @@ static bool doFileSource(const std::string& fname,
     return send_stream_thread(RtmpStreamPtr(new FileStream(fp)), fakeId);
   });
   if (!t) {
-    RTMP_Log(RTMP_LOGERROR, "st_thread_create failed");
+    RTMP_Log(RTMP_LOGERROR, "st_go send_stream_thread failed");
     return false;
   }
   _tasks.emplace(fileno(fp), TaskInfo(t, app, playpath, "file:://" + fname));
@@ -37,7 +37,7 @@ static bool doFileSource(const std::string& fname,
 }
 static bool doRtmpSource(const std::string& addr,
   const std::string& app, const std::string& playpath, int32_t fakeId)
-{
+{//启动拉流任务作为媒体源
   RTMP *rtmp = nullptr;
   do {
     auto url = addr;
@@ -47,7 +47,7 @@ static bool doRtmpSource(const std::string& addr,
       return pull_stream_thread(rtmp, fakeId);
     });
     if (!t) {
-      RTMP_Log(RTMP_LOGERROR, "st_thread_create failed");
+      RTMP_Log(RTMP_LOGERROR, "st_go pull_stream_thread failed");
       break;
     }
 
@@ -566,9 +566,9 @@ static void onGetChunkedFlv(const httplib::Request& req, httplib::Response& res)
 
    - POST /rtmpsrv?port=1935 启动 RTMP-SRV 服务
    - GET /rtmpsrv    获取 RTMP-SRV 信息
-   - DELETE /rtmpsrv 关 闭RTMP-SRV 服务
+   - DELETE /rtmpsrv 关闭 RTMP-SRV 服务
 
-   - POST /tasks/<APP>/<PLAYPATH> 启动新的推流
+   - POST /tasks/<APP>/<PLAYPATH> 启动新的推流任务
    - GET /tasks 获取所有的推流/拉流任务统计
    - GET /tasks/<ID>    获取指定的任务统计
    - DELETE /tasks/<ID> 强制关闭指定的任务
@@ -600,7 +600,7 @@ app/a1 	http://SRV2/tasks/app/a2
 app/a2 	http://SRV0/app/xxx.flv
 
 令SRV0=SRV1=SRV2=127.0.0.1, 并实现于 Makefile 中的 test 部分
-    make test
+    make t0
 */
 
 int main(int argc, char* argv[])
@@ -651,25 +651,26 @@ int main(int argc, char* argv[])
     RTMP_Log(RTMP_LOGCRIT, "Quit ......");
     res.transfer = [](httplib::StreamPtr&, bool) { exit(0); return false; };
   })
+  //设置日志级别: CRIT, ERROR, WARNING, INFO, DEBUG, DEBUG2
   .Post("/loglevel", [](const httplib::Request& req, httplib::Response& res) {
     if (!RTMP_LogSetLevel2(req.body.c_str()))
       res.status = 400;
   })
 
-  .Get("/files", onGetFiles)
-  .Put("/files", onPutFiles)
-  .Patch("/files", onPatchFiles)
+  .Get("/files", onGetFiles)//返回所有媒体地址
+  .Put("/files", onPutFiles)//重置所有媒体地址
+  .Patch("/files", onPatchFiles)//更新部分媒体地址
 
-  .Get("/rtmpsrv", onGetRtmpSrvStats)
-  .Post("/rtmpsrv", onPostRtmpSrv)
-  .Delete("/rtmpsrv", onDeleteRtmpSrv)
+  .Get("/rtmpsrv", onGetRtmpSrvStats)//TODO 返回 RTMP 服务统计
+  .Post("/rtmpsrv", onPostRtmpSrv)//启动 RTMP 服务
+  .Delete("/rtmpsrv", onDeleteRtmpSrv)//关闭RTMP服务
 
-  .Get("/tasks", onGetTasks)
-  .Post(R"(/tasks/(.+)/([^/]+))", onPostTasks)
-  .Get(R"(/tasks/(\d+))", onGetTaskById)
-  .Delete(R"(/tasks/(\d+))", onDeleteTaskById)
+  .Get("/tasks", onGetTasks)//返回所有推流/拉流任务的统计
+  .Post(R"(/tasks/(.+)/([^/]+))", onPostTasks)//启动推流任务
+  .Get(R"(/tasks/(\d+))", onGetTaskById)//返回指定任务的统计
+  .Delete(R"(/tasks/(\d+))", onDeleteTaskById)//强制关闭指定任务
 
-  .Get(R"(/(.+)/([^/]+)\.flv)", onGetChunkedFlv)
+  .Get(R"(/(.+)/([^/]+)\.flv)", onGetChunkedFlv)//返回httpflv流
 
   .set_logger([](const httplib::Request& req, const httplib::Response& res) {
     join_threads();//及时回收已结束的线程
