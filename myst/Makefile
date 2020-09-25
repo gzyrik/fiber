@@ -234,7 +234,7 @@ endif
 ifeq ($(BUILD), OPT)
 OTHER_FLAGS += -O
 else
-OTHER_FLAGS += -g -O0
+OTHER_FLAGS += -g
 DEFINES     += -DDEBUG
 endif
 
@@ -369,7 +369,7 @@ $(TARGETDIR)/md.o: md.S
 $(TARGETDIR)/%.o: %.c common.h md.h st.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-examples::
+examples: $(SLIBRARY)
 	@echo Making $@
 	@cd $@; $(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS)" OS="$(OS)" TARGETDIR="$(TARGETDIR)"
 

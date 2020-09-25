@@ -1,3 +1,7 @@
+
+/* If user disable the ASM, such as avoiding bugs in ASM, donot compile it. */
+#if !defined(MD_ST_NO_ASM)
+
 /*
  * Portions created by SGI are Copyright (C) 2000 Silicon Graphics, Inc.
  * All Rights Reserved.
@@ -5,74 +9,74 @@
 
 #if defined(__ia64__)
 
-/*
- * The internal __jmp_buf layout is different from one used
- * by setjmp()/longjmp().
- *
- *       Offset   Description
- *       ------   -----------
- *       0x000    stack pointer (r12)
- *       0x008    gp (r1)
- *       0x010    caller's unat
- *       0x018    fpsr
- *       0x020    r4
- *       0x028    r5
- *       0x030    r6
- *       0x038    r7
- *       0x040    rp (b0)
- *       0x048    b1
- *       0x050    b2
- *       0x058    b3
- *       0x060    b4
- *       0x068    b5
- *       0x070    ar.pfs
- *       0x078    ar.lc
- *       0x080    pr
- *       0x088    ar.bsp
- *       0x090    ar.unat
- *       0x098    &__jmp_buf
- *       0x0a0    ar.rsc
- *       0x0a8    ar.rnat
- *       0x0b0     f2
- *       0x0c0     f3
- *       0x0d0     f4
- *       0x0e0     f5
- *       0x0f0    f16
- *       0x100    f17
- *       0x110    f18
- *       0x120    f19
- *       0x130    f20
- *       0x130    f21
- *       0x140    f22
- *       0x150    f23
- *       0x160    f24
- *       0x170    f25
- *       0x180    f26
- *       0x190    f27
- *       0x1a0    f28
- *       0x1b0    f29
- *       0x1c0    f30
- *       0x1d0    f31
- *
- * Note that the address of __jmp_buf is saved but not used: we assume
- * that the jmp_buf data structure is never moved around in memory.
- */
+    /*
+     * The internal __jmp_buf layout is different from one used
+     * by setjmp()/longjmp().
+     *
+     *       Offset   Description
+     *       ------   -----------
+     *       0x000    stack pointer (r12)
+     *       0x008    gp (r1)
+     *       0x010    caller's unat
+     *       0x018    fpsr
+     *       0x020    r4
+     *       0x028    r5
+     *       0x030    r6
+     *       0x038    r7
+     *       0x040    rp (b0)
+     *       0x048    b1
+     *       0x050    b2
+     *       0x058    b3
+     *       0x060    b4
+     *       0x068    b5
+     *       0x070    ar.pfs
+     *       0x078    ar.lc
+     *       0x080    pr
+     *       0x088    ar.bsp
+     *       0x090    ar.unat
+     *       0x098    &__jmp_buf
+     *       0x0a0    ar.rsc
+     *       0x0a8    ar.rnat
+     *       0x0b0     f2
+     *       0x0c0     f3
+     *       0x0d0     f4
+     *       0x0e0     f5
+     *       0x0f0    f16
+     *       0x100    f17
+     *       0x110    f18
+     *       0x120    f19
+     *       0x130    f20
+     *       0x130    f21
+     *       0x140    f22
+     *       0x150    f23
+     *       0x160    f24
+     *       0x170    f25
+     *       0x180    f26
+     *       0x190    f27
+     *       0x1a0    f28
+     *       0x1b0    f29
+     *       0x1c0    f30
+     *       0x1d0    f31
+     *
+     * Note that the address of __jmp_buf is saved but not used: we assume
+     * that the jmp_buf data structure is never moved around in memory.
+     */
 
-/*
- * Implemented according to "IA-64 Software Conventions and Runtime
- * Architecture Guide", Chapter 10: "Context Management".
- */
+    /*
+     * Implemented according to "IA-64 Software Conventions and Runtime
+     * Architecture Guide", Chapter 10: "Context Management".
+     */
 
-        .text
-        .psr abi64
-        .psr lsb
-        .lsb
+    .text
+    .psr abi64
+    .psr lsb
+    .lsb
 
-        /* _st_md_cxt_save(__jmp_buf env) */
-        .align 32
-        .global _st_md_cxt_save
-        .proc _st_md_cxt_save
-_st_md_cxt_save:
+    /* _st_md_cxt_save(__jmp_buf env) */
+    .align 32
+    .global _st_md_cxt_save
+    .proc _st_md_cxt_save
+    _st_md_cxt_save:
         alloc r14 = ar.pfs,1,0,0,0
         mov r16 = ar.unat
         ;;
@@ -95,7 +99,7 @@ _st_md_cxt_save:
         ;;
         stf.spill.nta [r8] = f2,32
         stf.spill.nta [r9] = f3,32
-	mov r15 = rp
+        mov r15 = rp
         ;;
         stf.spill.nta [r8] = f4,32
         stf.spill.nta [r9] = f5,32
@@ -143,7 +147,7 @@ _st_md_cxt_save:
         ;;
         st8.nta [r2] = r18,16         // b2
         st8.nta [r3] = r19,16         // b3
-	mov r26 = ar.rsc
+        mov r26 = ar.rsc
         ;;
         st8.nta [r2] = r20,16         // b4
         st8.nta [r3] = r21,16         // b5
@@ -158,56 +162,56 @@ _st_md_cxt_save:
         st8.nta [r3] = in0,16         // &__jmp_buf (just in case)
         ;;
         st8.nta [r2] = r26            // ar.rsc
-	;;
-	flushrs                       // flush dirty regs to backing store
         ;;
-	and r27 = ~0x3,r26            // clear ar.rsc.mode
-	;;
-	mov ar.rsc = r27              // put RSE in enforced lazy mode
-	;;
-	mov r28 = ar.rnat
-	;;
-	st8.nta [r3] = r28            // ar.rnat
-	mov ar.rsc = r26              // restore ar.rsc
-	;;
+        flushrs                       // flush dirty regs to backing store
+        ;;
+        and r27 = ~0x3,r26            // clear ar.rsc.mode
+        ;;
+        mov ar.rsc = r27              // put RSE in enforced lazy mode
+        ;;
+        mov r28 = ar.rnat
+        ;;
+        st8.nta [r3] = r28            // ar.rnat
+        mov ar.rsc = r26              // restore ar.rsc
+        ;;
         mov r8 = 0
         br.ret.sptk.few b0
-        .endp _st_md_cxt_save
+    .endp _st_md_cxt_save
 
 
-/****************************************************************/
+    /****************************************************************/
 
-        /* _st_md_cxt_restore(__jmp_buf env, int val) */
-        .global _st_md_cxt_restore
-        .proc _st_md_cxt_restore
-_st_md_cxt_restore:
+    /* _st_md_cxt_restore(__jmp_buf env, int val) */
+    .global _st_md_cxt_restore
+    .proc _st_md_cxt_restore
+    _st_md_cxt_restore:
         alloc r8 = ar.pfs,2,0,0,0
         add r2 = 0x88,in0             // r2 <- &jmpbuf.ar_bsp
-	mov r16 = ar.rsc
-	;;
-	flushrs                       // flush dirty regs to backing store
+        mov r16 = ar.rsc
         ;;
-	and r17 = ~0x3,r16            // clear ar.rsc.mode
-	;;
-	mov ar.rsc = r17              // put RSE in enforced lazy mode
+        flushrs                       // flush dirty regs to backing store
         ;;
-	invala                        // invalidate the ALAT
-	;;
+        and r17 = ~0x3,r16            // clear ar.rsc.mode
+        ;;
+        mov ar.rsc = r17              // put RSE in enforced lazy mode
+        ;;
+        invala                        // invalidate the ALAT
+        ;;
         ld8 r23 = [r2],8              // r23 <- jmpbuf.ar_bsp
         ;;
-	mov ar.bspstore = r23         // write BSPSTORE
+        mov ar.bspstore = r23         // write BSPSTORE
         ld8 r25 = [r2],24             // r25 <- jmpbuf.ar_unat
-	;;
-	ld8 r26 = [r2],-8             // r26 <- jmpbuf.ar_rnat
         ;;
-	mov ar.rnat = r26             // write RNAT
-	ld8 r27 = [r2]                // r27 <- jmpbuf.ar_rsc
-	;;
-	mov ar.rsc = r27              // write RSE control
+        ld8 r26 = [r2],-8             // r26 <- jmpbuf.ar_rnat
+        ;;
+        mov ar.rnat = r26             // write RNAT
+        ld8 r27 = [r2]                // r27 <- jmpbuf.ar_rsc
+        ;;
+        mov ar.rsc = r27              // write RSE control
         mov r2 = in0
-	;;
-	mov ar.unat = r25             // write ar.unat
-	add r3 = 8,in0
+        ;;
+        mov ar.unat = r25             // write ar.unat
+        add r3 = 8,in0
         ;;
         ld8.fill.nta sp = [r2],16     // r12 (sp)
         ld8.fill.nta gp = [r3],16     // r1  (gp)
@@ -276,35 +280,43 @@ _st_md_cxt_restore:
         ;;
         ldf.fill.nta f30 = [r2]
         ldf.fill.nta f31 = [r3]
-(p6)    mov r8 = 1
-(p7)    mov r8 = in1
+        (p6)    mov r8 = 1
+        (p7)    mov r8 = in1
 
         mov pr = r24,-1
         br.ret.sptk.few b0
-        .endp _st_md_cxt_restore
+    .endp _st_md_cxt_restore
 
-/****************************************************************/
+    /****************************************************************/
+
+
+
+
+
+
+
+
 
 #elif defined(__i386__)
 
-/*
- * Internal __jmp_buf layout
- */
-#define JB_BX  0
-#define JB_SI  1
-#define JB_DI  2
-#define JB_BP  3
-#define JB_SP  4
-#define JB_PC  5
+    /*
+     * Internal __jmp_buf layout
+     */
+    #define JB_BX  0
+    #define JB_SI  1
+    #define JB_DI  2
+    #define JB_BP  3
+    #define JB_SP  4
+    #define JB_PC  5
 
-        .file "md.S"
-        .text
+    .file "md.S"
+    .text
 
-        /* _st_md_cxt_save(__jmp_buf env) */
-.globl _st_md_cxt_save
+    /* _st_md_cxt_save(__jmp_buf env) */
+    .globl _st_md_cxt_save
         .type _st_md_cxt_save, @function
         .align 16
-_st_md_cxt_save:
+    _st_md_cxt_save:
         movl 4(%esp), %eax
 
         /*
@@ -323,16 +335,16 @@ _st_md_cxt_save:
         movl %ebp, (JB_BP*4)(%eax)
         xorl %eax, %eax
         ret
-        .size _st_md_cxt_save, .-_st_md_cxt_save
+    .size _st_md_cxt_save, .-_st_md_cxt_save
 
 
-/****************************************************************/
+    /****************************************************************/
 
-        /* _st_md_cxt_restore(__jmp_buf env, int val) */
-.globl _st_md_cxt_restore
+    /* _st_md_cxt_restore(__jmp_buf env, int val) */
+    .globl _st_md_cxt_restore
         .type _st_md_cxt_restore, @function
         .align 16
-_st_md_cxt_restore:
+    _st_md_cxt_restore:
         /* First argument is jmp_buf */
         movl 4(%esp), %ecx
         /* Second argument is return value */
@@ -351,10 +363,19 @@ _st_md_cxt_restore:
         jnz  1f
         incl %eax
         /* Jump to saved PC */
-1:      jmp *%edx
-        .size _st_md_cxt_restore, .-_st_md_cxt_restore
+        1: jmp *%edx
+    .size _st_md_cxt_restore, .-_st_md_cxt_restore
 
-/****************************************************************/
+    /****************************************************************/
+
+
+
+
+
+
+
+
+
 
 #elif defined(__amd64__) || defined(__x86_64__)
 
@@ -375,29 +396,29 @@ _st_md_cxt_restore:
 #define JB_RSP  3
 #define JB_PC   1
 #else
-/*
- * Internal __jmp_buf layout
- */
-#define JB_RBX  0
-#define JB_RBP  1
-#define JB_R12  2
-#define JB_R13  3
-#define JB_R14  4
-#define JB_R15  5
-#define JB_RSP  6
-#define JB_PC   7
+    /*
+     * Internal __jmp_buf layout
+     */
+    #define JB_RBX  0
+    #define JB_RBP  1
+    #define JB_R12  2
+    #define JB_R13  3
+    #define JB_R14  4
+    #define JB_R15  5
+    #define JB_RSP  6
+    #define JB_PC   7
 #endif
 
-        .file "md.S"
-        .text
+    .file "md.S"
+    .text
 
-        /* _st_md_cxt_save(__jmp_buf env) */
-.globl _st_md_cxt_save
+    /* _st_md_cxt_save(__jmp_buf env) */
+    .globl _st_md_cxt_save
 #if !defined (DARWIN)
         .type _st_md_cxt_save, @function
 #endif
         .align 16
-_st_md_cxt_save:
+    _st_md_cxt_save:
         /*
          * Save registers.
          */
@@ -416,19 +437,19 @@ _st_md_cxt_save:
         xorq %rax, %rax
         ret
 #if !defined (DARWIN)
-        .size _st_md_cxt_save, .-_st_md_cxt_save
+    .size _st_md_cxt_save, .-_st_md_cxt_save
 #endif
 
 
-/****************************************************************/
+    /****************************************************************/
 
-        /* _st_md_cxt_restore(__jmp_buf env, int val) */
-.globl _st_md_cxt_restore
+    /* _st_md_cxt_restore(__jmp_buf env, int val) */
+    .globl _st_md_cxt_restore
 #if !defined (DARWIN)
         .type _st_md_cxt_restore, @function
 #endif
         .align 16
-_st_md_cxt_restore:
+    _st_md_cxt_restore:
         /*
          * Restore registers.
          */
@@ -448,49 +469,194 @@ _st_md_cxt_restore:
         /* Jump to saved PC */
         jmpq *%rdx
 #if !defined (DARWIN)
-        .size _st_md_cxt_restore, .-_st_md_cxt_restore
-#endif
-
-/****************************************************************/
-#elif defined(__arm__)
-    .globl _st_md_cxt_save
-        .type _st_md_cxt_save, %function
-        .align 2
-    _st_md_cxt_save:
-        mov     ip, r0 // r0 is the param jmpbuf ptr address.
-        // Save registers like
-        // *ip++ = v1
-        // *ip++ = ...
-        // *ip++ = v6
-        // *ip++ = sl
-        // *ip++ = fp
-        stmia   ip!, {v1-v6, sl, fp} // TODO: compatible with other ARM version.
-        movs    r2, sp
-        stmia   ip!, {r2, lr}
-        mov     r0, #0               // r0 save the return value(0) of setjmp.
-        bx      lr                   // return
-     .size _st_md_cxt_save, .-_st_md_cxt_save
-
-    /****************************************************************/
-    
-    .globl _st_md_cxt_restore
-        .type _st_md_cxt_restore, %function
-        .align 2
-    _st_md_cxt_restore:
-        mov     ip, r0 // r0 -> jmp_buf
-        movs    r0, r1 // r1 -> return value
-        // The bellow is a group, that is:
-        // if (r0 == 0) r0 =1;
-        ITT     eq  
-        moveq   r0, #1 // long_jmp should never return 0
-    
-        ldmia   ip!, {v1-v6, sl, fp} // restore registers.
-        ldr     sp, [ip], #4         // restore sp, like: sp=*ip; ip+=4;
-        ldr     lr, [ip], #4
-        bx      lr  
     .size _st_md_cxt_restore, .-_st_md_cxt_restore
+#endif
+
+
+
+
+
+
+
+
+
+
+#elif defined(__aarch64__)
+
+    /****************************************************************/
+    /* https://github.com/ossrs/srs/issues/1282#issuecomment-445539513 */
+
+    #define JB_X19            0
+    #define JB_X20            1
+    #define JB_X21            2
+    #define JB_X22            3
+    #define JB_X23            4
+    #define JB_X24            5
+    #define JB_X25            6
+    #define JB_X26            7
+    #define JB_X27            8
+    #define JB_X28            9
+    #define JB_X29           10
+    #define JB_LR            11
+    #define JB_SP		 13
+
+    #define JB_D8		 14
+    #define JB_D9		 15
+    #define JB_D10		 16
+    #define JB_D11		 17
+    #define JB_D12		 18
+    #define JB_D13		 19
+    #define JB_D14		 20
+    #define JB_D15		 21
+
+    	.file "md.S"
+    	.text
+
+    	/* _st_md_cxt_save(__jmp_buf env) */
+    	.globl _st_md_cxt_save
+    	.type _st_md_cxt_save, %function
+    	.align 4
+    _st_md_cxt_save:
+    	stp	x19, x20, [x0, #JB_X19<<3]
+    	stp	x21, x22, [x0, #JB_X21<<3]
+    	stp	x23, x24, [x0, #JB_X23<<3]
+    	stp	x25, x26, [x0, #JB_X25<<3]
+    	stp	x27, x28, [x0, #JB_X27<<3]
+    	stp	x29, x30, [x0, #JB_X29<<3]
+
+    	stp	 d8,  d9, [x0, #JB_D8<<3]
+    	stp	d10, d11, [x0, #JB_D10<<3]
+    	stp	d12, d13, [x0, #JB_D12<<3]
+    	stp	d14, d15, [x0, #JB_D14<<3]
+    	mov	x2,  sp
+    	str	x2,  [x0, #JB_SP<<3]
+
+    	mov	x0, #0
+    	ret
+    	.size _st_md_cxt_save, .-_st_md_cxt_save
+
+    /****************************************************************/
+
+    	/* _st_md_cxt_restore(__jmp_buf env, int val) */
+    	.globl _st_md_cxt_restore
+    	.type _st_md_cxt_restore, %function
+    	.align 4
+    _st_md_cxt_restore:
+    	ldp	x19, x20, [x0, #JB_X19<<3]
+    	ldp	x21, x22, [x0, #JB_X21<<3]
+    	ldp	x23, x24, [x0, #JB_X23<<3]
+    	ldp	x25, x26, [x0, #JB_X25<<3]
+    	ldp	x27, x28, [x0, #JB_X27<<3]
+
+    	ldp	x29, x30, [x0, #JB_X29<<3]
+
+    	ldp	 d8,  d9, [x0, #JB_D8<<3]
+    	ldp	d10, d11, [x0, #JB_D10<<3]
+    	ldp	d12, d13, [x0, #JB_D12<<3]
+    	ldp	d14, d15, [x0, #JB_D14<<3]
+
+    	ldr	x5, [x0, #JB_SP<<3]
+    	mov	sp, x5
+
+    	cmp	x1, #0
+    	mov	x0, #1
+    	csel	x0, x1, x0, ne
+    	/* Use br instead of ret because ret is guaranteed to mispredict */
+    	br	x30
+    	.size _st_md_cxt_restore, .-_st_md_cxt_restore
+
+    /****************************************************************/
+
+
+
+
+
+
+
+
+
+
+#elif defined(__arm__)
+
+    /****************************************************************/
+    /* https://github.com/ossrs/srs/issues/1282#issuecomment-445539513 */
+
+    /* Register list for a ldm/stm instruction to load/store
+       the general registers from a __jmp_buf.  */
+    # define JMP_BUF_REGLIST	{v1-v6, sl, fp, sp, lr}
+
+    	.file "md.S"
+    	.text
+
+    	/* _st_md_cxt_save(__jmp_buf env) */
+    	.globl _st_md_cxt_save
+    	.type _st_md_cxt_save, %function
+    	.align 2
+    _st_md_cxt_save:
+    	mov	ip, r0
+
+    	/* Save registers */
+    	stmia	ip!, JMP_BUF_REGLIST
+
+    #ifdef __VFP_FP__
+    	/* Store the VFP registers.  */
+    	/* Following instruction is vstmia ip!, {d8-d15}.  */
+    	stc	p11, cr8, [ip], #64
+    #endif
+
+    #ifdef __IWMMXT__
+    	/* Save the call-preserved iWMMXt registers.  */
+    	/* Following instructions are wstrd wr10, [ip], #8 (etc.)  */
+    	stcl	p1, cr10, [r12], #8
+    	stcl	p1, cr11, [r12], #8
+    	stcl	p1, cr12, [r12], #8
+    	stcl	p1, cr13, [r12], #8
+    	stcl	p1, cr14, [r12], #8
+    	stcl	p1, cr15, [r12], #8
+    #endif
+
+    	mov	r0, #0
+    	bx	lr
+
+    	.size _st_md_cxt_save, .-_st_md_cxt_save
+
+    /****************************************************************/
+
+    	/* _st_md_cxt_restore(__jmp_buf env, int val) */
+    	.globl _st_md_cxt_restore
+    	.type _st_md_cxt_restore, %function
+    	.align 2
+    _st_md_cxt_restore:
+    	mov	ip, r0
+
+    	/* Restore registers */
+    	ldmia	ip!, JMP_BUF_REGLIST
+
+    #ifdef __VFP_FP__
+    	/* Restore the VFP registers.  */
+    	/* Following instruction is vldmia ip!, {d8-d15}.  */
+    	ldc	p11, cr8, [r12], #64
+    #endif
+
+    #ifdef __IWMMXT__
+    	/* Restore the call-preserved iWMMXt registers.  */
+    	/* Following instructions are wldrd wr10, [ip], #8 (etc.)  */
+    	ldcl	p1, cr10, [r12], #8
+    	ldcl	p1, cr11, [r12], #8
+    	ldcl	p1, cr12, [r12], #8
+    	ldcl	p1, cr13, [r12], #8
+    	ldcl	p1, cr14, [r12], #8
+    	ldcl	p1, cr15, [r12], #8
+    #endif
+
+    	movs	r0, r1		/* get the return value in place */
+    	moveq	r0, #1		/* can't let setjmp() return zero! */
+    	bx	lr
+
+    	.size _st_md_cxt_restore, .-_st_md_cxt_restore
 
     /****************************************************************/
 
 #endif
 
+#endif

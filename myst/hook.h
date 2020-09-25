@@ -57,17 +57,21 @@ static _st_netfd_t* _st_netfd(int osfd)
   X(int,dup2,int, int)\
   X(int,dup3,int, int, int)\
   X(FILE*,fopen,const char * __restrict, const char * __restrict)\
-  X(int,fclose,FILE*)\
-  X(int,ioctl,int, unsigned long, ...)
+  X(int,fclose,FILE*)
 
 #if defined(__linux__)
 struct hostent;
 #define _ST_HOOK_LIST _ST_HOOK_LIST1 \
+  X(int,ioctl,int,unsigned long,...)\
   X(int,gethostbyname_r,const char*__restrict, struct hostent*__restrict, char*__restrict, size_t, struct hostent**__restrict, int*__restrict)\
   X(int,gethostbyname2_r,const char*, int, struct hostent*, char*, size_t , struct hostent**, int *)\
   X(int,gethostbyaddr_r,const void*, socklen_t, int type, struct hostent*, char*, size_t, struct hostent**, int *)
+#elif defined(__ANDROID__)
+#define _ST_HOOK_LIST _ST_HOOK_LIST1 \
+  X(int,ioctl,int, int, ...)
 #else
-#define _ST_HOOK_LIST _ST_HOOK_LIST1
+#define _ST_HOOK_LIST _ST_HOOK_LIST1 \
+  X(int,ioctl,int,unsigned long,...)
 #endif
 
 #endif
@@ -445,7 +449,11 @@ int fcntl(int __fd, int __cmd, ...)
     return fcntl_f(__fd, __cmd);
   }
 }
+#ifdef __ANDROID__
+int ioctl(int fd, int request, ...)
+#else
 int ioctl(int fd, unsigned long request, ...)
+#endif
 {
   void* arg;
   va_list va;
