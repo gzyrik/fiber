@@ -3,13 +3,13 @@ all: RTMP MYST rtmpsrv
 
 OS=$(shell uname)
 ifeq ($(OS),Linux)
-MYST_DIR=../myst/Linux_$(shell uname -r)_DBG
+MYST_DIR=../myst/Linux_$(shell uname -r)_OPT
 MYST:
-	@cd ../myst && $(MAKE) linux-debug
+	@cd ../myst && $(MAKE) linux-optimized
 else
-MYST_DIR=../myst/DARWIN_$(shell uname -r)_DBG
+MYST_DIR=../myst/DARWIN_$(shell uname -r)_OPT
 MYST:
-	@cd ../myst && $(MAKE) darwin-debug
+	@cd ../myst && $(MAKE) darwin-optimized
 endif
 
 RTMP_DIR=../rtmpdump

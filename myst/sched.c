@@ -252,7 +252,7 @@ void *_st_idle_thread_start(void *arg)
 }
 
 
-void st_thread_exit(void *retval)
+int st_thread_exit(void *retval)
 {
   _st_thread_t *thread = _ST_CURRENT_THREAD();
 
@@ -296,6 +296,7 @@ void st_thread_exit(void *retval)
   /* Find another thread to run */
   _ST_SWITCH_CONTEXT(thread);
   /* Not going to land here */
+  return 0;
 }
 
 

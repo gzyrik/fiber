@@ -203,7 +203,7 @@ public:
     }
     int read_chunk(char* buf, const size_t size) {
         int n, i=0;
-        for (;  ok_ && i < size; i += n) {
+        for (;  ok_ && i < (int)size; i += n) {
             if (chunked_ == 0) {
                 std::string line;
                 if (!read_line(line) || (chunked_ = std::stoi(line, 0, 16)) <= 0){
@@ -552,6 +552,7 @@ inline int close_socket(SOCKET sock)
 
 inline int select_read(SOCKET sock, size_t sec, size_t usec)
 {
+    int ret = 1;
 #ifndef CPPHTTPLIB_ST_SUPPORT
     fd_set fds;
     FD_ZERO(&fds);
@@ -561,10 +562,9 @@ inline int select_read(SOCKET sock, size_t sec, size_t usec)
     tv.tv_sec = sec;
     tv.tv_usec = usec;
 
-    return select(sock + 1, &fds, NULL, NULL, &tv);
-#else
-    return true;
+    ret = select(sock + 1, &fds, NULL, NULL, &tv);
 #endif
+    return ret;
 }
 
 inline bool wait_until_socket_is_ready(SOCKET sock, size_t sec, size_t usec)
@@ -1812,7 +1812,6 @@ inline bool Server::listen_internal()
     is_running_ = true;
 
     for (;;) {
-        /*
         auto val = detail::select_read(svr_sock_, 0, 100000);
 
         if (val == 0) { // Timeout
@@ -1822,7 +1821,6 @@ inline bool Server::listen_internal()
             }
             continue;
         }
-        */
         SOCKET sock = accept(svr_sock_, NULL, NULL);
 
         if (sock == INVALID_SOCKET) {

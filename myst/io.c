@@ -105,7 +105,9 @@ static int _ST_SYS_CALL(recvmsg)(SOCKET fd, struct msghdr *msg, int flags)
 #else
 #include <sys/resource.h>
 static void _IO_GET_ERRNO() {}
+#ifdef ST_HOOK_SYS
 static int closesocket_f(int osfd) {return _ST_SYS_CALL(close)(osfd);}
+#endif
 #endif
 
 int _st_io_init(void)
@@ -256,7 +258,7 @@ int st_netfd_close(_st_netfd_t *fd)
 
 int st_netfd_fileno(_st_netfd_t *fd)
 {
-  return (fd->osfd);
+  return fd ? (fd->osfd) : INVALID_SOCKET;
 }
 
 
@@ -855,14 +857,14 @@ int st_sendmsg(_st_netfd_t *fd, const struct msghdr *msg, int flags,
   return n;
 }
 
-int st_socket(int domain, int type, int protocol)
+st_netfd_t st_socket(int domain, int type, int protocol)
 {
   int osfd, err;
   _st_netfd_t *newfd;
 
   while ((osfd = _ST_SYS_CALL(socket)(domain, type, protocol)) < 0) {
     if (errno != EINTR)
-      return -1;
+      return NULL;
   }
 
   newfd = _st_netfd_new(osfd, 1, 1);
@@ -871,8 +873,7 @@ int st_socket(int domain, int type, int protocol)
     _ST_SYS_CALL(closesocket)(osfd);
     errno = err;
   }
-
-  return osfd;
+  return newfd;
 }
 
 /*

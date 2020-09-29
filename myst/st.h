@@ -62,6 +62,7 @@ struct iovec {
 #include <fcntl.h>
 #include <poll.h>
 typedef int SOCKET;
+#define INVALID_SOCKET (-1)
 #define WSAAPI
 #undef closesocket
 #define closesocket(s)	close(s)
@@ -131,7 +132,7 @@ extern st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb);
 
 extern st_thread_t st_thread_self(void);
 /** WARNING: MUST destruction local object manually before this */
-extern void st_thread_exit(void *retval);
+extern int st_thread_exit(void *retval);
 extern int st_thread_join(st_thread_t thread, void **retvalp);
 extern void st_thread_interrupt(st_thread_t thread);
 extern st_thread_t st_thread_create(void *(*start)(void *arg), void *arg,
@@ -179,7 +180,8 @@ extern void *st_netfd_getspecific(st_netfd_t fd);
 extern int st_netfd_serialize_accept(st_netfd_t fd);
 extern int st_netfd_poll(st_netfd_t fd, int how, st_utime_t timeout);
 
-extern int st_socket(int domain, int type, int protocol);
+extern st_netfd_t st_open(const char *path, int oflags, mode_t mode);
+extern st_netfd_t st_socket(int domain, int type, int protocol);
 extern int st_poll(struct pollfd *pds, int npds, st_utime_t timeout);
 extern st_netfd_t st_accept(st_netfd_t fd, struct sockaddr *addr, socklen_t *addrlen,
 			    st_utime_t timeout);
@@ -216,7 +218,6 @@ extern int st_recvmsg(st_netfd_t fd, struct msghdr *msg, int flags,
 		      st_utime_t timeout);
 extern int st_sendmsg(st_netfd_t fd, const struct msghdr *msg, int flags,
 		      st_utime_t timeout);
-extern st_netfd_t st_open(const char *path, int oflags, mode_t mode);
 
 #ifdef DEBUG
 extern void _st_show_thread_stack(st_thread_t thread, const char *messg);

@@ -340,10 +340,7 @@ static void* service_listen_thread(void*fd)
     SOCKET clientfd = accept(sockfd, nullptr, nullptr);
     if (clientfd != INVALID_SOCKET) {
       auto t = st_thread_create(serve_client_thread, (void*)(size_t)clientfd, true, 1024*1024);
-      if (t)
-        _childRtmps.emplace(t);
-      else
-        closesocket(clientfd);
+      if (t)  _childRtmps.emplace(t); else closesocket(clientfd);
     }
   }
 clean:
@@ -409,6 +406,12 @@ static bool startRtmpSrv(int port)
   do {
     int tmp=1;
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&tmp, sizeof(tmp)) < 0)
+      break;
+
+    struct timeval tv;
+    socklen_t optlen = sizeof(tv);
+    tv.tv_sec = 1,tv.tv_usec = 0;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv)) < 0)
       break;
 
     struct sockaddr_in addr;
@@ -615,7 +618,6 @@ int main(int argc, char* argv[])
     perror("st_init");
     return -1;
   }
-  st_thread_t server = nullptr;
   httplib::Server http;
   RTMP_debuglevel = RTMP_LOGWARNING;
   http.Get("/", [&](const httplib::Request& req, httplib::Response& res){

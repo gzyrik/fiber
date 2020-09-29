@@ -315,7 +315,7 @@ int WSAAPI sendto(SOCKET sockfd, const char *buf, int len, int flags,
 #undef _ST_HOOK
 
 SOCKET WSAAPI socket(int domain, int type, int protocol)
-{return _st_netfd_hook ? st_socket(domain, type, protocol) : socket_f(domain, type, protocol);}
+{return _st_netfd_hook ? st_netfd_fileno(st_socket(domain, type, protocol)) : socket_f(domain, type, protocol);}
 int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 {return _st_netfd_hook ? st_poll(fds, nfds, timeout) : poll_f(fds, nfds, timeout);}
 int __poll(struct pollfd *fds, nfds_t nfds, int timeout) {return poll(fds, nfds, timeout);}
