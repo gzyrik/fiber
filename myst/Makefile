@@ -366,7 +366,7 @@ $(HEADER): st.h
 $(TARGETDIR)/md.o: md.S
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(TARGETDIR)/%.o: %.c common.h md.h st.h
+$(TARGETDIR)/%.o: %.c common.h md.h st.h hook.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 examples: $(SLIBRARY)
@@ -381,7 +381,7 @@ clean:
 
 ifneq ($(SFLAGS),)
 # Compile with shared library options if it's a C file
-$(TARGETDIR)/%-pic.o: %.c common.h md.h
+$(TARGETDIR)/%-pic.o: %.c common.h md.h st.h hook.h
 	$(CC) $(CFLAGS) $(SFLAGS) -c $< -o $@
 endif
 

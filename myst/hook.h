@@ -5,14 +5,31 @@
 #ifndef _WIN32
 #define __USE_GNU
 #include <dlfcn.h>
+#include <pthread.h>
 #define SOCKOPTVAL_T void
 #define SELECT_TIMEVAL_T struct timeval
+#define ST_DLSYM(sym) dlsym(RTLD_NEXT, sym)
+static pthread_t _st_netfd_thread;
+#define ST_HOOK_THREAD pthread_equal(_st_netfd_thread, pthread_self())
 #else
-#define __thread __declspec(thread)
+static void* ST_DLSYM(const char* sym)
+{
+    static HMODULE RTLD_NEXT = 0;
+    if (!RTLD_NEXT) RTLD_NEXT = LoadLibrary("Ws2_32.dll"); 
+    return GetProcAddress(RTLD_NEXT, sym);
+}
+static DWORD _st_netfd_thread;
+#define ST_HOOK_THREAD  (_st_netfd_thread == GetCurrentThreadId())
+//#define __thread __declspec(thread)
 #define SOCKOPTVAL_T char
 #define SELECT_TIMEVAL_T const struct timeval
 #endif
-static __thread _st_netfd_t** _st_netfd_hook;
+#ifdef __ANDROID__
+#define IOCTL_REQUST_T int
+#else
+#define IOCTL_REQUST_T unsigned long
+#endif
+static _st_netfd_t** _st_netfd_hook;
 static _st_netfd_t* _st_netfd(int osfd)
 {
   if (_st_netfd_hook && osfd > -1 && osfd < _st_osfd_limit)
@@ -57,21 +74,17 @@ static _st_netfd_t* _st_netfd(int osfd)
   X(int,dup2,int, int)\
   X(int,dup3,int, int, int)\
   X(FILE*,fopen,const char * __restrict, const char * __restrict)\
+  X(int,ioctl,int, IOCTL_REQUST_T, ...)\
   X(int,fclose,FILE*)
 
 #if defined(__linux__)
 struct hostent;
 #define _ST_HOOK_LIST _ST_HOOK_LIST1 \
-  X(int,ioctl,int,unsigned long,...)\
   X(int,gethostbyname_r,const char*__restrict, struct hostent*__restrict, char*__restrict, size_t, struct hostent**__restrict, int*__restrict)\
   X(int,gethostbyname2_r,const char*, int, struct hostent*, char*, size_t , struct hostent**, int *)\
   X(int,gethostbyaddr_r,const void*, socklen_t, int type, struct hostent*, char*, size_t, struct hostent**, int *)
-#elif defined(__ANDROID__)
-#define _ST_HOOK_LIST _ST_HOOK_LIST1 \
-  X(int,ioctl,int, int, ...)
 #else
-#define _ST_HOOK_LIST _ST_HOOK_LIST1 \
-  X(int,ioctl,int,unsigned long,...)
+#define _ST_HOOK_LIST _ST_HOOK_LIST1
 #endif
 
 #endif
@@ -81,37 +94,38 @@ _ST_HOOK_LIST
 #undef X
 
 #if defined(__linux__)
+struct epoll_event;
 #define X(ret, name, ...) __attribute__((weak)) extern ret __##name(__VA_ARGS__);
 _ST_HOOK_LIST
 __attribute__((weak)) extern int __libc_poll(struct pollfd*, nfds_t, int );
-__attribute__((weak)) extern int __select(int, fd_set*, fd_set*, fd_set*, struct timeval*);
+__attribute__((weak)) extern int __select(int, fd_set*, fd_set*, fd_set*, SELECT_TIMEVAL_T*);
 __attribute__((weak)) extern int __epoll_wait_nocancel(int, struct epoll_event*, int, int);
 #undef X
 #endif
 
-int (WSAAPI *select_f)(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const struct timeval *timeout);
+int (WSAAPI *select_f)(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, SELECT_TIMEVAL_T *timeout);
 int (WSAAPI *poll_f)(struct pollfd *fds, nfds_t nfds, int timeout);
 #ifdef MD_HAVE_EPOLL
 int (*epoll_wait_f)(int epfd, struct epoll_event *events, int maxevents, int timeout);
 #endif
 static int _st_hook_init()
 {
+  if (_st_netfd_hook) return 0;
 #ifdef _WIN32
-  HMODULE RTLD_NEXT = LoadLibrary("Ws2_32.dll");
-  if (!RTLD_NEXT) return -1;
-#define dlsym(x,y) (void*)GetProcAddress(x, y)
-  closesocket_f = dlsym(RTLD_NEXT, "closesocket");
-  ioctlsocket_f = dlsym(RTLD_NEXT, "ioctlsocket");
-  poll_f = dlsym(RTLD_NEXT, "WSAPoll");
+  _st_netfd_thread = GetCurrentThreadId();
+  closesocket_f = ST_DLSYM("closesocket");
+  ioctlsocket_f = ST_DLSYM("ioctlsocket");
+  poll_f = ST_DLSYM("WSAPoll");
 #else
-  poll_f = dlsym(RTLD_NEXT, "poll");
+  _st_netfd_thread = pthread_self();
+  poll_f = ST_DLSYM("poll");
 #endif
   if (poll_f) {
-#define X(ret, name, ...) name##_f = dlsym(RTLD_NEXT, #name);
+#define X(ret, name, ...) name##_f = ST_DLSYM(#name);
     _ST_HOOK_LIST
-    select_f = dlsym(RTLD_NEXT, "select");
+    select_f = ST_DLSYM("select");
 #ifdef MD_HAVE_EPOLL
-    epoll_wait_f = dlsym(RTLD_NEXT, "epoll_wait");
+    epoll_wait_f = ST_DLSYM("epoll_wait");
 #endif
 #undef X
 #ifdef __linux__
@@ -145,6 +159,7 @@ static int _st_hook_init()
 #endif
     )
   {
+    errno = EINVAL;
     return -1;
   }
   _st_netfd_hook = calloc(_st_osfd_limit, sizeof(_st_netfd_t*));
@@ -161,7 +176,7 @@ int pipe2(int pipefd[2], int flags)
     if (errno != EINTR)
       return -1;
   }
-  if (err == 0 && _st_netfd_hook) {
+  if (err == 0 && ST_HOOK_THREAD) {
     if (!st_netfd_open_socket(pipefd[0]) || !st_netfd_open_socket(pipefd[1])) {
       err = errno;
       close_f(pipefd[0]);
@@ -180,7 +195,7 @@ int socketpair(int domain, int type, int protocol, int sv[2])
     if (errno != EINTR)
       return -1;
   }
-  if (err == 0 && _st_netfd_hook) {
+  if (err == 0 && ST_HOOK_THREAD) {
     if (!st_netfd_open_socket(sv[0]) || !st_netfd_open_socket(sv[1])) {
       err = errno;
       close_f(sv[0]);
@@ -199,7 +214,7 @@ int dup(int oldfd)
     if (errno != EINTR)
       return -1;
   }
-  if (err >= 0 && _st_netfd_hook) {
+  if (err >= 0 && ST_HOOK_THREAD) {
     if (!st_netfd_open_socket(err)) {
       err = errno;
       close_f(err);
@@ -222,7 +237,7 @@ int dup3(int oldfd, int newfd, int flags)
     if (errno != EINTR)
       return -1;
   }
-  if (err == 0 && _st_netfd_hook) {
+  if (err == 0 && ST_HOOK_THREAD) {
     if (!st_netfd_open_socket(newfd)) {
       err = errno;
       close_f(newfd);
@@ -235,12 +250,16 @@ int dup3(int oldfd, int newfd, int flags)
 int close(int sockfd)
 {
   _st_netfd_t* fd = _st_netfd(sockfd);
-  return fd ? st_netfd_close(fd) : close_f(sockfd);
+  if (fd) return st_netfd_close(fd);
+  if (!close_f) close_f = ST_DLSYM("close");
+  return close_f(sockfd);
 }
 FILE* fopen(const char * __restrict filename , const char * __restrict mode)
 {
-  FILE* fp = fopen_f(filename, mode);
-  if (fp && _st_netfd_hook) {
+  FILE* fp;
+  if (!fopen_f) fopen_f = ST_DLSYM("fopen");
+  fp = fopen_f(filename, mode);
+  if (fp && ST_HOOK_THREAD) {
     if (!st_netfd_open(fileno(fp))){
       int err = errno;
       fclose_f(fp);
@@ -254,6 +273,7 @@ int fclose(FILE* fp)
 {
   _st_netfd_t* fd = _st_netfd(fileno(fp));
   if (fd) st_netfd_close(fd);
+  if (!fclose_f) fclose_f = ST_DLSYM("fclose");
   return fclose_f(fp);
 }
 int __close(int fd) {return close(fd);}
@@ -270,9 +290,12 @@ void WSAAPI WSASetLastError(int err) {st_errno=err;}
 #endif
 
 //read hook
+
 #define _ST_HOOK(hook, sockfd, ...) \
   _st_netfd_t* fd = _st_netfd(sockfd); \
-return fd ? st_##hook(fd, ##__VA_ARGS__, fd->rcv_timeo) : hook##_f(sockfd, ##__VA_ARGS__)
+  if (fd) return st_##hook(fd, ##__VA_ARGS__, fd->rcv_timeo); \
+  if (!hook##_f) hook##_f = ST_DLSYM(#hook); \
+  return hook##_f(sockfd, ##__VA_ARGS__);
 #ifndef _WIN32
 ssize_t read(int sockfd, void *buf, size_t nbyte) {_ST_HOOK (read, sockfd, buf, nbyte);}
 ssize_t readv(int sockfd, const struct iovec *iov, int iov_size){_ST_HOOK(readv, sockfd, iov, iov_size);}
@@ -298,7 +321,9 @@ SOCKET WSAAPI accept(SOCKET sockfd, struct sockaddr *addr, socklen_t *addrlen){
 //write hook
 #define _ST_HOOK(hook, sockfd, ...) \
   _st_netfd_t* fd = _st_netfd(sockfd); \
-  return fd ? st_##hook(fd, ##__VA_ARGS__, fd->snd_timeo) : hook##_f(sockfd, ##__VA_ARGS__)
+  if (fd) return st_##hook(fd, ##__VA_ARGS__, fd->snd_timeo); \
+  if (!hook##_f) hook##_f = ST_DLSYM(#hook); \
+  return hook##_f(sockfd, ##__VA_ARGS__)
 int WSAAPI connect(SOCKET sockfd, const struct sockaddr *addr, socklen_t addrlen) {_ST_HOOK(connect, sockfd, addr, addrlen);}
 #ifndef _WIN32
 ssize_t write(int sockfd, const void *buf, size_t nbyte){_ST_HOOK(write, sockfd, buf, nbyte);}
@@ -315,17 +340,17 @@ int WSAAPI sendto(SOCKET sockfd, const char *buf, int len, int flags,
 #undef _ST_HOOK
 
 SOCKET WSAAPI socket(int domain, int type, int protocol)
-{return _st_netfd_hook ? st_netfd_fileno(st_socket(domain, type, protocol)) : socket_f(domain, type, protocol);}
+{return ST_HOOK_THREAD ? st_netfd_fileno(st_socket(domain, type, protocol)) : socket_f(domain, type, protocol);}
 int poll(struct pollfd *fds, nfds_t nfds, int timeout)
-{return _st_netfd_hook ? st_poll(fds, nfds, timeout) : poll_f(fds, nfds, timeout);}
+{return ST_HOOK_THREAD ? st_poll(fds, nfds, timeout) : poll_f(fds, nfds, timeout);}
 int __poll(struct pollfd *fds, nfds_t nfds, int timeout) {return poll(fds, nfds, timeout);}
 #ifndef _WIN32
 unsigned sleep(unsigned int seconds)
-{return _st_netfd_hook ? st_sleep(seconds) : sleep_f(seconds);}
+{return ST_HOOK_THREAD ? st_sleep(seconds) : sleep_f(seconds);}
 int usleep(useconds_t usec)
-{return _st_netfd_hook ? st_usleep(usec) : usleep_f(usec);}
+{return ST_HOOK_THREAD ? st_usleep(usec) : usleep_f(usec);}
 int nanosleep(const struct timespec *req, struct timespec *rem)
-{return _st_netfd_hook ? st_usleep(req->tv_sec * 1000000 + req->tv_nsec/1000): nanosleep_f(req, rem);}
+{return ST_HOOK_THREAD ? st_usleep(req->tv_sec * 1000000 + req->tv_nsec/1000): nanosleep_f(req, rem);}
 #endif
 int WSAAPI setsockopt(SOCKET sockfd, int level, int optname, const SOCKOPTVAL_T *optval, socklen_t optlen)
 {
@@ -390,7 +415,7 @@ int fcntl(int __fd, int __cmd, ...)
     int fd = va_arg(va, int);
     va_end(va);
     fd = fcntl_f(__fd, __cmd, fd);
-    if (fd >= 0 && _st_netfd_hook && !st_netfd_open_socket(fd)){
+    if (fd >= 0 && ST_HOOK_THREAD && !st_netfd_open_socket(fd)){
       fd = errno;
       close_f(fd);
       errno = fd;
@@ -414,7 +439,7 @@ int fcntl(int __fd, int __cmd, ...)
   }
   case F_SETFL: {
     int flags = va_arg(va, int);
-    if (_st_netfd_hook) flags |= O_NONBLOCK;
+    if (ST_HOOK_THREAD) flags |= O_NONBLOCK;
     va_end(va);
     return fcntl_f(__fd, __cmd, flags);
   }
@@ -449,26 +474,23 @@ int fcntl(int __fd, int __cmd, ...)
     return fcntl_f(__fd, __cmd);
   }
 }
-#ifdef __ANDROID__
-int ioctl(int fd, int request, ...)
-#else
-int ioctl(int fd, unsigned long request, ...)
-#endif
+int ioctl(int fd, IOCTL_REQUST_T request, ...)
 {
   void* arg;
   va_list va;
-  if (request == FIONBIO && _st_netfd_hook)
+  if (request == FIONBIO && _st_netfd(fd))
     return 0;
 
   va_start(va, request);
   arg = va_arg(va, void*);
   va_end(va);
+  if (!ioctl_f) ioctl_f = ST_DLSYM("ioctl");
   return ioctl_f(fd, request, arg);
 }
 #else
 int WSAAPI ioctlsocket (SOCKET fd, long request, u_long *arg)
 {
-  if (request == FIONBIO && _st_netfd_hook)
+  if (request == FIONBIO && _st_netfd(fd))
     return 0;
 
   return ioctlsocket_f(fd, request, arg);
@@ -479,7 +501,7 @@ int WSAAPI select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds
   int i, npfds, n;
   struct pollfd pollfds[4];
   struct pollfd* pfds;
-  if (!_st_netfd_hook)
+  if (!ST_HOOK_THREAD)
     return select_f(nfds, readfds, writefds, exceptfds, timeout);
 
   do {// 执行一次非阻塞的select, 检测异常或无效fd.
