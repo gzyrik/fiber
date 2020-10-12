@@ -64,6 +64,9 @@
 #define ST_HOOK_SYS
 #include "st.h"
 #include "md.h"
+#ifndef MD_WINDOWS_FIBER
+#define ST_SHARED_STACK
+#endif
 
 /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
 #ifndef MD_VALGRIND
@@ -143,6 +146,7 @@ typedef struct _st_clist {
  */
 
 typedef void  (*_st_destructor_t)(void *);
+typedef struct _st_thread _st_thread_t;
 
 
 typedef struct _st_stack {
@@ -162,6 +166,10 @@ typedef struct _st_stack {
   /* http://valgrind.org/docs/manual/manual-core-adv.html */
   unsigned long valgrind_stack_id;
 #endif
+#ifdef ST_SHARED_STACK
+  int ref_count;              /* shared reference count */
+  _st_thread_t *owner;        /* the running thread */
+#endif
 } _st_stack_t;
 
 
@@ -170,7 +178,6 @@ typedef struct _st_cond {
 } _st_cond_t;
 
 
-typedef struct _st_thread _st_thread_t;
 
 struct _st_thread {
   int state;                  /* Thread's state */
@@ -183,6 +190,10 @@ struct _st_thread {
   LPVOID context;             /* fiber's handle */
 #else
   _st_stack_t *stack;	      /* Info about thread's stack */
+#ifdef ST_SHARED_STACK
+  char *bsp, *prvstk;
+  unsigned stklen, prvstk_size;
+#endif
   jmp_buf context;            /* Thread's context */
 #endif
   _st_clist_t links;          /* For putting on run/sleep/zombie queue */
@@ -333,6 +344,7 @@ extern _st_eventsys_t *_st_eventsys;
 #define _ST_FL_ON_SLEEPQ    0x04
 #define _ST_FL_INTERRUPT    0x08
 #define _ST_FL_TIMEDOUT     0x10
+#define _ST_FL_SHARED_STK   0x20
 
 
 /*****************************************
@@ -367,12 +379,6 @@ extern _st_eventsys_t *_st_eventsys;
 
 #ifndef ST_UTIME_NO_TIMEOUT
 #define ST_UTIME_NO_TIMEOUT ((st_utime_t) -1LL)
-#endif
-
-#ifndef __ia64__
-#define ST_DEFAULT_STACK_SIZE (64*1024)
-#else
-#define ST_DEFAULT_STACK_SIZE (128*1024)  /* Includes register stack size */
 #endif
 
 #ifndef ST_KEYS_MAX
@@ -420,9 +426,10 @@ void _st_iterate_threads(void);
 #define _ST_SWITCH_CONTEXT(_thread)       \
     ST_BEGIN_MACRO                        \
     ST_SWITCH_OUT_CB(_thread);            \
-    if (!MD_SETJMP((_thread)->context)) { \
+    if (!MD_SETJMP((_thread)->context))   \
       _st_vp_schedule();                  \
-    }                                     \
+    else                                  \
+      _thread = _st_vp_resume();          \
     ST_DEBUG_ITERATE_THREADS();           \
     ST_SWITCH_IN_CB(_thread);             \
     ST_END_MACRO
@@ -478,9 +485,12 @@ void _st_thread_main(void);
 void _st_thread_cleanup(_st_thread_t *thread);
 void _st_add_sleep_q(_st_thread_t *thread, st_utime_t timeout);
 void _st_del_sleep_q(_st_thread_t *thread);
+#define ST_SIZEOF_KEYS_THREAD (sizeof(_st_thread_t) + (ST_KEYS_MAX * sizeof(void *)))
+void _st_thread_free(_st_thread_t *thread);
+_st_thread_t* _st_thread_alloc();
+_st_thread_t* _st_vp_resume(void);
 #ifdef MD_WINDOWS_FIBER
 _st_thread_t *_st_thread_new(void *(*start)(void *arg), void *arg, int stk_size);
-void _st_thread_free(_st_thread_t *thread);
 #else
 _st_stack_t *_st_stack_new(int stack_size);
 void _st_stack_free(_st_stack_t *ts);

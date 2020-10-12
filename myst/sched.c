@@ -110,6 +110,33 @@ int st_poll(struct pollfd *pds, int npds, st_utime_t timeout)
   return n;
 }
 
+#ifdef ST_SHARED_STACK
+static void _st_vp_save_stk(_st_thread_t *thread)
+{
+  char *bsp = thread->bsp;
+  _st_stack_t *stack = thread->stack;
+  thread->stklen = 0;
+#if defined (MD_STACK_GROWS_DOWN)
+  if ((char*)stack->sp < bsp) {
+    thread->stklen = bsp - (char*)stack->sp;
+    bsp = stack->sp;
+  }
+#elif defined (MD_STACK_GROWS_UP)
+  if ((char*)stack->sp > bsp)
+    thread->stklen = (char*)stack->sp - bsp;
+#else
+  #error Unknown OS
+#endif
+  if (thread->stklen > 0) {
+    if (thread->stklen > thread->prvstk_size) {
+      thread->prvstk_size = ((thread->stklen + _ST_PAGE_SIZE - 1)
+        / _ST_PAGE_SIZE) * _ST_PAGE_SIZE;
+      thread->prvstk = realloc(thread->prvstk, thread->prvstk_size);
+    }
+    memcpy(thread->prvstk, bsp, thread->stklen);
+  }
+}
+#endif
 
 void _st_vp_schedule(void)
 {
@@ -125,11 +152,41 @@ void _st_vp_schedule(void)
   }
   ST_ASSERT(thread->state == _ST_ST_RUNNABLE);
 
+#ifdef ST_SHARED_STACK
+  if (_st_this_thread->start != NULL) {
+  _st_this_thread->stack->sp = &thread;
+    if (_st_this_thread->stack == thread->stack)
+      _st_vp_save_stk(_st_this_thread);
+    else
+      _st_this_thread->stklen = -1;
+  }
+#endif
   /* Resume the thread */
   thread->state = _ST_ST_RUNNING;
   _ST_RESTORE_CONTEXT(thread);
 }
 
+_st_thread_t* _st_vp_resume(void)
+{
+#ifdef ST_SHARED_STACK
+  _st_thread_t *cur = _ST_CURRENT_THREAD();
+  _st_stack_t *stack = cur->stack;
+  _st_thread_t* thread = stack->owner;
+  if (cur == thread) return cur;
+
+  if (thread->start != NULL && thread->stklen == -1)
+    _st_vp_save_stk(thread);
+  stack->owner = cur;
+  if (cur->stklen > 0) {
+    char *bsp = cur->bsp;
+#if defined (MD_STACK_GROWS_DOWN)
+    bsp -= cur->stklen;
+#endif
+    memcpy(bsp, cur->prvstk, cur->stklen);
+  }
+#endif
+  return _ST_CURRENT_THREAD();
+}
 
 /*
  * Initialize this Virtual Processor
@@ -176,13 +233,27 @@ int st_init(void)
   /*
    * Initialize primordial thread
    */
-  thread = (_st_thread_t *) calloc(1, sizeof(_st_thread_t) +
-                   (ST_KEYS_MAX * sizeof(void *)));
+  thread = _st_thread_alloc();
   if (!thread)
     return -1;
-  thread->private_data = (void **) (thread + 1);
+  thread->start = (void*)st_init;
   thread->state = _ST_ST_RUNNING;
-  thread->flags = _ST_FL_PRIMORDIAL;
+  thread->flags = _ST_FL_PRIMORDIAL | _ST_FL_SHARED_STK;
+#ifdef ST_SHARED_STACK
+  do {
+    static _st_stack_t _PRIMORDIAL_STACK;
+    thread->stack = &_PRIMORDIAL_STACK;
+    thread->stack->owner = thread;
+    thread->stack->ref_count = 1;
+#if defined (MD_STACK_GROWS_DOWN)
+    thread->bsp = (void*)(((intptr_t)&thread) & ~0x3F);
+#elif defined (MD_STACK_GROWS_UP)
+    thread->bsp = (void*)(((intptr_t)&thread + 0x3F) & ~0x3F);
+#else
+    #error Unknown OS
+#endif
+  } while (0);
+#endif
   _ST_SET_CURRENT_THREAD(thread);
   _st_active_count++;
 #ifdef DEBUG
@@ -195,7 +266,7 @@ int st_init(void)
   /*
    * Create idle thread
    */
-  _st_this_vp.idle_thread = st_thread_create(_st_idle_thread_start, NULL, 0, 0);
+  _st_this_vp.idle_thread = st_thread_create(_st_idle_thread_start, NULL, 0, ST_DEFAULT_STACK_SIZE);
   if (!_st_this_vp.idle_thread)
   {
     free(thread);
@@ -231,7 +302,7 @@ st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb)
 /* ARGSUSED */
 void *_st_idle_thread_start(void *arg)
 {
-  _st_thread_t *me = _ST_CURRENT_THREAD();
+  _st_thread_t *me = _st_vp_resume();
 
   while (_st_active_count > 0) {
     /* Idle vp till I/O is ready or the smallest timeout expired */
@@ -274,7 +345,7 @@ int st_thread_exit(void *retval)
     st_cond_destroy(thread->term);
     thread->term = NULL;
   }
-
+  thread->start = NULL;
 #ifdef DEBUG
   _ST_DEL_THREADQ(thread);
 #endif
@@ -288,13 +359,19 @@ int st_thread_exit(void *retval)
     VALGRIND_STACK_DEREGISTER(thread->stack->valgrind_stack_id);
   }
 #endif
-  if (!(thread->flags & _ST_FL_PRIMORDIAL))
+#ifdef ST_SHARED_STACK
+  if (thread->prvstk) 
+    free(thread->prvstk);
+#endif
+  if (thread->flags & _ST_FL_SHARED_STK)
+    _st_thread_free(thread);
+  else if (!(thread->flags & _ST_FL_PRIMORDIAL))
     _st_stack_free(thread->stack);
   /* else  the PRIMORDIAL thread is leaked */
 #endif
 
   /* Find another thread to run */
-  _ST_SWITCH_CONTEXT(thread);
+  _st_vp_schedule();
   /* Not going to land here */
   return 0;
 }
@@ -342,7 +419,7 @@ int st_thread_join(_st_thread_t *thread, void **retvalp)
 
 void _st_thread_main(void)
 {
-  _st_thread_t *thread = _ST_CURRENT_THREAD();
+  _st_thread_t *thread = _st_vp_resume();
 
   /*
    * Cap the stack by zeroing out the saved return address register
@@ -567,9 +644,24 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
 #ifdef __ia64__
   char *bsp;
 #endif
+#ifdef ST_SHARED_STACK
+  if (stk_size <= 0) {
+    thread = _st_thread_alloc();
+    if (!thread) return NULL;
+    thread->flags = _ST_FL_SHARED_STK;
 
+    stack = _st_this_thread->stack;
+    stack->ref_count++;
+#if defined (MD_STACK_GROWS_DOWN)
+    stack->sp = (void*)(((intptr_t)&thread - (-stk_size)) & ~0x3F);
+#else
+    stack->sp = (void*)(((intptr_t)&thread + (-stk_size) + 0x3F) & ~0x3F);
+#endif
+    goto init_thread;
+  }
+#endif
   /* Adjust stack size */
-  if (stk_size == 0)
+  if (stk_size <= 0)
     stk_size = ST_DEFAULT_STACK_SIZE;
   stk_size = ((stk_size + _ST_PAGE_SIZE - 1) / _ST_PAGE_SIZE) * _ST_PAGE_SIZE;
   stack = _st_stack_new(stk_size);
@@ -623,6 +715,12 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
 
   /* Initialize thread */
   thread->private_data = ptds;
+#ifdef ST_SHARED_STACK
+  stack->owner = thread;
+  stack->ref_count = 1;
+init_thread:
+  thread->bsp = stack->sp;
+#endif
   thread->stack = stack;
   thread->start = start;
   thread->arg = arg;

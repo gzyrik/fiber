@@ -90,6 +90,12 @@ typedef int SOCKET;
 #define ST_UTIME_NO_WAIT 0
 #endif
 
+#ifndef __ia64__
+#define ST_DEFAULT_STACK_SIZE (64*1024)
+#else
+#define ST_DEFAULT_STACK_SIZE (128*1024)  /* Includes register stack size */
+#endif
+
 #define ST_EVENTSYS_DEFAULT 0
 #define ST_EVENTSYS_SELECT  1
 #define ST_EVENTSYS_POLL    2
@@ -252,7 +258,7 @@ class st_go {
     return ret;
   }
 public:
-  st_go(const char* file, int lineno) : stack_size_(0),
+  st_go(const char* file, int lineno) : stack_size_(ST_DEFAULT_STACK_SIZE),
   file_(file),lineno_(lineno)
   { (void)file_, (void)lineno_; }
   const st_go& operator,(int stack_size) const
@@ -262,7 +268,7 @@ public:
     st_thread_create(__st_detached_functor, p, false, stack_size_);
     return *this;
   }
-  template <typename T> static st_thread_t create(T &&f, int stack_size = 0) {
+  template <typename T> static st_thread_t create(T &&f, int stack_size = ST_DEFAULT_STACK_SIZE) {
     auto* p = new joinable_t(std::move(f));
     return st_thread_create(__st_joinable_functor, p, true, stack_size);
   }

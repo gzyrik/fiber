@@ -40,12 +40,12 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include "common.h"
 
-#ifdef MD_WINDOWS_FIBER
 static _st_clist_t _st_free_threads = ST_INIT_STATIC_CLIST(&_st_free_threads);
 /*
  * Free the current thread
@@ -54,29 +54,40 @@ void _st_thread_free(_st_thread_t *thread)
 {
   if (!thread)
     return;
+#ifdef MD_WINDOWS_FIBER
   if (thread->context && GetFiberData() != thread) {
     DeleteFiber(thread->context);
     thread->context = NULL;
   }
+#endif
   /* Put the thread on the free list */
   ST_APPEND_LINK(&thread->links, _st_free_threads.prev);
 }
-_st_thread_t *_st_thread_new(void *(*start)(void *arg), void *arg, int stk_size)
+_st_thread_t* _st_thread_alloc()
 {
   _st_thread_t* thread;
-  if (ST_CLIST_IS_EMPTY(&_st_free_threads))
-  {
-    thread = (_st_thread_t *)calloc(1, sizeof(_st_thread_t) + (ST_KEYS_MAX * sizeof(void *)));
+  if (ST_CLIST_IS_EMPTY(&_st_free_threads)) {
+    thread = (_st_thread_t *)malloc(ST_SIZEOF_KEYS_THREAD);
     if (!thread)
       return NULL;
-    thread->private_data = (void **)(thread + 1);
   }
   else {
     thread = _ST_THREAD_PTR(_st_free_threads.next);
     ST_REMOVE_LINK(&thread->links);
-    if (thread->context)
-      DeleteFiber(thread->context);
   }
+  memset(thread, 0, ST_SIZEOF_KEYS_THREAD);
+  thread->private_data = (void **)(thread + 1);
+  return thread;
+}
+
+#ifdef MD_WINDOWS_FIBER
+_st_thread_t *_st_thread_new(void *(*start)(void *arg), void *arg, int stk_size)
+{
+  _st_thread_t* thread = _st_thread_alloc();
+  if (!thread) return NULL;
+
+  if (thread->context)
+    DeleteFiber(thread->context);
   thread->context = CreateFiberEx(0, stk_size, 0, (LPFIBER_START_ROUTINE)_st_thread_main, thread);
   if (!thread->context) {
     ST_APPEND_LINK(&thread->links, _st_free_threads.prev);
@@ -97,9 +108,6 @@ static void srandom(unsigned int x) { srand(x); }
 #else
 #include <sys/mman.h>
 #endif
-#include "common.h"
-
-
 /* How much space to leave between the stacks, at each end */
 #define REDZONE	_ST_PAGE_SIZE
 
@@ -164,6 +172,10 @@ void _st_stack_free(_st_stack_t *ts)
 {
   if (!ts)
     return;
+#ifdef ST_SHARED_STACK
+  ts->ref_count--;
+  if (ts->ref_count) return;
+#endif
 
   /* Put the stack on the free list */
   ST_APPEND_LINK(&ts->links, _st_free_stacks.prev);

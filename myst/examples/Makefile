@@ -70,7 +70,7 @@ EXTRALIBS   = -ldl
 ifeq ($(OS),)
 EXAMPLES    = unknown
 else
-EXAMPLES    = $(OBJDIR)/lookupdns $(OBJDIR)/proxy $(OBJDIR)/server $(OBJDIR)/go1 $(OBJDIR)/go_echo $(OBJDIR)/go_chan
+EXAMPLES    = $(OBJDIR)/lookupdns $(OBJDIR)/proxy $(OBJDIR)/server $(OBJDIR)/go1 $(OBJDIR)/go3 $(OBJDIR)/go_echo $(OBJDIR)/go_chan
 endif
 
 
@@ -109,6 +109,9 @@ $(OBJDIR)/server: server.c $(OBJDIR)/error.o $(LIBST) $(HEADER)
 
 $(OBJDIR)/go1: $(OBJDIR)/go1.o $(OBJDIR)/go0.o $(LIBST) $(HEADER)
 	$(CXX) $(OBJDIR)/go1.o $(OBJDIR)/go0.o $(LIBST) $(EXTRALIBS) -o $@
+
+$(OBJDIR)/go3: $(OBJDIR)/go3.o $(LIBST) $(HEADER)
+	$(CXX) $(OBJDIR)/go3.o $(LIBST) $(EXTRALIBS) -o $@
 
 $(OBJDIR)/go_echo: $(OBJDIR)/go_echo.o $(OBJDIR)/go0.o $(LIBST) $(HEADER)
 	$(CXX) -std=c++11 $(CFLAGS) -I$(INCDIR) $(OBJDIR)/go_echo.o $(OBJDIR)/go0.o $(LIBST) $(EXTRALIBS) -o $@
