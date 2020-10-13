@@ -50,7 +50,19 @@
 #include <valgrind/valgrind.h>
 #endif
 
-
+static void* aligned_sp(void* sp)
+{
+#if defined (MD_STACK_GROWS_DOWN)
+  if ((intptr_t)sp & 0x3f)
+    return (char*)sp - ((intptr_t)sp & 0x3f);
+#elif defined (MD_STACK_GROWS_UP)
+  if ((unsigned long)sp & 0x3f)
+    return (char*)sp + (0x40 - ((unsigned long)sp & 0x3f));
+#else
+    #error Unknown OS
+#endif
+  return sp;
+}
 /* Global data */
 _st_vp_t _st_this_vp;           /* This VP */
 _st_thread_t *_st_this_thread;  /* Current thread */
@@ -154,7 +166,7 @@ void _st_vp_schedule(void)
 
 #ifdef ST_SHARED_STACK
   if (_st_this_thread->start != NULL) {
-  _st_this_thread->stack->sp = &thread;
+    _st_this_thread->stack->sp = &thread;
     if (_st_this_thread->stack == thread->stack)
       _st_vp_save_stk(_st_this_thread);
     else
@@ -164,6 +176,8 @@ void _st_vp_schedule(void)
   /* Resume the thread */
   thread->state = _ST_ST_RUNNING;
   _ST_RESTORE_CONTEXT(thread);
+  /* Not going to land here */
+  _exit(-1);
 }
 
 _st_thread_t* _st_vp_resume(void)
@@ -245,13 +259,7 @@ int st_init(void)
     thread->stack = &_PRIMORDIAL_STACK;
     thread->stack->owner = thread;
     thread->stack->ref_count = 1;
-#if defined (MD_STACK_GROWS_DOWN)
-    thread->bsp = (void*)(((intptr_t)&thread) & ~0x3F);
-#elif defined (MD_STACK_GROWS_UP)
-    thread->bsp = (void*)(((intptr_t)&thread + 0x3F) & ~0x3F);
-#else
-    #error Unknown OS
-#endif
+    thread->bsp = aligned_sp(&thread);
   } while (0);
 #endif
   _ST_SET_CURRENT_THREAD(thread);
@@ -653,9 +661,9 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
     stack = _st_this_thread->stack;
     stack->ref_count++;
 #if defined (MD_STACK_GROWS_DOWN)
-    stack->sp = (void*)(((intptr_t)&thread - (-stk_size)) & ~0x3F);
+    stack->sp = aligned_sp((char*)&thread + stk_size);
 #else
-    stack->sp = (void*)(((intptr_t)&thread + (-stk_size) + 0x3F) & ~0x3F);
+    stack->sp = aligned_sp((char*)&thread - stk_size);
 #endif
     goto init_thread;
   }

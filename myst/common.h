@@ -428,8 +428,7 @@ void _st_iterate_threads(void);
     ST_SWITCH_OUT_CB(_thread);            \
     if (!MD_SETJMP((_thread)->context))   \
       _st_vp_schedule();                  \
-    else                                  \
-      _thread = _st_vp_resume();          \
+    _thread = _st_vp_resume();            \
     ST_DEBUG_ITERATE_THREADS();           \
     ST_SWITCH_IN_CB(_thread);             \
     ST_END_MACRO

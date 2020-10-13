@@ -232,7 +232,7 @@ endif
 
 
 ifeq ($(BUILD), OPT)
-OTHER_FLAGS += -O
+OTHER_FLAGS += -g -O2
 else
 OTHER_FLAGS += -g
 DEFINES     += -DDEBUG
