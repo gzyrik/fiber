@@ -141,6 +141,7 @@ extern st_thread_t st_thread_self(void);
 extern int st_thread_exit(void *retval);
 extern int st_thread_join(st_thread_t thread, void **retvalp);
 extern void st_thread_interrupt(st_thread_t thread);
+/** WARNING: stack_size <= 0 will share the current stack at now sp skip |stack_size| */
 extern st_thread_t st_thread_create(void *(*start)(void *arg), void *arg,
 				    int joinable, int stack_size);
 extern int st_randomize_stacks(int on);
@@ -273,8 +274,9 @@ public:
     return st_thread_create(__st_joinable_functor, p, true, stack_size);
   }
 };
+#define ST_GO st_go(__FILE__, __LINE__),
 #if !defined(go) && !defined(ST_NOT_DEFINE_GO)
-#define go st_go(__FILE__, __LINE__),
+#define go ST_GO
 #endif
 
 /* 模仿 golang 实现相似的 chan */

@@ -50,19 +50,25 @@
 #include <valgrind/valgrind.h>
 #endif
 
-static void* aligned_sp(void* sp)
+#ifdef ST_SHARED_STACK
+static void* aligned_sp(void* sp, void* bsp, int padding)
 {
 #if defined (MD_STACK_GROWS_DOWN)
+  if (sp > bsp) sp = bsp;
   if ((intptr_t)sp & 0x3f)
-    return (char*)sp - ((intptr_t)sp & 0x3f);
+    sp = (char*)sp - ((intptr_t)sp & 0x3f);
+  return  (char*)sp - padding;
 #elif defined (MD_STACK_GROWS_UP)
+  if (sp < bsp) sp = bsp;
   if ((unsigned long)sp & 0x3f)
-    return (char*)sp + (0x40 - ((unsigned long)sp & 0x3f));
+    sp = (char*)sp + (0x40 - ((unsigned long)sp & 0x3f));
+  return (char*)sp + padding;
 #else
-    #error Unknown OS
+  #error Unknown OS
 #endif
-  return sp;
 }
+#endif
+
 /* Global data */
 _st_vp_t _st_this_vp;           /* This VP */
 _st_thread_t *_st_this_thread;  /* Current thread */
@@ -176,6 +182,7 @@ void _st_vp_schedule(void)
   /* Resume the thread */
   thread->state = _ST_ST_RUNNING;
   _ST_RESTORE_CONTEXT(thread);
+
   /* Not going to land here */
   _exit(-1);
 }
@@ -259,7 +266,7 @@ int st_init(void)
     thread->stack = &_PRIMORDIAL_STACK;
     thread->stack->owner = thread;
     thread->stack->ref_count = 1;
-    thread->bsp = aligned_sp(&thread);
+    thread->bsp = aligned_sp(&thread, &thread, _ST_STACK_PAD_SIZE);
   } while (0);
 #endif
   _ST_SET_CURRENT_THREAD(thread);
@@ -441,6 +448,9 @@ void _st_thread_main(void)
 
   /* All done, time to go away */
   st_thread_exit(thread->retval);
+
+  /* Not going to land here */
+  _exit(-1);
 }
 
 
@@ -660,11 +670,7 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
 
     stack = _st_this_thread->stack;
     stack->ref_count++;
-#if defined (MD_STACK_GROWS_DOWN)
-    stack->sp = aligned_sp((char*)&thread + stk_size);
-#else
-    stack->sp = aligned_sp((char*)&thread - stk_size);
-#endif
+    stack->sp = aligned_sp(&thread, _st_this_thread->bsp, -stk_size);
     goto init_thread;
   }
 #endif
