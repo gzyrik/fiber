@@ -60,6 +60,7 @@
  */
 
 #include "stx.h"
+#include "common.h"
 
 #define MAXPACKET 1024
 
@@ -145,7 +146,7 @@ static int query_domain(st_netfd_t nfd, const char *name,
 	}
 	id = hp->id;
 
-	if (st_sendto(nfd, buf, len, (struct sockaddr *)&(_res.nsaddr_list[i]),
+	if (st_sendto(nfd, buf, len, 0, (struct sockaddr *)&(_res.nsaddr_list[i]),
 		      sizeof(struct sockaddr), timeout) != len) {
 	    h_errno = NETDB_INTERNAL;
 	    /* EINTR means interrupt by other thread, NOT by a caught signal */
@@ -156,7 +157,7 @@ static int query_domain(st_netfd_t nfd, const char *name,
 
 	/* Wait for reply */
 	do {
-	    len = st_recvfrom(nfd, buf, blen, NULL, NULL, timeout);
+	    len = st_recvfrom(nfd, buf, blen, 0, NULL, NULL, timeout);
 	    if (len <= 0)
 		break;
 	} while (id != hp->id);
@@ -214,7 +215,7 @@ int _stx_dns_getaddrlist(const char *host, struct in_addr *addrs,
 {
     char name[MAXDNAME], **domain;
     const char *cp;
-    int s, n, maxlen, dots;
+    int n, maxlen, dots;
     int trailing_dot, tried_as_is;
     st_netfd_t nfd;
 
@@ -233,15 +234,8 @@ int _stx_dns_getaddrlist(const char *host, struct in_addr *addrs,
     }
 
     /* Create UDP socket */
-    if ((s = socket(PF_INET, SOCK_DGRAM, 0)) < 0) {
+    if ((nfd = st_socket(PF_INET, SOCK_DGRAM, 0)) == NULL) {
 	h_errno = NETDB_INTERNAL;
-	return -1;
-    }
-    if ((nfd = st_netfd_open_socket(s)) == NULL) {
-	h_errno = NETDB_INTERNAL;
-	n = errno;
-	close(s);
-	errno = n;
 	return -1;
     }
 

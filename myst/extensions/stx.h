@@ -1,19 +1,6 @@
 #ifndef _STX_H_
 #define _STX_H_
-
-#include <stdio.h>
-#include <string.h>
-#include <ctype.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/nameser.h>
-#include <resolv.h>
-#include <netdb.h>
-#include <errno.h>
 #include "st.h"
-
 
 #ifdef __cplusplus
 extern "C" {

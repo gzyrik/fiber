@@ -75,6 +75,9 @@ typedef int SOCKET;
 #define ST_VERSION_MAJOR    1
 #define ST_VERSION_MINOR    9
 
+/* Undefine this to remove the system hook feature. */
+#define ST_HOOK_SYS
+
 /* Undefine this to remove the context switch callback feature. */
 #define ST_SWITCH_CB
 
@@ -117,7 +120,8 @@ typedef struct _st_chan *   st_chan_t;
 #ifdef ST_SWITCH_CB
 typedef void (*st_switch_cb_t)(void);
 #endif
-
+/** WARNING: SHOULD call before st_init */
+extern int st_cfg_eventsys(int eventsys);
 extern int st_init(void);
 extern int st_getfdlimit(void);
 #ifdef _WIN32
@@ -127,7 +131,6 @@ extern int* _st_errno(void);
 #define st_errno errno
 #endif
 
-extern int st_set_eventsys(int eventsys);
 extern int st_get_eventsys(void);
 extern const char *st_get_eventsys_name(void);
 
@@ -190,6 +193,9 @@ extern int st_netfd_poll(st_netfd_t fd, int how, st_utime_t timeout);
 extern st_netfd_t st_open(const char *path, int oflags, mode_t mode);
 extern st_netfd_t st_socket(int domain, int type, int protocol);
 extern int st_poll(struct pollfd *pds, int npds, st_utime_t timeout);
+extern st_netfd_t st_listen(int domain, int port, int backlog);
+/* !ip = any, !ip[0] = loopback; return socklen_t */
+extern int st_sockaddr(struct sockaddr *addr, int domain, const char* ip, int port);
 extern st_netfd_t st_accept(st_netfd_t fd, struct sockaddr *addr, socklen_t *addrlen,
 			    st_utime_t timeout);
 extern int st_connect(st_netfd_t fd, const struct sockaddr *addr, int addrlen,

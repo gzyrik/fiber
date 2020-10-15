@@ -223,7 +223,7 @@ int st_init(void)
 
   /* We can ignore return value here */
   if (!_st_eventsys) {
-    if (st_set_eventsys(ST_EVENTSYS_DEFAULT) < 0)
+    if (st_cfg_eventsys(ST_EVENTSYS_DEFAULT) < 0)
       return -1;
   }
 

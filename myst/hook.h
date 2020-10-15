@@ -73,9 +73,11 @@ static _st_netfd_t* _st_netfd(int osfd)
   X(int,dup,int)\
   X(int,dup2,int, int)\
   X(int,dup3,int, int, int)\
+  X(int,ioctl,int, IOCTL_REQUST_T, ...)
+/*
   X(FILE*,fopen,const char * __restrict, const char * __restrict)\
-  X(int,ioctl,int, IOCTL_REQUST_T, ...)\
   X(int,fclose,FILE*)
+*/
 
 #if defined(__linux__)
 struct hostent;
@@ -146,7 +148,7 @@ static int _st_hook_init()
     || !read_f || !write_f || !readv_f || !writev_f
     || !pipe_f || !socketpair_f || !sendmsg_f
     || !sleep_f || !usleep_f || !nanosleep_f || !close_f || !fcntl_f
-    || !dup_f || !dup2_f || !fclose_f
+    || !dup_f || !dup2_f /* || !fclose_f */
 #if defined(__linux__)
     || !pipe2_f
     || !gethostbyname_r_f
@@ -254,6 +256,7 @@ int close(int sockfd)
   if (!close_f) close_f = ST_DLSYM("close");
   return close_f(sockfd);
 }
+/*
 FILE* fopen(const char * __restrict filename , const char * __restrict mode)
 {
   FILE* fp;
@@ -275,7 +278,7 @@ int fclose(FILE* fp)
   if (fd) st_netfd_close(fd);
   if (!fclose_f) fclose_f = ST_DLSYM("fclose");
   return fclose_f(fp);
-}
+}*/
 int __close(int fd) {return close(fd);}
 int dup2(int oldfd, int newfd){return dup3(oldfd, newfd, 0);}
 int pipe(int pipefd[2]) {return pipe2(pipefd, 0);}

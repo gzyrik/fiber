@@ -901,4 +901,69 @@ _st_netfd_t *st_open(const char *path, int oflags, mode_t mode)
 
   return newfd;
 }
+st_netfd_t st_listen(int domain, int port, int backlog)
+{
+  int n = 1;
+  SOCKET fd;
+  socklen_t len;
+  struct sockaddr_storage sa;
+
+  if (domain == AF_INET) {
+    struct sockaddr_in* ipv4 = (struct sockaddr_in*)&sa;
+    ipv4->sin_family = AF_INET;
+    ipv4->sin_port = htons (port);
+    ipv4->sin_addr.s_addr = htonl (INADDR_ANY);
+    len = sizeof(*ipv4);
+  }
+  else if (domain == AF_INET6) {
+    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)&sa;
+    ipv6->sin6_family = AF_INET6;
+    ipv6->sin6_port = htons (port);
+    ipv6->sin6_addr = in6addr_any;
+    len = sizeof(*ipv6);
+  }
+  else return NULL;
+
+  fd = socket(domain, SOCK_STREAM, 0);
+  if (fd == INVALID_SOCKET) return NULL;
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&n, sizeof(n)) < 0)
+    goto clean;
+
+  if (bind(fd, (struct sockaddr*)&sa, len) < 0)
+    goto clean;
+  if (listen(fd, backlog) < 0)
+    goto clean;
+  return st_netfd_open_socket(fd);
+clean:
+  _ST_SYS_CALL(closesocket)(fd);
+  return NULL;
+}
+int st_sockaddr(struct sockaddr *sa, int domain, const char* ip, int port)
+{
+  if (domain == AF_INET) {
+    struct sockaddr_in* ipv4 = (struct sockaddr_in*)sa;
+    ipv4->sin_family = AF_INET;
+    ipv4->sin_port = htons (port);
+    if (!ip)
+      ipv4->sin_addr.s_addr = htonl (INADDR_ANY);
+    else if (ip[0])
+      inet_pton(AF_INET, ip, &ipv4->sin_addr);
+    else 
+      ipv4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    return sizeof(*ipv4);
+  }
+  else if (domain == AF_INET6) {
+    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)sa;
+    ipv6->sin6_family = AF_INET6;
+    ipv6->sin6_port = htons (port);
+    if (!ip)
+      ipv6->sin6_addr = in6addr_any;
+    else if (ip[0])
+      inet_pton(AF_INET6, ip, &ipv6->sin6_addr);
+    else
+      ipv6->sin6_addr = in6addr_loopback;
+    return sizeof(*ipv6);
+  }
+  return 0;
+}
 

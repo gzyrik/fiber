@@ -61,7 +61,6 @@
 #else
 #define	ST_HIDDEN   static
 #endif
-#define ST_HOOK_SYS
 #include "st.h"
 #include "md.h"
 #ifndef MD_WINDOWS_FIBER

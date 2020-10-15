@@ -1407,7 +1407,7 @@ static _st_eventsys_t _st_epoll_eventsys = {
  * Public functions
  */
 
-int st_set_eventsys(int eventsys)
+int st_cfg_eventsys(int eventsys)
 {
   if (_st_eventsys) {
     errno = EBUSY;

@@ -1,4 +1,4 @@
-#include "../st.h"
+#include <st.h>
 void foo0();
 void foo()
 {

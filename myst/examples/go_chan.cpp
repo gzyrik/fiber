@@ -1,4 +1,4 @@
-#include "../st.h"
+#include <st.h>
 void foo0();
 /*
 readelf -sW a.o | c++filt -t 

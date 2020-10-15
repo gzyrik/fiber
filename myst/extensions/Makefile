@@ -81,7 +81,7 @@ $(SLIBRARY): $(OBJS)
 	$(RANLIB) $@
 
 $(OBJDIR)/%.o: %.c stx.h common.h
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -D$(OS) -c $< -o $@
 
 clean:
 	rm -rf $(OBJS) $(SLIBRARY)

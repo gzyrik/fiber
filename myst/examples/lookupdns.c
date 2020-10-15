@@ -37,7 +37,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include "st.h"
+#include <st.h>
 
 #if !defined(NETDB_INTERNAL) && defined(h_NETDB_INTERNAL)
 #define NETDB_INTERNAL h_NETDB_INTERNAL
@@ -46,23 +46,29 @@
 /* Resolution timeout (in microseconds) */
 #define TIMEOUT (2*1000000LL)
 
+static struct sockaddr *_dns_server = NULL;
 /* External function defined in the res.c file */
-int dns_getaddr(const char *host, struct in_addr *addr, st_utime_t timeout);
+int dns_init(void);
+int dns_getaddr(const char *host, struct in_addr *addr, st_utime_t timeout, struct sockaddr *dns_server);
 
 
-void *do_resolve(void *host)
+static void *do_resolve(void *host)
 {
-  struct in_addr addr;
+  struct in_addr addr[256];
+  int n = dns_getaddr(host, &addr, TIMEOUT, _dns_server);
 
   /* Use dns_getaddr() instead of gethostbyname(3) to get IP address */
-  if (dns_getaddr(host, &addr, TIMEOUT) < 0) {
+  if (n < 0) {
     fprintf(stderr, "dns_getaddr: can't resolve %s: ", (char *)host);
     if (h_errno == NETDB_INTERNAL)
       perror("");
     else
       herror("");
-  } else
-    printf("%-40s %s\n", (char *)host, inet_ntoa(addr));
+  } else {
+    int i;
+    for(int i=0;i<n;++i)
+      printf("%-40s %s\n", (char *)host, inet_ntoa(addr[i]));
+  }
 
   return NULL;
 }
@@ -82,14 +88,24 @@ int main(int argc, char *argv[])
     exit(1);
   }
 
+  if (dns_init() < 0) {
+    perror("dns_init");
+    exit(1);
+  }
+
   if (st_init() < 0) {
     perror("st_init");
     exit(1);
   }
 
   for (i = 1; i < argc; i++) {
+    if (argv[i][0] == '@') {
+      struct sockaddr_storage sa;
+      _dns_server = (struct sockaddr*)&sa;
+      st_sockaddr(_dns_server, AF_INET, &argv[i][1], 53);
+    }
     /* Create a separate thread for each host name */
-    if (st_thread_create(do_resolve, argv[i], 0, 0) == NULL) {
+    else if (st_thread_create(do_resolve, argv[i], 0, 0) == NULL) {
       perror("st_thread_create");
       exit(1);
     }

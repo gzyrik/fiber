@@ -167,7 +167,7 @@ int main(int argc, char *argv[])
     start_daemon();
 
   if (alt_ev)
-    st_set_eventsys(ST_EVENTSYS_ALT);
+    st_cfg_eventsys(ST_EVENTSYS_ALT);
 
   /* Initialize the ST library */
   if (st_init() < 0) {
