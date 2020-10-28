@@ -901,12 +901,21 @@ _st_netfd_t *st_open(const char *path, int oflags, mode_t mode)
 
   return newfd;
 }
-st_netfd_t st_listen(int domain, int port, int backlog)
+
+st_netfd_t st_bind(int domain, int protocol, int port, int backlog)
 {
   int n = 1;
   SOCKET fd;
   socklen_t len;
   struct sockaddr_storage sa;
+  if (protocol == IPPROTO_UDP)
+    fd = socket(domain, SOCK_DGRAM, IPPROTO_UDP);
+  else if (protocol == IPPROTO_TCP)
+    fd = socket(domain, SOCK_STREAM, IPPROTO_TCP);
+  else
+    return NULL;
+
+  if (fd == INVALID_SOCKET) return NULL;
 
   if (domain == AF_INET) {
     struct sockaddr_in* ipv4 = (struct sockaddr_in*)&sa;
@@ -924,20 +933,19 @@ st_netfd_t st_listen(int domain, int port, int backlog)
   }
   else return NULL;
 
-  fd = socket(domain, SOCK_STREAM, 0);
-  if (fd == INVALID_SOCKET) return NULL;
   if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&n, sizeof(n)) < 0)
     goto clean;
 
   if (bind(fd, (struct sockaddr*)&sa, len) < 0)
     goto clean;
-  if (listen(fd, backlog) < 0)
+  if (protocol == IPPROTO_TCP && listen(fd, backlog) < 0)
     goto clean;
   return st_netfd_open_socket(fd);
 clean:
   _ST_SYS_CALL(closesocket)(fd);
   return NULL;
 }
+
 int st_sockaddr(struct sockaddr *sa, int domain, const char* ip, int port)
 {
   if (domain == AF_INET) {
@@ -965,5 +973,22 @@ int st_sockaddr(struct sockaddr *sa, int domain, const char* ip, int port)
     return sizeof(*ipv6);
   }
   return 0;
+}
+const char* st_inetaddr(const struct sockaddr *sa, int addrlen, int *domain, int *port)
+{
+  if (sa->sa_family == AF_INET) {
+    const struct sockaddr_in* ipv4 = (const struct sockaddr_in*)sa;
+    if (domain) *domain = ipv4->sin_family;
+    if (port) *port = ntohs(ipv4->sin_port);
+    return inet_ntoa(ipv4->sin_addr);
+  }
+  else if (sa->sa_family  == AF_INET6) {
+    static char str[INET6_ADDRSTRLEN];
+    const struct sockaddr_in6* ipv6 = (const struct sockaddr_in6*)sa;
+    if (domain) *domain = ipv6->sin6_family;
+    if (port) *port = ntohs(ipv6->sin6_port);
+    return inet_ntop(ipv6->sin6_family, &ipv6->sin6_addr, str, INET6_ADDRSTRLEN);
+  }
+  return NULL;
 }
 

@@ -193,9 +193,10 @@ extern int st_netfd_poll(st_netfd_t fd, int how, st_utime_t timeout);
 extern st_netfd_t st_open(const char *path, int oflags, mode_t mode);
 extern st_netfd_t st_socket(int domain, int type, int protocol);
 extern int st_poll(struct pollfd *pds, int npds, st_utime_t timeout);
-extern st_netfd_t st_listen(int domain, int port, int backlog);
+extern st_netfd_t st_bind(int domain, int protocol, int port, int backlog);
 /* !ip = any, !ip[0] = loopback; return socklen_t */
 extern int st_sockaddr(struct sockaddr *addr, int domain, const char* ip, int port);
+extern const char* st_inetaddr(const struct sockaddr *addr, int addrlen, int *domain, int *port);
 extern st_netfd_t st_accept(st_netfd_t fd, struct sockaddr *addr, socklen_t *addrlen,
 			    st_utime_t timeout);
 extern int st_connect(st_netfd_t fd, const struct sockaddr *addr, int addrlen,

@@ -65,10 +65,12 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <arpa/nameser.h>
 #include <resolv.h>
 #include <netdb.h>
@@ -129,13 +131,18 @@ static int dns_skipname(u_char *cp, u_char* eoa)
   return -1;
 }
 
-static int parse_answer(querybuf_t *ans, int len, struct in_addr *addrs)
+static int parse_answer(querybuf_t *ans, int len, struct addrinfo *res, st_utime_t* timeout)
 {
   char buf[MAXPACKET];
   HEADER *ahp;
   u_char *cp, *eoa;
   int type, n, count=0;
+  st_utime_t ttl = ST_UTIME_NO_TIMEOUT;
 
+  while (res->ai_next) {
+    res = res->ai_next;
+    count++;
+  }
   ahp = &ans->hdr;
   eoa = ans->buf + len;
   cp = ans->buf + sizeof(HEADER);
@@ -152,40 +159,82 @@ static int parse_answer(querybuf_t *ans, int len, struct in_addr *addrs)
     if ((n = dn_expand(ans->buf, eoa, cp, buf, sizeof(buf))) < 0)
       break;
     cp += n;
+    if (cp + 4 + 4 + 2 >= eoa)
+      return -1;
+
     type = _getshort(cp);
-    cp += 8;
-    n = _getshort(cp);
-    cp += 2;
-    if (type == T_A){
-      if (n > sizeof(*addrs) || cp + n > eoa)
-        return -1;
-      memcpy(addrs+count, cp, n);
+    cp += 4;
+    if (type == T_A || type == T_AAAA)
+      ttl = _getlong(cp) * 1000000LL;
+	cp += 4;
+	n = _getshort(cp);
+	cp += 2;
+
+    if (cp + n > eoa) return -1;
+    else if (type == T_A && n != sizeof(struct in_addr)) return -1;
+    else if (type == T_AAAA && n != sizeof(struct in6_addr)) return -1;
+
+    if (type == T_A || type == T_AAAA) {
+      res->ai_next = ( struct addrinfo*)calloc(1, sizeof(struct addrinfo));
+      if (!res->ai_next) return -1;
+      res = res->ai_next;
       count++;
+      if (type == T_A) {
+        struct sockaddr_in* ipv4 = calloc(1, sizeof(struct sockaddr_in));
+        if (!ipv4) return -1;
+        ipv4->sin_family = AF_INET;
+        memcpy(&ipv4->sin_addr, cp, n);
+        res->ai_addr = (struct sockaddr*)ipv4;
+      }
+      else {
+        struct sockaddr_in6* ipv6 = calloc(1, sizeof(struct sockaddr_in6));
+        if (!ipv6) return -1;
+        ipv6->sin6_family = AF_INET6;
+        memcpy(&ipv6->sin6_addr, cp, n);
+        res->ai_addr = (struct sockaddr*)ipv6;
+      }
+    }
+    else if (type == T_CNAME) {
+      ;//printf("-.*%s\n", n, cp);
     }
     cp += n;
   }
-
+  if (count > 0) *timeout = ttl;
   return count;
 }
 
 
-static int fetch_domain(st_netfd_t nfd, const char *name,
-    struct in_addr *addrs, st_utime_t timeout, struct sockaddr* server)
+static int fetch_domain(st_netfd_t nfd[2], const char *name,
+  struct addrinfo *hints, st_utime_t *timeout, struct sockaddr* server)
 {
   querybuf_t qbuf;
   u_char *buf = qbuf.buf;
   HEADER *hp = &qbuf.hdr;
   int blen = sizeof(qbuf);
-  int i, len, id;
-  len = res_mkquery(QUERY, name, C_IN, T_A, NULL, 0, NULL, buf, blen);
+  int i, len, id, f, pf, slen;
+  int family = hints->ai_family;
+  switch(server->sa_family) {
+  case AF_INET:
+    f = 0, pf=PF_INET, slen = sizeof(struct sockaddr_in); break;
+  case AF_INET6:
+    f = 1, pf=PF_INET6, slen = sizeof(struct sockaddr_in6); break;
+  default:
+    return -1;
+  }
+
+  if (!nfd[f] && (nfd[f] = st_socket(pf, SOCK_DGRAM, 0)) == NULL) { /* Create UDP socket */
+    h_errno = NETDB_INTERNAL;
+    return -1;
+  }
+  if (family == AF_UNSPEC) family = server->sa_family;
+  len = res_mkquery(QUERY, name, C_IN, family == AF_INET6 ? T_AAAA : T_A, NULL, 0, NULL, buf, blen);
   if (len <= 0) {
     h_errno = NO_RECOVERY;
     return -1;
   }
   id = hp->id;
 
-  if (st_sendto(nfd, buf, len, 0, server,
-	sizeof(struct sockaddr), timeout) != len) {
+  if (st_sendto(nfd[f], buf, len, 0, server, slen, *timeout) != len) {
     h_errno = NETDB_INTERNAL;
     /* EINTR means interrupt by other thread, NOT by a caught signal */
     if (errno == EINTR)
@@ -195,7 +244,7 @@ static int fetch_domain(st_netfd_t nfd, const char *name,
 
   /* Wait for reply */
   do {
-    len = st_recvfrom(nfd, buf, blen, 0, NULL, NULL, timeout);
+    len = st_recvfrom(nfd[f], buf, blen, 0, NULL, NULL, *timeout);
     if (len <= 0)
       break;
   } while (id != hp->id);
@@ -213,32 +262,32 @@ static int fetch_domain(st_netfd_t nfd, const char *name,
   hp->qdcount = ntohs(hp->qdcount);
   if ((hp->rcode != NOERROR) || (hp->ancount == 0)) {
     switch (hp->rcode) {
-      case NXDOMAIN:
-	h_errno = HOST_NOT_FOUND;
-	break;
-      case SERVFAIL:
-	h_errno = TRY_AGAIN;
-	break;
-      case NOERROR:
-	h_errno = NO_DATA;
-	break;
-      case FORMERR:
-      case NOTIMP:
-      case REFUSED:
-      default:
-	h_errno = NO_RECOVERY;
+    case NXDOMAIN:
+      h_errno = HOST_NOT_FOUND;
+      break;
+    case SERVFAIL:
+      h_errno = TRY_AGAIN;
+      break;
+    case NOERROR:
+      h_errno = NO_DATA;
+      break;
+    case FORMERR:
+    case NOTIMP:
+    case REFUSED:
+    default:
+      h_errno = NO_RECOVERY;
     }
     return 0;
   }
-  return parse_answer(&qbuf, len, addrs);
+  return parse_answer(&qbuf, len, hints, timeout);
 }
 
-static int query_domain(st_netfd_t nfd, const char *name, struct sockaddr *dns_server,
-    struct in_addr *addrs, st_utime_t timeout)
+static int query_domain(st_netfd_t nfd[2], const char *name,
+  struct addrinfo *hints, st_utime_t *timeout)
 {
   int i, nscount = 0;
   struct sockaddr *nsaddr_list[256];
-  if (dns_server) nsaddr_list[nscount++] = dns_server;
+  if (hints->ai_addr) nsaddr_list[nscount++] = hints->ai_addr;
 #ifdef __BIONIC__
   i = res_nsaddr_list(nsaddr_list + nscount);
   if (i > 0) nscount += i;
@@ -247,7 +296,7 @@ static int query_domain(st_netfd_t nfd, const char *name, struct sockaddr *dns_s
     nsaddr_list[nscount++] = (struct sockaddr *)&_res.nsaddr_list[i];
 #endif
   for (i = 0; i < nscount; i++) {
-    int ret = fetch_domain(nfd,  name, addrs, timeout, nsaddr_list[i]);
+    int ret = fetch_domain(nfd, name, hints, timeout, nsaddr_list[i]);
     if (ret != 0) return ret;
   }
   return -1;
@@ -257,13 +306,14 @@ static int query_domain(st_netfd_t nfd, const char *name, struct sockaddr *dns_s
 #define CLOSE_AND_RETURN(ret) \
   {                           \
     n = errno;                \
-    st_netfd_close(nfd);      \
+    if(nfd[0])st_netfd_close(nfd[0]);   \
+    if(nfd[1])st_netfd_close(nfd[1]);   \
     errno = n;                \
     return (ret);             \
   }
 
 
-int dns_init(void)
+static int dns_init(void)
 {
 #ifdef __BIONIC__
   if(res_init() == -1) {
@@ -284,22 +334,16 @@ int dns_init(void)
   return 0;
 }
 
-int dns_getaddr(const char *host, struct in_addr *addrs, st_utime_t timeout, struct sockaddr* dns)
+static int dns_getaddr(const char *host, struct addrinfo *hints, st_utime_t *timeout)
 {
   char name[MAXDNAME], **domain;
   const char *cp;
   int n, maxlen, dots, ret;
   int trailing_dot, tried_as_is;
-  st_netfd_t nfd;
+  st_netfd_t nfd[2] = {NULL, NULL};
 
   if (!host || *host == '\0') {
     h_errno = HOST_NOT_FOUND;
-    return -1;
-  }
-
-  /* Create UDP socket */
-  if ((nfd = st_socket(PF_INET, SOCK_DGRAM, 0)) == NULL) {
-    h_errno = NETDB_INTERNAL;
     return -1;
   }
 
@@ -322,7 +366,7 @@ int dns_getaddr(const char *host, struct in_addr *addrs, st_utime_t timeout, str
    * 'as is'.  The threshold can be set with the "ndots" option.
    */
   if (dots >= _res.ndots) {
-    if ((ret=query_domain(nfd, host, dns, addrs, timeout)) >= 0)
+    if ((ret=query_domain(nfd, host, hints, timeout)) >= 0)
       CLOSE_AND_RETURN(ret);
     if (h_errno == NETDB_INTERNAL && errno == EINTR)
       CLOSE_AND_RETURN(-1);
@@ -340,7 +384,7 @@ int dns_getaddr(const char *host, struct in_addr *addrs, st_utime_t timeout, str
     name[n++] = '.';
     for (domain = _res.dnsrch; *domain; domain++) {
       strncpy(name + n, *domain, maxlen - n);
-      if ((ret=query_domain(nfd, name, dns, addrs, timeout)) >= 0)
+      if ((ret=query_domain(nfd, name, hints, timeout)) >= 0)
         CLOSE_AND_RETURN(ret);
       if (h_errno == NETDB_INTERNAL && errno == EINTR)
         CLOSE_AND_RETURN(-1);
@@ -355,10 +399,38 @@ int dns_getaddr(const char *host, struct in_addr *addrs, st_utime_t timeout, str
    * name or whether it ends with a dot.
    */
   if (!tried_as_is) {
-    if ((ret=query_domain(nfd, host, dns, addrs, timeout)) >= 0)
+    if ((ret=query_domain(nfd, host, hints, timeout)) >= 0)
       CLOSE_AND_RETURN(ret);
   }
 
   CLOSE_AND_RETURN(-1);
 }
 
+void st_freeaddrinfo(struct addrinfo *res)
+{
+  if (!res) return;
+  else if (res->ai_next)
+    st_freeaddrinfo(res->ai_next);
+  else {
+    if (res->ai_addr) free(res->ai_addr);
+    free(res);
+  }
+}
+
+/* timeout for udp send/recv, after return ttl us */
+int st_getaddrinfo(const char *node, const char *service,
+    const struct addrinfo *hints, struct addrinfo **res, st_utime_t *timeout)
+{
+  int ret = dns_init();
+  struct addrinfo addrs = {0};
+  if (ret < 0) return ret;
+  addrs.ai_family = AF_UNSPEC;
+  if (hints) addrs = *hints;
+  addrs.ai_next = NULL;
+  ret = dns_getaddr(node, &addrs, timeout);
+  if (ret < 0)
+    st_freeaddrinfo(addrs.ai_next);
+  else
+    *res = addrs.ai_next;
+  return ret;
+}
