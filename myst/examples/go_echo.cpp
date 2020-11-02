@@ -160,5 +160,5 @@ int main()
     printf("[7] other fiber\n");
   };
   echo_server();
-  return st_thread_exit(NULL);
+  return st_thread_exit(NULL), 0;
 }

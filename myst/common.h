@@ -427,7 +427,7 @@ void _st_iterate_threads(void);
     ST_SWITCH_OUT_CB(_thread);            \
     if (!MD_SETJMP((_thread)->context))   \
       _st_vp_schedule();                  \
-    _thread = _st_vp_resume();            \
+    _thread = _ST_CURRENT_THREAD();       \
     ST_DEBUG_ITERATE_THREADS();           \
     ST_SWITCH_IN_CB(_thread);             \
     ST_END_MACRO
@@ -436,10 +436,9 @@ void _st_iterate_threads(void);
  * Restore a thread context that was saved by _ST_SWITCH_CONTEXT or
  * initialized by _ST_INIT_CONTEXT
  */
-#define _ST_RESTORE_CONTEXT(_thread)   \
+#define _ST_RESTORE_CONTEXT()          \
     ST_BEGIN_MACRO                     \
-    _ST_SET_CURRENT_THREAD(_thread);   \
-    MD_LONGJMP((_thread)->context, 1); \
+    MD_LONGJMP(_ST_CURRENT_THREAD()->context, 1); \
     ST_END_MACRO
 
 /*
@@ -486,7 +485,6 @@ void _st_del_sleep_q(_st_thread_t *thread);
 #define ST_SIZEOF_KEYS_THREAD (sizeof(_st_thread_t) + (ST_KEYS_MAX * sizeof(void *)))
 void _st_thread_free(_st_thread_t *thread);
 _st_thread_t* _st_thread_alloc();
-_st_thread_t* _st_vp_resume(void);
 #ifdef MD_WINDOWS_FIBER
 _st_thread_t *_st_thread_new(void *(*start)(void *arg), void *arg, int stk_size);
 #else

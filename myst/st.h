@@ -141,7 +141,7 @@ extern st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb);
 
 extern st_thread_t st_thread_self(void);
 /** WARNING: MUST destruction local object manually before this */
-extern int st_thread_exit(void *retval);
+extern void st_thread_exit(void *retval);
 extern int st_thread_join(st_thread_t thread, void **retvalp);
 extern void st_thread_interrupt(st_thread_t thread);
 /** WARNING: stack_size <= 0 will share the current stack at now sp skip |stack_size| */

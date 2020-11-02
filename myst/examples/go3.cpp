@@ -14,5 +14,5 @@ int main(int argc, char *argv[])
       std::cerr << '-';
   }
   std::cerr << std::endl;
-  return st_thread_exit(NULL);
+  return st_thread_exit(NULL), 0;
 }

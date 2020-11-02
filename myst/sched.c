@@ -159,6 +159,13 @@ static void _st_vp_save_stk(_st_thread_t *thread)
 void _st_vp_schedule(void)
 {
   _st_thread_t *thread;
+#ifdef ST_SHARED_STACK
+  thread = _ST_CURRENT_THREAD();
+  if (thread) {
+    thread->stack->sp = &thread;
+    thread->stklen = 0;
+  }
+#endif
 
   if (_ST_RUNQ.next != &_ST_RUNQ) {
     /* Pull thread off of the run queue */
@@ -169,44 +176,33 @@ void _st_vp_schedule(void)
     thread = _st_this_vp.idle_thread;
   }
   ST_ASSERT(thread->state == _ST_ST_RUNNABLE);
+  thread->state = _ST_ST_RUNNING;
+  _ST_SET_CURRENT_THREAD(thread);
 
 #ifdef ST_SHARED_STACK
-  if (_st_this_thread->start != NULL) {
-    _st_this_thread->stack->sp = &thread;
-    if (_st_this_thread->stack == thread->stack)
-      _st_vp_save_stk(_st_this_thread);
-    else
-      _st_this_thread->stklen = -1;
+  if (thread->stack->owner != thread) {
+    _st_thread_t *old = thread->stack->owner;
+    if (old && old->start)
+      _st_vp_save_stk(old);
+
+    thread->stack->owner = thread;
+
+    if (thread->stklen > 0) {
+      char *bsp = thread->bsp;
+#if defined (MD_STACK_GROWS_DOWN)
+      bsp -= thread->stklen;
+#endif
+      memcpy(bsp, thread->prvstk, thread->stklen);
+    }
   }
 #endif
-  /* Resume the thread */
-  thread->state = _ST_ST_RUNNING;
-  _ST_RESTORE_CONTEXT(thread);
 
+  /* Resume the current thread */
+  _ST_RESTORE_CONTEXT();
+#ifndef MD_WINDOWS_FIBER
   /* Not going to land here */
   _exit(-1);
-}
-
-_st_thread_t* _st_vp_resume(void)
-{
-#ifdef ST_SHARED_STACK
-  _st_thread_t *cur = _ST_CURRENT_THREAD();
-  _st_stack_t *stack = cur->stack;
-  _st_thread_t* thread = stack->owner;
-  if (cur == thread) return cur;
-
-  if (thread->start != NULL && thread->stklen == -1)
-    _st_vp_save_stk(thread);
-  stack->owner = cur;
-  if (cur->stklen > 0) {
-    char *bsp = cur->bsp;
-#if defined (MD_STACK_GROWS_DOWN)
-    bsp -= cur->stklen;
 #endif
-    memcpy(bsp, cur->prvstk, cur->stklen);
-  }
-#endif
-  return _ST_CURRENT_THREAD();
 }
 
 /*
@@ -265,7 +261,7 @@ int st_init(void)
     static _st_stack_t _PRIMORDIAL_STACK;
     thread->stack = &_PRIMORDIAL_STACK;
     thread->stack->owner = thread;
-    thread->stack->ref_count = 1;
+    thread->stack->ref_count = 2; /* prevent release */
     thread->bsp = aligned_sp(&thread, &thread, _ST_STACK_PAD_SIZE);
   } while (0);
 #endif
@@ -317,7 +313,7 @@ st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb)
 /* ARGSUSED */
 void *_st_idle_thread_start(void *arg)
 {
-  _st_thread_t *me = _st_vp_resume();
+  _st_thread_t *me = _ST_CURRENT_THREAD();
 
   while (_st_active_count > 0) {
     /* Idle vp till I/O is ready or the smallest timeout expired */
@@ -338,7 +334,7 @@ void *_st_idle_thread_start(void *arg)
 }
 
 
-int st_thread_exit(void *retval)
+void st_thread_exit(void *retval)
 {
   _st_thread_t *thread = _ST_CURRENT_THREAD();
 
@@ -364,7 +360,7 @@ int st_thread_exit(void *retval)
 #ifdef DEBUG
   _ST_DEL_THREADQ(thread);
 #endif
-
+  _ST_SET_CURRENT_THREAD(NULL);
 #ifdef MD_WINDOWS_FIBER
   _st_thread_free(thread);
 #else
@@ -374,21 +370,23 @@ int st_thread_exit(void *retval)
     VALGRIND_STACK_DEREGISTER(thread->stack->valgrind_stack_id);
   }
 #endif
+  do {
+    _st_stack_t *stack = thread->stack;
 #ifdef ST_SHARED_STACK
-  if (thread->prvstk) 
-    free(thread->prvstk);
+    if (thread->prvstk) 
+      free(thread->prvstk);
+    if (stack && stack->owner == thread)
+      stack->owner = NULL;
 #endif
-  if (thread->flags & _ST_FL_SHARED_STK)
-    _st_thread_free(thread);
-  else if (!(thread->flags & _ST_FL_PRIMORDIAL))
-    _st_stack_free(thread->stack);
-  /* else  the PRIMORDIAL thread is leaked */
+    if (thread->flags & _ST_FL_SHARED_STK)
+      _st_thread_free(thread);
+    if (stack != NULL) /* no PRIMORDIAL stack */
+      _st_stack_free(stack);
+  } while (0);
 #endif
 
   /* Find another thread to run */
-  _st_vp_schedule();
-  /* Not going to land here */
-  return 0;
+  return _st_vp_schedule();
 }
 
 
@@ -434,7 +432,7 @@ int st_thread_join(_st_thread_t *thread, void **retvalp)
 
 void _st_thread_main(void)
 {
-  _st_thread_t *thread = _st_vp_resume();
+  _st_thread_t *thread = _ST_CURRENT_THREAD();
 
   /*
    * Cap the stack by zeroing out the saved return address register
@@ -447,10 +445,7 @@ void _st_thread_main(void)
   thread->retval = (*thread->start)(thread->arg);
 
   /* All done, time to go away */
-  st_thread_exit(thread->retval);
-
-  /* Not going to land here */
-  _exit(-1);
+  return st_thread_exit(thread->retval);
 }
 
 
@@ -652,6 +647,8 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
 {
   _st_thread_t *thread;
 #ifdef MD_WINDOWS_FIBER
+  if (stk_size <= 0)
+    stk_size = ST_DEFAULT_STACK_SIZE;
   stk_size = ((stk_size + _ST_PAGE_SIZE - 1) / _ST_PAGE_SIZE) * _ST_PAGE_SIZE;
   if (!(thread = _st_thread_new(start, arg, stk_size)))
     return NULL;
@@ -664,13 +661,14 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
 #endif
 #ifdef ST_SHARED_STACK
   if (stk_size <= 0) {
+    _st_thread_t *me = _ST_CURRENT_THREAD();
     thread = _st_thread_alloc();
     if (!thread) return NULL;
     thread->flags = _ST_FL_SHARED_STK;
 
-    stack = _st_this_thread->stack;
+    stack = me->stack;
     stack->ref_count++;
-    stack->sp = aligned_sp(&thread, _st_this_thread->bsp, -stk_size);
+    stack->sp = aligned_sp(&thread, me->bsp, -stk_size);
     goto init_thread;
   }
 #endif
@@ -760,7 +758,10 @@ init_thread:
 #ifdef MD_WINDOWS_FIBER
       _st_thread_free(thread);
 #else
-      _st_stack_free(thread->stack);
+      if (thread->flags & _ST_FL_SHARED_STK)
+        _st_thread_free(thread);
+      if (stack != NULL)
+        _st_stack_free(stack);
 #endif
       return NULL;
     }
