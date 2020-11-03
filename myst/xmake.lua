@@ -1,8 +1,3 @@
-is_termux = os.getenv"PREFIX"
-is_termux = is_termux and string.find(is_termux, "com.termux")
-
-set_project("state-thread")
-add_rules("mode.debug", "mode.release")
 includes("examples")
 target("st")
   set_kind("static")

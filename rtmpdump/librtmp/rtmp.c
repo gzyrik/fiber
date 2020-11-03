@@ -63,7 +63,7 @@ static const char *my_dhm_G = "4";
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 #endif
-static TLS_CTX RTMP_TLS_ctx;
+TLS_CTX RTMP_TLS_ctx;
 #endif
 
 #define RTMP_SIG_SIZE 1536
