@@ -118,7 +118,7 @@ typedef struct _st_mutex *  st_mutex_t;
 typedef struct _st_netfd *  st_netfd_t;
 typedef struct _st_chan *   st_chan_t;
 #ifdef ST_SWITCH_CB
-typedef void (*st_switch_cb_t)(void);
+typedef void (*st_switch_cb_t)(st_thread_t thread);
 #endif
 /** WARNING: SHOULD call before st_init */
 extern int st_cfg_eventsys(int eventsys);
@@ -140,6 +140,7 @@ extern st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb);
 #endif
 
 extern st_thread_t st_thread_self(void);
+extern const char* st_thread_stats(st_thread_t thread, const char* modes);
 /** WARNING: MUST destruction local object manually before this */
 extern void st_thread_exit(void *retval);
 extern int st_thread_join(st_thread_t thread, void **retvalp);

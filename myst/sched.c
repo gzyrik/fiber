@@ -38,7 +38,7 @@
  * This file is derived directly from Netscape Communications Corporation,
  * and consists of extensive modifications made during the year(s) 1999-2000.
  */
-
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -51,7 +51,7 @@
 #endif
 
 #ifdef ST_SHARED_STACK
-static void* aligned_sp(void* sp, void* bsp, int padding)
+static void* aligned_sp(void* sp, long padding, void* bsp)
 {
 #if defined (MD_STACK_GROWS_DOWN)
   if (sp > bsp) sp = bsp;
@@ -158,14 +158,15 @@ static void _st_vp_save_stk(_st_thread_t *thread)
 
 void _st_vp_schedule(void)
 {
-  _st_thread_t *thread;
-#ifdef ST_SHARED_STACK
-  thread = _ST_CURRENT_THREAD();
+  _st_thread_t *thread = _ST_CURRENT_THREAD();
   if (thread) {
+#ifdef ST_SHARED_STACK
     thread->stack->sp = &thread;
     thread->stklen = 0;
-  }
+#else
+    ST_SWITCH_OUT_CB(thread);
 #endif
+  }
 
   if (_ST_RUNQ.next != &_ST_RUNQ) {
     /* Pull thread off of the run queue */
@@ -182,10 +183,11 @@ void _st_vp_schedule(void)
 #ifdef ST_SHARED_STACK
   if (thread->stack->owner != thread) {
     _st_thread_t *old = thread->stack->owner;
-    if (old && old->start)
-      _st_vp_save_stk(old);
-
     thread->stack->owner = thread;
+    if (old && old->start) {
+      _st_vp_save_stk(old);
+      ST_SWITCH_OUT_CB(old);
+    }
 
     if (thread->stklen > 0) {
       char *bsp = thread->bsp;
@@ -259,10 +261,19 @@ int st_init(void)
 #ifdef ST_SHARED_STACK
   do {
     static _st_stack_t _PRIMORDIAL_STACK;
+#ifndef _WIN32
+    struct rlimit limit;
+    getrlimit (RLIMIT_STACK, &limit);
+    _PRIMORDIAL_STACK.vaddr_size = limit.rlim_max;
+    _PRIMORDIAL_STACK.stk_size = limit.rlim_cur;
+#else
+    _PRIMORDIAL_STACK.vaddr_size = 1024*1024;
+    _PRIMORDIAL_STACK.stk_size = 1024*1024;
+#endif
     thread->stack = &_PRIMORDIAL_STACK;
     thread->stack->owner = thread;
     thread->stack->ref_count = 2; /* prevent release */
-    thread->bsp = aligned_sp(&thread, &thread, _ST_STACK_PAD_SIZE);
+    thread->bsp = aligned_sp(&thread, _ST_STACK_PAD_SIZE, &thread);
   } while (0);
 #endif
   _ST_SET_CURRENT_THREAD(thread);
@@ -668,7 +679,7 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
 
     stack = me->stack;
     stack->ref_count++;
-    stack->sp = aligned_sp(&thread, me->bsp, -stk_size);
+    stack->sp = aligned_sp(&thread, -stk_size, me->bsp);
     goto init_thread;
   }
 #endif
@@ -791,7 +802,44 @@ _st_thread_t *st_thread_self(void)
   return _ST_CURRENT_THREAD();
 }
 
-
+const char* st_thread_stats(st_thread_t thread, const char* modes)
+{
+  static char ST_STATS[1024];
+  const char* states = "-RFLCSZU";
+  char flags[8];
+  int i=0;
+  flags[i++] = states[thread->state];
+  flags[i++] = thread->term ? 'J' : '-';
+  flags[i++] = (thread->flags & _ST_FL_PRIMORDIAL) ? 'P' : '-';
+  flags[i++] = (thread->flags & _ST_FL_ON_SLEEPQ) ?  'Q' : '-';
+  flags[i++] = (thread->flags & _ST_FL_INTERRUPT) ?  'I' : '-';
+  flags[i++] = (thread->flags & _ST_FL_TIMEDOUT) ?   'T' : '-';
+  flags[i++] = (thread->flags & _ST_FL_SHARED_STK) ? 'S' : '-';
+  flags[i++] = '\0';
+  i = sprintf(ST_STATS, "%s", flags);
+#ifndef MD_WINDOWS_FIBER 
+  if (thread->stack)
+    i += sprintf(ST_STATS+i, " %dK/%dK", thread->stack->stk_size/1024, thread->stack->vaddr_size/1024);
+#endif
+#ifdef ST_SHARED_STACK
+  if (thread->state != _ST_ST_RUNNING && thread->prvstk_size > 0)
+    i += sprintf(ST_STATS+i, "|%d/%dK", thread->stklen,thread->prvstk_size/1024);
+#endif
+  while (modes && *modes) {
+    switch(*modes) {
+    case 'a':
+      i += sprintf(ST_STATS+i, " %p(%p)", thread->start, thread->arg);
+      break;
+#ifdef ST_SHARED_STACK
+    case 'b':
+      i += sprintf(ST_STATS+i, " %p", thread->bsp);
+      break;
+#endif
+    }
+    ++modes;
+  }
+  return ST_STATS;
+}
 #ifdef DEBUG
 /* ARGSUSED */
 void _st_show_thread_stack(_st_thread_t *thread, const char *messg)

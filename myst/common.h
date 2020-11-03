@@ -405,13 +405,13 @@ void _st_iterate_threads(void);
     if (_st_this_vp.switch_out_cb != NULL &&	\
         _thread != _st_this_vp.idle_thread &&	\
         _thread->state != _ST_ST_ZOMBIE) {	\
-      _st_this_vp.switch_out_cb();		\
+      _st_this_vp.switch_out_cb(_thread);		\
     }
 #define ST_SWITCH_IN_CB(_thread)		\
     if (_st_this_vp.switch_in_cb != NULL &&	\
 	_thread != _st_this_vp.idle_thread &&	\
 	_thread->state != _ST_ST_ZOMBIE) {	\
-      _st_this_vp.switch_in_cb();		\
+      _st_this_vp.switch_in_cb(_thread);		\
     }
 #else
 #define ST_SWITCH_OUT_CB(_thread)
@@ -424,7 +424,6 @@ void _st_iterate_threads(void);
  */
 #define _ST_SWITCH_CONTEXT(_thread)       \
     ST_BEGIN_MACRO                        \
-    ST_SWITCH_OUT_CB(_thread);            \
     if (!MD_SETJMP((_thread)->context))   \
       _st_vp_schedule();                  \
     _thread = _ST_CURRENT_THREAD();       \
