@@ -2,6 +2,7 @@ all: RTMP MYST rtmpsrv
 .PHONY : all RTMP MYST clean t0 t1
 
 OS=$(shell uname)
+HTTPLIB_DIR=../httplib
 ifeq ($(OS),Linux)
 MYST_DIR=../myst/Linux_$(shell uname -r)_OPT
 MYST:
@@ -16,7 +17,7 @@ RTMP_DIR=../rtmpdump
 RTMP:
 	@cd $(RTMP_DIR) && $(MAKE)
 
-CXXFLAGS += -O0 -g -std=c++11 -I$(MYST_DIR) -I$(RTMP_DIR) -lz -ldl
+CXXFLAGS += -O0 -g -std=c++11 -I$(MYST_DIR) -I$(RTMP_DIR) -I$(HTTPLIB_DIR) -lz -ldl
 rtmpsrv: rtmpsrv.cpp rtmphub.cpp $(MYST_DIR)/libst.a $(RTMP_DIR)/librtmp/librtmp.a rtmpsrv.h rtmphub.h
 	$(CXX) -o $@ $(filter-out %.h,$^) $(CXXFLAGS)
 

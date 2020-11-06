@@ -1,0 +1,8 @@
+target("librtmp")
+  set_kind("static")
+  add_files("rtmp.c", "log.c", "amf.c", "hashswf.c", "parseurl.c", "h264aac.c", "rtmpread.c")
+  add_defines("USE_OPENSSL")
+  add_includedirs("..", {interface=true})
+  on_load(function (target)
+      target:add(find_packages("openssl"))
+  end)
