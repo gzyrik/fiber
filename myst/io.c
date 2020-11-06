@@ -987,7 +987,7 @@ const char* st_inetaddr(const struct sockaddr *sa, int addrlen, int *domain, int
     const struct sockaddr_in6* ipv6 = (const struct sockaddr_in6*)sa;
     if (domain) *domain = ipv6->sin6_family;
     if (port) *port = ntohs(ipv6->sin6_port);
-    return inet_ntop(ipv6->sin6_family, &ipv6->sin6_addr, str, INET6_ADDRSTRLEN);
+    return inet_ntop(ipv6->sin6_family, (void*)&ipv6->sin6_addr, str, INET6_ADDRSTRLEN);
   }
   return NULL;
 }

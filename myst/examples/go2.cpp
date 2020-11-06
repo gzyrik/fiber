@@ -15,5 +15,5 @@ int main(int argc, char *argv[])
   int v;
   while (ch >> v) std::cout << v;
   ch = nullptr;
-  return st_thread_exit(NULL);
+  return st_thread_exit(NULL), 0;
 }

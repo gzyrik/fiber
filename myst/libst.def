@@ -55,6 +55,10 @@ st_chan_alive
 st_chan_release
 st_chan_push
 st_chan_pop
+st_set_switch_out_cb
+st_set_switch_in_cb
+st_thread_name
+st_thread_stats
 _st_errno
 closesocket
 bind

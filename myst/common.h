@@ -179,6 +179,7 @@ typedef struct _st_cond {
 
 
 struct _st_thread {
+  const char* name;
   int state;                  /* Thread's state */
   int flags;                  /* Thread's flags */
 
@@ -403,15 +404,13 @@ void _st_iterate_threads(void);
 #ifdef ST_SWITCH_CB
 #define ST_SWITCH_OUT_CB(_thread)		\
     if (_st_this_vp.switch_out_cb != NULL &&	\
-        _thread != _st_this_vp.idle_thread &&	\
-        _thread->state != _ST_ST_ZOMBIE) {	\
-      _st_this_vp.switch_out_cb();		\
+        _thread != _st_this_vp.idle_thread) {	\
+      _st_this_vp.switch_out_cb(_thread);		\
     }
 #define ST_SWITCH_IN_CB(_thread)		\
     if (_st_this_vp.switch_in_cb != NULL &&	\
-	_thread != _st_this_vp.idle_thread &&	\
-	_thread->state != _ST_ST_ZOMBIE) {	\
-      _st_this_vp.switch_in_cb();		\
+	_thread != _st_this_vp.idle_thread ) {	\
+      _st_this_vp.switch_in_cb(_thread);		\
     }
 #else
 #define ST_SWITCH_OUT_CB(_thread)
@@ -424,12 +423,7 @@ void _st_iterate_threads(void);
  */
 #define _ST_SWITCH_CONTEXT(_thread)       \
     ST_BEGIN_MACRO                        \
-    ST_SWITCH_OUT_CB(_thread);            \
-    if (!MD_SETJMP((_thread)->context))   \
-      _st_vp_schedule();                  \
-    _thread = _st_vp_resume();            \
-    ST_DEBUG_ITERATE_THREADS();           \
-    ST_SWITCH_IN_CB(_thread);             \
+    _st_vp_schedule(_thread);             \
     ST_END_MACRO
 
 /*
@@ -476,7 +470,7 @@ extern int (*epoll_wait_f)(int epfd, struct epoll_event *events, int maxevents, 
  * Forward declarations
  */
 
-void _st_vp_schedule(void);
+void _st_vp_schedule(_st_thread_t *thread);
 void _st_vp_check_clock(void);
 void *_st_idle_thread_start(void *arg);
 void _st_thread_main(void);
@@ -486,7 +480,6 @@ void _st_del_sleep_q(_st_thread_t *thread);
 #define ST_SIZEOF_KEYS_THREAD (sizeof(_st_thread_t) + (ST_KEYS_MAX * sizeof(void *)))
 void _st_thread_free(_st_thread_t *thread);
 _st_thread_t* _st_thread_alloc();
-_st_thread_t* _st_vp_resume(void);
 #ifdef MD_WINDOWS_FIBER
 _st_thread_t *_st_thread_new(void *(*start)(void *arg), void *arg, int stk_size);
 #else

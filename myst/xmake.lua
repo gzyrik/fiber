@@ -1,3 +1,6 @@
+is_termux = os.getenv"PREFIX"
+is_termux = is_termux and string.find(is_termux, "com.termux")
+
 includes("examples")
 target("st")
   set_kind("static")
