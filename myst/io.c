@@ -56,6 +56,7 @@
 static _st_netfd_t *_st_netfd_freelist = NULL;
 /* Maximum number of file descriptors that the process can open */
 static int _st_osfd_limit = -1;
+_st_stack_t _st_primordial_stk;
 
 static void _st_netfd_free_aux_data(_st_netfd_t *fd);
 
@@ -135,10 +136,17 @@ int _st_io_init(void)
   rlim.rlim_cur = rlim.rlim_max;
   if (setrlimit(RLIMIT_NOFILE, &rlim) >= 0)
     fdlim = (int)rlim.rlim_max;
+
+  getrlimit (RLIMIT_STACK, &rlim);
+  _st_primordial_stk.vaddr_size = rlim.rlim_max;
+  _st_primordial_stk.stk_size = rlim.rlim_cur;
+
 #else
   WSADATA wsd;
   WSAStartup(MAKEWORD(2, 2), &wsd);
   fdlim = 4096;
+  _st_primordial_stk.vaddr_size = 1024*1024;
+  _st_primordial_stk.stk_size = 1024*1024;
 #endif
 
   _st_osfd_limit = fdlim;

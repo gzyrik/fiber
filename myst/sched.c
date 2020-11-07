@@ -51,6 +51,7 @@
 #endif
 
 #ifdef ST_SHARED_STACK
+extern _st_stack_t _st_primordial_stk;
 static void* offset_sp(void* sp, long padding)
 {
 #if defined (MD_STACK_GROWS_DOWN)
@@ -59,14 +60,13 @@ static void* offset_sp(void* sp, long padding)
   return (char*)sp + padding;
 #endif
 }
-static void* aligned_sp(void* sp, void* bsp)
+static void* aligned_sp(void* sp, long padding)
 {
+  sp = offset_sp(sp, padding);
 #if defined (MD_STACK_GROWS_DOWN)
-  if (sp > bsp) sp = bsp;
   if ((intptr_t)sp & 0x3f)
     sp = (char*)sp - ((intptr_t)sp & 0x3f);
 #elif defined (MD_STACK_GROWS_UP)
-  if (sp < bsp) sp = bsp;
   if ((unsigned long)sp & 0x3f)
     sp = (char*)sp + (0x40 - ((unsigned long)sp & 0x3f));
 #else
@@ -166,11 +166,24 @@ static void _st_vp_save_stk(_st_thread_t *thread)
     ST_SWITCH_OUT_CB(thread);
   }
 }
+static void _st_vp_restore_stk(_st_thread_t* me)
+{
+  me = _ST_CURRENT_THREAD();
+  if (me->stklen > 0) {
+    char *bsp = me->bsp;
+#if defined (MD_STACK_GROWS_DOWN)
+    bsp -= me->stklen;
 #endif
-
-void _st_vp_schedule(_st_thread_t* me)
+    memcpy(bsp, me->prvstk, me->stklen);
+  }
+}
+#endif
+static _st_thread_t* _st_vp_switch_out(_st_thread_t* me, _st_thread_t **next)
 {
   _st_thread_t *thread;
+#ifdef ST_SHARED_STACK
+  me->stack->sp = next;
+#endif
   ST_ASSERT(me->state != _ST_ST_RUNNING);
   if (_ST_RUNQ.next != &_ST_RUNQ) {
     /* Pull thread off of the run queue */
@@ -182,24 +195,32 @@ void _st_vp_schedule(_st_thread_t* me)
   }
   ST_ASSERT(thread->state == _ST_ST_RUNNABLE);
   thread->state = _ST_ST_RUNNING;
-  if (me == thread) return;
+  if (me == thread) return me;
   else if (me->state == _ST_ST_ZOMBIE && !me->term) { /* dead */
     ST_SWITCH_OUT_CB(me);
     me = NULL;
   }
-#ifdef ST_SHARED_STACK
-  else {
-    me->stack->sp = offset_sp(&thread, -sizeof(thread));
-    me->stklen = 0;
-  }
+#ifndef ST_SHARED_STACK
+  else ST_SWITCH_OUT_CB(me);
+#else
   if (thread->stack->owner != thread) {
     _st_thread_t *owner = thread->stack->owner;
     thread->stack->owner = thread;
     if (owner) _st_vp_save_stk(owner);
   }
-#else
-  else ST_SWITCH_OUT_CB(me);
 #endif
+  *next = thread;
+  return me;
+}
+
+#if defined(_WIN32) && defined(_M_IX86) && defined(ST_SHARED_STACK) && defined(_MSC_VER)
+#pragma optimize("", off) /* vc will optimize the code wrong */
+#endif
+void _st_vp_schedule(_st_thread_t* me)
+{
+  _st_thread_t *thread = NULL;
+  me = _st_vp_switch_out(me, &thread);
+  if (!thread) return;
 
   if (!me || !MD_SETJMP(me->context)) {
     /* Resume the thread */
@@ -213,21 +234,10 @@ void _st_vp_schedule(_st_thread_t* me)
 
   /* Resume the current thread */
 #ifdef ST_SHARED_STACK
-  me = _ST_CURRENT_THREAD();
-  if (me->stklen > 0) {
-    int len = me->stklen;
-    char *src = me->prvstk;
-    char *bsp = me->bsp;
-#if defined (MD_STACK_GROWS_DOWN)
-    bsp -= me->stklen;
+  _st_vp_restore_stk(me);
 #endif
-    //memcpy(bsp, src, len);
-    for (;len>0; --len) *bsp++ = *src++;
-  }
-#endif
-  ST_DEBUG_ITERATE_THREADS();
-  ST_SWITCH_IN_CB(me);
 }
+#pragma optimize( "", on )
 
 /*
  * Initialize this Virtual Processor
@@ -266,6 +276,10 @@ int st_init(void)
   SYSTEM_INFO si;
   GetSystemInfo(&si);
   _st_this_vp.pagesize = si.dwPageSize;
+#ifdef ST_SHARED_STACK
+  _st_primordial_stk.vaddr_size = 
+    (char*)si.lpMaximumApplicationAddress - (char*)si.lpMinimumApplicationAddress;
+#endif
 #else
   _st_this_vp.pagesize = getpagesize();
 #endif
@@ -282,22 +296,10 @@ int st_init(void)
   thread->state = _ST_ST_RUNNING;
   thread->flags = _ST_FL_PRIMORDIAL | _ST_FL_SHARED_STK;
 #ifdef ST_SHARED_STACK
-  do {
-    static _st_stack_t _PRIMORDIAL_STACK;
-#ifndef _WIN32
-    struct rlimit limit;
-    getrlimit (RLIMIT_STACK, &limit);
-    _PRIMORDIAL_STACK.vaddr_size = limit.rlim_max;
-    _PRIMORDIAL_STACK.stk_size = limit.rlim_cur;
-#else
-    _PRIMORDIAL_STACK.vaddr_size = 1024*1024;
-    _PRIMORDIAL_STACK.stk_size = 1024*1024;
-#endif
-    thread->stack = &_PRIMORDIAL_STACK;
-    thread->stack->owner = thread;
-    thread->stack->ref_count = 2; /* prevent release */
-    thread->bsp = offset_sp(&thread, -sizeof(thread));
-  } while (0);
+  thread->stack = &_st_primordial_stk;
+  thread->stack->owner = thread;
+  thread->stack->ref_count = 2; /* prevent release */
+  thread->bsp = offset_sp(&thread, -sizeof(thread)*4);
 #endif
   _ST_SET_CURRENT_THREAD(thread);
   _st_active_count++;
@@ -705,7 +707,7 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
 
     stack = me->stack;
     stack->ref_count++;
-    stack->sp = aligned_sp(offset_sp(&thread, -stk_size), me->bsp);
+    stack->sp = aligned_sp(&thread, -stk_size);
     goto init_thread;
   }
 #endif
@@ -852,7 +854,7 @@ char* st_thread_stats(st_thread_t thread, const char* modes)
 {
   static char ST_STATS[1024];
   const char* states = "*RFLCSZU";
-  char flags[8];
+  char flags[16];
   int i=0;
   flags[i++] = (thread->state != _ST_ST_ZOMBIE || thread->term) ? states[thread->state] : '-';
   flags[i++] = thread->term ? 'J' : '-';
@@ -863,6 +865,7 @@ char* st_thread_stats(st_thread_t thread, const char* modes)
   flags[i++] = (thread->flags & _ST_FL_SHARED_STK) ? 'S' : '-';
   flags[i++] = '\0';
   i = sprintf(ST_STATS, "%s", flags);
+
 #ifndef MD_WINDOWS_FIBER 
   if (thread->stack) {
     ST_STATS[i++] = ' ';
@@ -872,7 +875,6 @@ char* st_thread_stats(st_thread_t thread, const char* modes)
     i += fbytes(ST_STATS+i, thread->stack->stk_size);
     ST_STATS[i++] = '/';
     i += fbytes(ST_STATS+i, thread->stack->vaddr_size);
-#endif
 #ifdef ST_SHARED_STACK
     i += sprintf(ST_STATS+i, " %d", thread->stack->ref_count);
     if (thread->state != _ST_ST_RUNNING && thread->prvstk_size > 0) {
@@ -881,6 +883,7 @@ char* st_thread_stats(st_thread_t thread, const char* modes)
       ST_STATS[i++] = '/';
       i += fbytes(ST_STATS+i, thread->prvstk_size);
     }
+#endif
   }
 #endif
 

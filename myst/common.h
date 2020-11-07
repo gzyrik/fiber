@@ -424,6 +424,8 @@ void _st_iterate_threads(void);
 #define _ST_SWITCH_CONTEXT(_thread)       \
     ST_BEGIN_MACRO                        \
     _st_vp_schedule(_thread);             \
+    ST_DEBUG_ITERATE_THREADS();           \
+    ST_SWITCH_IN_CB(_thread);             \
     ST_END_MACRO
 
 /*
