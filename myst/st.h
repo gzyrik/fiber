@@ -140,7 +140,8 @@ extern st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb);
 #endif
 
 extern st_thread_t st_thread_self(void);
-extern const char* st_thread_stats(st_thread_t thread, const char* modes);
+const char* st_thread_name(const char *name, st_thread_t thread);
+extern char* st_thread_stats(st_thread_t thread, const char* modes);
 /** WARNING: MUST destruction local object manually before this */
 extern void st_thread_exit(void *retval);
 extern int st_thread_join(st_thread_t thread, void **retvalp);
@@ -251,7 +252,7 @@ extern void _st_iterate_threads(void);
 /* 模仿 golang 实现相似的 go */
 class st_go {
   mutable int stack_size_;
-  const char* file_; const int lineno_;
+  mutable const char* name_;
   typedef std::function<void()> detached_t;
   typedef std::function<void*()> joinable_t;
   static void* __st_detached_functor(void* p) {
@@ -267,14 +268,15 @@ class st_go {
     return ret;
   }
 public:
-  st_go(const char* file, int lineno) : stack_size_(ST_DEFAULT_STACK_SIZE),
-  file_(file),lineno_(lineno)
-  { (void)file_, (void)lineno_; }
+  st_go(const char* name=nullptr) : stack_size_(ST_DEFAULT_STACK_SIZE), name_(name) {}
   const st_go& operator,(int stack_size) const
   { stack_size_ = stack_size; return *this; }
+  const st_go& operator,(const char* name) const
+  { name_ = name; return *this; }
   template <typename T> const st_go& operator,(T &&f) const {
     auto* p = new detached_t(std::move(f));
-    st_thread_create(__st_detached_functor, p, false, stack_size_);
+    auto t = st_thread_create(__st_detached_functor, p, false, stack_size_);
+    if (name_) st_thread_name(name_, t);
     return *this;
   }
   template <typename T> static st_thread_t create(T &&f, int stack_size = ST_DEFAULT_STACK_SIZE) {
@@ -282,7 +284,7 @@ public:
     return st_thread_create(__st_joinable_functor, p, true, stack_size);
   }
 };
-#define ST_GO st_go(__FILE__, __LINE__),
+#define ST_GO st_go(__FUNCTION__),
 #if !defined(go) && !defined(ST_NOT_DEFINE_GO)
 #define go ST_GO
 #endif

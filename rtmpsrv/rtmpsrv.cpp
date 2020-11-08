@@ -7,7 +7,7 @@
 #include <unordered_set>
 #define CPPHTTPLIB_ST_SUPPORT //必须开启 HOOK RTMP 内部的 sock 操作
 //#define CPPHTTPLIB_ZLIB_SUPPORT
-#include "httplib.h"
+#include <httplib.h>
 #include "rtmpsrv.h"
 static int _rtmpPort = 1935; //RTMP 服务端口
 static st_thread_t _rtmpThread = nullptr; //RTMP 服务侦听线程

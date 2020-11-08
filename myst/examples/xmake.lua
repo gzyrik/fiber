@@ -1,6 +1,10 @@
 set_languages("cxx11")
 set_kind("binary")
 add_deps("st")
+if is_plat("windows") then
+add_cxxflags("/Zc:__cplusplus",{force=true})
+add_syslinks("ws2_32", "winmm")
+end
 
 if has_config("httplib") then
 target "websrv"

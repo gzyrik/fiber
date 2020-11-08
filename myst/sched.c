@@ -51,21 +51,28 @@
 #endif
 
 #ifdef ST_SHARED_STACK
-static void* aligned_sp(void* sp, long padding, void* bsp)
+extern _st_stack_t _st_primordial_stk;
+static void* offset_sp(void* sp, long padding)
 {
 #if defined (MD_STACK_GROWS_DOWN)
-  if (sp > bsp) sp = bsp;
+  return (char*)sp - padding;
+#else
+  return (char*)sp + padding;
+#endif
+}
+static void* aligned_sp(void* sp, long padding)
+{
+  sp = offset_sp(sp, padding);
+#if defined (MD_STACK_GROWS_DOWN)
   if ((intptr_t)sp & 0x3f)
     sp = (char*)sp - ((intptr_t)sp & 0x3f);
-  return  (char*)sp - padding;
 #elif defined (MD_STACK_GROWS_UP)
-  if (sp < bsp) sp = bsp;
   if ((unsigned long)sp & 0x3f)
     sp = (char*)sp + (0x40 - ((unsigned long)sp & 0x3f));
-  return (char*)sp + padding;
 #else
   #error Unknown OS
 #endif
+  return sp;
 }
 #endif
 
@@ -133,6 +140,7 @@ static void _st_vp_save_stk(_st_thread_t *thread)
 {
   char *bsp = thread->bsp;
   _st_stack_t *stack = thread->stack;
+  ST_ASSERT(thread->state != _ST_ST_ZOMBIE || thread->term);
   thread->stklen = 0;
 #if defined (MD_STACK_GROWS_DOWN)
   if ((char*)stack->sp < bsp) {
@@ -147,27 +155,36 @@ static void _st_vp_save_stk(_st_thread_t *thread)
 #endif
   if (thread->stklen > 0) {
     if (thread->stklen > thread->prvstk_size) {
+      thread->prvstk_size = thread->stklen;
+      /*
       thread->prvstk_size = ((thread->stklen + _ST_PAGE_SIZE - 1)
         / _ST_PAGE_SIZE) * _ST_PAGE_SIZE;
+      */
       thread->prvstk = realloc(thread->prvstk, thread->prvstk_size);
     }
     memcpy(thread->prvstk, bsp, thread->stklen);
+    ST_SWITCH_OUT_CB(thread);
+  }
+}
+static void _st_vp_restore_stk(_st_thread_t* me)
+{
+  me = _ST_CURRENT_THREAD();
+  if (me->stklen > 0) {
+    char *bsp = me->bsp;
+#if defined (MD_STACK_GROWS_DOWN)
+    bsp -= me->stklen;
+#endif
+    memcpy(bsp, me->prvstk, me->stklen);
   }
 }
 #endif
-
-void _st_vp_schedule(void)
+static _st_thread_t* _st_vp_switch_out(_st_thread_t* me, _st_thread_t **next)
 {
-  _st_thread_t *thread = _ST_CURRENT_THREAD();
-  if (thread) {
+  _st_thread_t *thread;
 #ifdef ST_SHARED_STACK
-    thread->stack->sp = &thread;
-    thread->stklen = 0;
-#else
-    ST_SWITCH_OUT_CB(thread);
+  me->stack->sp = next;
 #endif
-  }
-
+  ST_ASSERT(me->state != _ST_ST_RUNNING);
   if (_ST_RUNQ.next != &_ST_RUNQ) {
     /* Pull thread off of the run queue */
     thread = _ST_THREAD_PTR(_ST_RUNQ.next);
@@ -178,34 +195,49 @@ void _st_vp_schedule(void)
   }
   ST_ASSERT(thread->state == _ST_ST_RUNNABLE);
   thread->state = _ST_ST_RUNNING;
-  _ST_SET_CURRENT_THREAD(thread);
-
-#ifdef ST_SHARED_STACK
+  if (me == thread) return me;
+  else if (me->state == _ST_ST_ZOMBIE && !me->term) { /* dead */
+    ST_SWITCH_OUT_CB(me);
+    me = NULL;
+  }
+#ifndef ST_SHARED_STACK
+  else ST_SWITCH_OUT_CB(me);
+#else
   if (thread->stack->owner != thread) {
-    _st_thread_t *old = thread->stack->owner;
+    _st_thread_t *owner = thread->stack->owner;
     thread->stack->owner = thread;
-    if (old && old->start) {
-      _st_vp_save_stk(old);
-      ST_SWITCH_OUT_CB(old);
-    }
-
-    if (thread->stklen > 0) {
-      char *bsp = thread->bsp;
-#if defined (MD_STACK_GROWS_DOWN)
-      bsp -= thread->stklen;
-#endif
-      memcpy(bsp, thread->prvstk, thread->stklen);
-    }
+    if (owner) _st_vp_save_stk(owner);
   }
 #endif
+  *next = thread;
+  return me;
+}
+
+#if defined(_WIN32) && defined(_M_IX86) && defined(ST_SHARED_STACK) && defined(_MSC_VER)
+#pragma optimize("", off) /* vc will optimize the code wrong */
+#endif
+void _st_vp_schedule(_st_thread_t* me)
+{
+  _st_thread_t *thread = NULL;
+  me = _st_vp_switch_out(me, &thread);
+  if (!thread) return;
+
+  if (!me || !MD_SETJMP(me->context)) {
+    /* Resume the thread */
+    _ST_RESTORE_CONTEXT(thread);
+
+    /* Not going to land here */
+#ifndef MD_WINDOWS_FIBER
+    _exit(-1);
+#endif
+  }
 
   /* Resume the current thread */
-  _ST_RESTORE_CONTEXT();
-#ifndef MD_WINDOWS_FIBER
-  /* Not going to land here */
-  _exit(-1);
+#ifdef ST_SHARED_STACK
+  _st_vp_restore_stk(me);
 #endif
 }
+#pragma optimize( "", on )
 
 /*
  * Initialize this Virtual Processor
@@ -244,6 +276,10 @@ int st_init(void)
   SYSTEM_INFO si;
   GetSystemInfo(&si);
   _st_this_vp.pagesize = si.dwPageSize;
+#ifdef ST_SHARED_STACK
+  _st_primordial_stk.vaddr_size = 
+    (char*)si.lpMaximumApplicationAddress - (char*)si.lpMinimumApplicationAddress;
+#endif
 #else
   _st_this_vp.pagesize = getpagesize();
 #endif
@@ -255,26 +291,15 @@ int st_init(void)
   thread = _st_thread_alloc();
   if (!thread)
     return -1;
+  thread->name = "INIT";
   thread->start = (void*)st_init;
   thread->state = _ST_ST_RUNNING;
   thread->flags = _ST_FL_PRIMORDIAL | _ST_FL_SHARED_STK;
 #ifdef ST_SHARED_STACK
-  do {
-    static _st_stack_t _PRIMORDIAL_STACK;
-#ifndef _WIN32
-    struct rlimit limit;
-    getrlimit (RLIMIT_STACK, &limit);
-    _PRIMORDIAL_STACK.vaddr_size = limit.rlim_max;
-    _PRIMORDIAL_STACK.stk_size = limit.rlim_cur;
-#else
-    _PRIMORDIAL_STACK.vaddr_size = 1024*1024;
-    _PRIMORDIAL_STACK.stk_size = 1024*1024;
-#endif
-    thread->stack = &_PRIMORDIAL_STACK;
-    thread->stack->owner = thread;
-    thread->stack->ref_count = 2; /* prevent release */
-    thread->bsp = aligned_sp(&thread, _ST_STACK_PAD_SIZE, &thread);
-  } while (0);
+  thread->stack = &_st_primordial_stk;
+  thread->stack->owner = thread;
+  thread->stack->ref_count = 2; /* prevent release */
+  thread->bsp = offset_sp(&thread, -sizeof(thread)*4);
 #endif
   _ST_SET_CURRENT_THREAD(thread);
   _st_active_count++;
@@ -294,6 +319,7 @@ int st_init(void)
     free(thread);
     return -1;
   }
+  _st_this_vp.idle_thread->name = "IDLE";
   _st_this_vp.idle_thread->flags = _ST_FL_IDLE_THREAD;
   _st_active_count--;
   _ST_DEL_RUNQ(_st_this_vp.idle_thread);
@@ -336,7 +362,9 @@ void *_st_idle_thread_start(void *arg)
     me->state = _ST_ST_RUNNABLE;
     _ST_SWITCH_CONTEXT(me);
   }
-
+#ifdef DEBUG
+  fprintf(stderr, "\n** ST EXIT");
+#endif
   /* No more threads */
   _exit(0);
 
@@ -352,9 +380,9 @@ void st_thread_exit(void *retval)
   thread->retval = retval;
   _st_thread_cleanup(thread);
   _st_active_count--;
+  thread->state = _ST_ST_ZOMBIE;
   if (thread->term) {
     /* Put thread on the zombie queue */
-    thread->state = _ST_ST_ZOMBIE;
     _ST_ADD_ZOMBIEQ(thread);
 
     /* Notify on our termination condition variable */
@@ -367,17 +395,17 @@ void st_thread_exit(void *retval)
     st_cond_destroy(thread->term);
     thread->term = NULL;
   }
-  thread->start = NULL;
+
 #ifdef DEBUG
   _ST_DEL_THREADQ(thread);
 #endif
-  _ST_SET_CURRENT_THREAD(NULL);
+
 #ifdef MD_WINDOWS_FIBER
   _st_thread_free(thread);
 #else
   /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
 #ifndef NVALGRIND
-  if (!(thread->flags & _ST_FL_PRIMORDIAL)) {
+  if (!(thread->flags & _ST_FL_SHARED_STK)) {
     VALGRIND_STACK_DEREGISTER(thread->stack->valgrind_stack_id);
   }
 #endif
@@ -397,7 +425,7 @@ void st_thread_exit(void *retval)
 #endif
 
   /* Find another thread to run */
-  return _st_vp_schedule();
+  _ST_SWITCH_CONTEXT(thread);
 }
 
 
@@ -451,12 +479,12 @@ void _st_thread_main(void)
    * to stop unwinding the stack. It's a no-op on most platforms.
    */
   MD_CAP_STACK(&thread);
-
+  ST_SWITCH_IN_CB(thread);
   /* Run thread main */
   thread->retval = (*thread->start)(thread->arg);
 
   /* All done, time to go away */
-  return st_thread_exit(thread->retval);
+  st_thread_exit(thread->retval);
 }
 
 
@@ -679,7 +707,7 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
 
     stack = me->stack;
     stack->ref_count++;
-    stack->sp = aligned_sp(&thread, -stk_size, me->bsp);
+    stack->sp = aligned_sp(&thread, -stk_size);
     goto init_thread;
   }
 #endif
@@ -788,7 +816,7 @@ init_thread:
 
   /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
 #ifndef NVALGRIND
-  if (!(thread->flags & _ST_FL_PRIMORDIAL)) {
+  if (!(thread->flags & _ST_FL_SHARED_STK)) {
     thread->stack->valgrind_stack_id = VALGRIND_STACK_REGISTER(thread->stack->stk_top, thread->stack->stk_bottom);
   }
 #endif
@@ -801,14 +829,34 @@ _st_thread_t *st_thread_self(void)
 {
   return _ST_CURRENT_THREAD();
 }
-
-const char* st_thread_stats(st_thread_t thread, const char* modes)
+const char* st_thread_name(const char *name, st_thread_t thread)
+{
+  const char *old;
+  if (!thread) thread = _ST_CURRENT_THREAD();
+  old = thread->name;
+  thread->name = name;
+  return old;
+}
+static int fbytes(char* str, unsigned size)
+{
+  int i;
+  if (size >= 1024*1024*1024)
+    i = sprintf(str, "%dG", size/1024/1024/1024);
+  else if (size >= 1024*1024)
+    i = sprintf(str, "%dM", size/1024/1024);
+  else if (size >= 1024)
+    i = sprintf(str, "%dK", size/1024);
+  else
+    i = sprintf(str, "%d", size);
+  return i;
+}
+char* st_thread_stats(st_thread_t thread, const char* modes)
 {
   static char ST_STATS[1024];
-  const char* states = "-RFLCSZU";
-  char flags[8];
+  const char* states = "*RFLCSZU";
+  char flags[16];
   int i=0;
-  flags[i++] = states[thread->state];
+  flags[i++] = (thread->state != _ST_ST_ZOMBIE || thread->term) ? states[thread->state] : '-';
   flags[i++] = thread->term ? 'J' : '-';
   flags[i++] = (thread->flags & _ST_FL_PRIMORDIAL) ? 'P' : '-';
   flags[i++] = (thread->flags & _ST_FL_ON_SLEEPQ) ?  'Q' : '-';
@@ -817,14 +865,28 @@ const char* st_thread_stats(st_thread_t thread, const char* modes)
   flags[i++] = (thread->flags & _ST_FL_SHARED_STK) ? 'S' : '-';
   flags[i++] = '\0';
   i = sprintf(ST_STATS, "%s", flags);
+
 #ifndef MD_WINDOWS_FIBER 
-  if (thread->stack)
-    i += sprintf(ST_STATS+i, " %dK/%dK", thread->stack->stk_size/1024, thread->stack->vaddr_size/1024);
+  if (thread->stack) {
+    ST_STATS[i++] = ' ';
+#ifndef NVALGRIND
+    i += sprintf(ST_STATS+i, "%lu:", thread->stack->valgrind_stack_id);
 #endif
+    i += fbytes(ST_STATS+i, thread->stack->stk_size);
+    ST_STATS[i++] = '/';
+    i += fbytes(ST_STATS+i, thread->stack->vaddr_size);
 #ifdef ST_SHARED_STACK
-  if (thread->state != _ST_ST_RUNNING && thread->prvstk_size > 0)
-    i += sprintf(ST_STATS+i, "|%d/%dK", thread->stklen,thread->prvstk_size/1024);
+    i += sprintf(ST_STATS+i, " %d", thread->stack->ref_count);
+    if (thread->state != _ST_ST_RUNNING && thread->prvstk_size > 0) {
+      ST_STATS[i++] = '|';
+      i += fbytes(ST_STATS+i, thread->stklen);
+      ST_STATS[i++] = '/';
+      i += fbytes(ST_STATS+i, thread->prvstk_size);
+    }
 #endif
+  }
+#endif
+
   while (modes && *modes) {
     switch(*modes) {
     case 'a':
@@ -835,6 +897,10 @@ const char* st_thread_stats(st_thread_t thread, const char* modes)
       i += sprintf(ST_STATS+i, " %p", thread->bsp);
       break;
 #endif
+    case 'n':
+      if (thread->name)
+        i += sprintf(ST_STATS+i," %s", thread->name);
+      break;
     }
     ++modes;
   }

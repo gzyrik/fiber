@@ -179,6 +179,7 @@ typedef struct _st_cond {
 
 
 struct _st_thread {
+  const char* name;
   int state;                  /* Thread's state */
   int flags;                  /* Thread's flags */
 
@@ -403,14 +404,12 @@ void _st_iterate_threads(void);
 #ifdef ST_SWITCH_CB
 #define ST_SWITCH_OUT_CB(_thread)		\
     if (_st_this_vp.switch_out_cb != NULL &&	\
-        _thread != _st_this_vp.idle_thread &&	\
-        _thread->state != _ST_ST_ZOMBIE) {	\
+        _thread != _st_this_vp.idle_thread) {	\
       _st_this_vp.switch_out_cb(_thread);		\
     }
 #define ST_SWITCH_IN_CB(_thread)		\
     if (_st_this_vp.switch_in_cb != NULL &&	\
-	_thread != _st_this_vp.idle_thread &&	\
-	_thread->state != _ST_ST_ZOMBIE) {	\
+	_thread != _st_this_vp.idle_thread ) {	\
       _st_this_vp.switch_in_cb(_thread);		\
     }
 #else
@@ -424,9 +423,7 @@ void _st_iterate_threads(void);
  */
 #define _ST_SWITCH_CONTEXT(_thread)       \
     ST_BEGIN_MACRO                        \
-    if (!MD_SETJMP((_thread)->context))   \
-      _st_vp_schedule();                  \
-    _thread = _ST_CURRENT_THREAD();       \
+    _st_vp_schedule(_thread);             \
     ST_DEBUG_ITERATE_THREADS();           \
     ST_SWITCH_IN_CB(_thread);             \
     ST_END_MACRO
@@ -435,9 +432,10 @@ void _st_iterate_threads(void);
  * Restore a thread context that was saved by _ST_SWITCH_CONTEXT or
  * initialized by _ST_INIT_CONTEXT
  */
-#define _ST_RESTORE_CONTEXT()          \
+#define _ST_RESTORE_CONTEXT(_thread)   \
     ST_BEGIN_MACRO                     \
-    MD_LONGJMP(_ST_CURRENT_THREAD()->context, 1); \
+    _ST_SET_CURRENT_THREAD(_thread);   \
+    MD_LONGJMP((_thread)->context, 1); \
     ST_END_MACRO
 
 /*
@@ -474,7 +472,7 @@ extern int (*epoll_wait_f)(int epfd, struct epoll_event *events, int maxevents, 
  * Forward declarations
  */
 
-void _st_vp_schedule(void);
+void _st_vp_schedule(_st_thread_t *thread);
 void _st_vp_check_clock(void);
 void *_st_idle_thread_start(void *arg);
 void _st_thread_main(void);
