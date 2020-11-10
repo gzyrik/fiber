@@ -236,6 +236,7 @@ extern int st_sendmsg(st_netfd_t fd, const struct msghdr *msg, int flags,
 		      st_utime_t timeout);
 
 #ifdef DEBUG
+extern int _st_iterate_threads_flag;
 extern void _st_show_thread_stack(st_thread_t thread, const char *messg);
 extern void _st_iterate_threads(void);
 #endif

@@ -163,28 +163,70 @@ static void _st_vp_save_stk(_st_thread_t *thread)
       thread->prvstk = realloc(thread->prvstk, thread->prvstk_size);
     }
     memcpy(thread->prvstk, bsp, thread->stklen);
-    ST_SWITCH_OUT_CB(thread);
+#ifdef DEBUG
+    if (!_st_iterate_thread)
+#endif
+    { ST_SWITCH_OUT_CB(thread); }
   }
 }
-static void _st_vp_restore_stk(_st_thread_t* me)
+static void _st_vp_restore_stk(void)
 {
-  me = _ST_CURRENT_THREAD();
+  _st_thread_t* me = _ST_CURRENT_THREAD();
+#ifdef DEBUG
+  /* doing _st_iterate_threads */
+  if (_st_iterate_thread) me = _st_iterate_thread;
+#endif
   if (me->stklen > 0) {
     char *bsp = me->bsp;
 #if defined (MD_STACK_GROWS_DOWN)
     bsp -= me->stklen;
 #endif
     memcpy(bsp, me->prvstk, me->stklen);
+    me->stklen = 0;
   }
 }
 #endif
-static _st_thread_t* _st_vp_switch_out(_st_thread_t* me, _st_thread_t **next)
+
+#if defined(_WIN32) && defined(_M_IX86) && defined(ST_SHARED_STACK) && defined(_MSC_VER)
+#pragma optimize("", off) /* vc will optimize the code wrong */
+#endif
+static void _st_vp_swap(_st_thread_t* me, _st_thread_t* thread)
+{
+#ifdef ST_SHARED_STACK
+  _st_thread_t *owner;
+  if (me) me->stack->sp = &owner;
+  if (thread->stack->owner != thread) {
+    owner = thread->stack->owner;
+    thread->stack->owner = thread;
+    if (owner) _st_vp_save_stk(owner);
+  }
+#endif
+  if (!me || !MD_SETJMP(me->context)) {
+    /* Resume the thread */
+#ifdef DEBUG
+    if (!_st_iterate_thread)
+#endif
+    { _ST_SET_CURRENT_THREAD(thread);}
+    MD_LONGJMP(thread->context, 1);
+
+    /* Not going to land here */
+#ifndef MD_WINDOWS_FIBER
+    _exit(-1);
+#endif
+  }
+
+  /* Resume the current thread */
+#ifdef ST_SHARED_STACK
+  _st_vp_restore_stk();
+#endif
+}
+#pragma optimize( "", on )
+
+void _st_vp_schedule(_st_thread_t* me)
 {
   _st_thread_t *thread;
-#ifdef ST_SHARED_STACK
-  me->stack->sp = next;
-#endif
   ST_ASSERT(me->state != _ST_ST_RUNNING);
+
   if (_ST_RUNQ.next != &_ST_RUNQ) {
     /* Pull thread off of the run queue */
     thread = _ST_THREAD_PTR(_ST_RUNQ.next);
@@ -195,49 +237,17 @@ static _st_thread_t* _st_vp_switch_out(_st_thread_t* me, _st_thread_t **next)
   }
   ST_ASSERT(thread->state == _ST_ST_RUNNABLE);
   thread->state = _ST_ST_RUNNING;
-  if (me == thread) return me;
+  if (me == thread) return; /* no changed */
   else if (me->state == _ST_ST_ZOMBIE && !me->term) { /* dead */
     ST_SWITCH_OUT_CB(me);
     me = NULL;
   }
 #ifndef ST_SHARED_STACK
-  else ST_SWITCH_OUT_CB(me);
-#else
-  if (thread->stack->owner != thread) {
-    _st_thread_t *owner = thread->stack->owner;
-    thread->stack->owner = thread;
-    if (owner) _st_vp_save_stk(owner);
-  }
+  else { ST_SWITCH_OUT_CB(me); }
 #endif
-  *next = thread;
-  return me;
+
+  _st_vp_swap(me, thread);
 }
-
-#if defined(_WIN32) && defined(_M_IX86) && defined(ST_SHARED_STACK) && defined(_MSC_VER)
-#pragma optimize("", off) /* vc will optimize the code wrong */
-#endif
-void _st_vp_schedule(_st_thread_t* me)
-{
-  _st_thread_t *thread = NULL;
-  me = _st_vp_switch_out(me, &thread);
-  if (!thread) return;
-
-  if (!me || !MD_SETJMP(me->context)) {
-    /* Resume the thread */
-    _ST_RESTORE_CONTEXT(thread);
-
-    /* Not going to land here */
-#ifndef MD_WINDOWS_FIBER
-    _exit(-1);
-#endif
-  }
-
-  /* Resume the current thread */
-#ifdef ST_SHARED_STACK
-  _st_vp_restore_stk(me);
-#endif
-}
-#pragma optimize( "", on )
 
 /*
  * Initialize this Virtual Processor
@@ -472,6 +482,10 @@ int st_thread_join(_st_thread_t *thread, void **retvalp)
 void _st_thread_main(void)
 {
   _st_thread_t *thread = _ST_CURRENT_THREAD();
+#ifdef DEBUG
+  /* doing _st_iterate_threads */
+  if (_st_iterate_thread) thread = _st_iterate_thread;
+#endif
 
   /*
    * Cap the stack by zeroing out the saved return address register
@@ -479,8 +493,14 @@ void _st_thread_main(void)
    * to stop unwinding the stack. It's a no-op on most platforms.
    */
   MD_CAP_STACK(&thread);
-  ST_SWITCH_IN_CB(thread);
+
+#ifdef DEBUG
+  ST_DEBUG_ITERATE_THREADS();
+  thread = _ST_CURRENT_THREAD();
+#endif
+
   /* Run thread main */
+  ST_SWITCH_IN_CB(thread);
   thread->retval = (*thread->start)(thread->arg);
 
   /* All done, time to go away */
@@ -910,49 +930,44 @@ char* st_thread_stats(st_thread_t thread, const char* modes)
 /* ARGSUSED */
 void _st_show_thread_stack(_st_thread_t *thread, const char *messg)
 {
-
+  fprintf(stderr, "%s:%s\n", thread->name, messg);
 }
 
 /* To be set from debugger */
 int _st_iterate_threads_flag = 0;
-
+_st_thread_t *_st_iterate_thread = NULL;
 void _st_iterate_threads(void)
 {
-  static _st_thread_t *thread = NULL;
-  static jmp_buf orig_jb, save_jb;
-  _st_clist_t *q;
-
-  if (!_st_iterate_threads_flag) {
-    if (thread) {
-      memcpy(thread->context, save_jb, sizeof(jmp_buf));
-      MD_LONGJMP(orig_jb, 1);
+  while (_st_iterate_threads_flag || _st_iterate_thread) {
+    _st_thread_t* thread = _st_iterate_thread;
+    if (!thread) {
+      _st_iterate_thread = thread = _ST_CURRENT_THREAD();
+      _st_show_thread_stack(thread, "Iteration started");
     }
-    return;
-  }
-
-  if (thread) {
-    memcpy(thread->context, save_jb, sizeof(jmp_buf));
-    _st_show_thread_stack(thread, NULL);
-  } else {
-    if (MD_SETJMP(orig_jb)) {
+    else if (thread == _ST_CURRENT_THREAD()) {
+      _st_iterate_thread = NULL;
       _st_iterate_threads_flag = 0;
-      thread = NULL;
       _st_show_thread_stack(thread, "Iteration completed");
-      return;
+      continue;
     }
-    thread = _ST_CURRENT_THREAD();
-    _st_show_thread_stack(thread, "Iteration started");
-  }
+    else {
+      _st_show_thread_stack(thread, "Iteration");
+    }
 
-  q = thread->tlink.next;
-  if (q == &_ST_THREADQ)
-    q = q->next;
-  ST_ASSERT(q != &_ST_THREADQ);
-  thread = _ST_THREAD_THREADQ_PTR(q);
-  if (thread == _ST_CURRENT_THREAD())
-    MD_LONGJMP(orig_jb, 1);
-  memcpy(save_jb, thread->context, sizeof(jmp_buf));
-  MD_LONGJMP(thread->context, 1);
+    if (_st_iterate_threads_flag) {
+      _st_clist_t *q;
+      q = thread->tlink.next;
+      if (q == &_ST_THREADQ)
+        q = q->next;
+      ST_ASSERT(q != &_ST_THREADQ);
+      _st_iterate_thread = _ST_THREAD_THREADQ_PTR(q);
+    }
+    else if (thread == _st_iterate_thread)
+      _st_iterate_thread = _ST_CURRENT_THREAD();
+
+    if (_st_iterate_thread != thread && _st_iterate_thread)
+      _st_vp_swap(thread, _st_iterate_thread);
+  }
 }
 #endif /* DEBUG */
 

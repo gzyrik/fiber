@@ -395,6 +395,7 @@ extern _st_eventsys_t *_st_eventsys;
  */
 
 #ifdef DEBUG
+extern _st_thread_t *_st_iterate_thread;
 void _st_iterate_threads(void);
 #define ST_DEBUG_ITERATE_THREADS() _st_iterate_threads()
 #else
