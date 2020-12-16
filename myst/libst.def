@@ -57,6 +57,8 @@ st_chan_push
 st_chan_pop
 st_set_switch_out_cb
 st_set_switch_in_cb
+_st_iterate_threads_cb
+st_iterate_threads
 st_thread_name
 st_thread_stats
 _st_errno

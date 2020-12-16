@@ -81,6 +81,9 @@ typedef int SOCKET;
 /* Undefine this to remove the context switch callback feature. */
 #define ST_SWITCH_CB
 
+/* Undefine this to remove the context iterate callback feature. */
+#define ST_ITERATE_CB
+
 #ifndef ETIME
 #define ETIME ETIMEDOUT
 #endif
@@ -117,9 +120,6 @@ typedef struct _st_cond *   st_cond_t;
 typedef struct _st_mutex *  st_mutex_t;
 typedef struct _st_netfd *  st_netfd_t;
 typedef struct _st_chan *   st_chan_t;
-#ifdef ST_SWITCH_CB
-typedef void (*st_switch_cb_t)(st_thread_t thread);
-#endif
 /** WARNING: SHOULD call before st_init */
 extern int st_cfg_eventsys(int eventsys);
 extern int st_init(void);
@@ -135,13 +135,14 @@ extern int st_get_eventsys(void);
 extern const char *st_get_eventsys_name(void);
 
 #ifdef ST_SWITCH_CB
+typedef void (*st_switch_cb_t)(st_thread_t thread);
 extern st_switch_cb_t st_set_switch_in_cb(st_switch_cb_t cb);
 extern st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb);
 #endif
 
 extern st_thread_t st_thread_self(void);
 const char* st_thread_name(const char *name, st_thread_t thread);
-extern char* st_thread_stats(st_thread_t thread, const char* modes);
+extern char* st_thread_stats(st_thread_t thread, const char* format);
 /** WARNING: MUST destruction local object manually before this */
 extern void st_thread_exit(void *retval);
 extern int st_thread_join(st_thread_t thread, void **retvalp);
@@ -235,10 +236,13 @@ extern int st_recvmsg(st_netfd_t fd, struct msghdr *msg, int flags,
 extern int st_sendmsg(st_netfd_t fd, const struct msghdr *msg, int flags,
 		      st_utime_t timeout);
 
-#ifdef DEBUG
-extern int _st_iterate_threads_flag;
-extern void _st_show_thread_stack(st_thread_t thread, const char *messg);
-extern void _st_iterate_threads(void);
+#ifdef ST_ITERATE_CB
+#define ST_ITERATE_FLAG_BEGIN  1
+#define ST_ITERATE_FLAG_END    2
+typedef void (*st_iterate_cb_t)(st_thread_t thread, int flags);
+/* To be set from debugger */
+extern st_iterate_cb_t _st_iterate_threads_cb;
+extern void st_iterate_threads(st_iterate_cb_t cb);
 #endif
 
 #ifdef __cplusplus

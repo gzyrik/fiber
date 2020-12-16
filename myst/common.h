@@ -198,7 +198,7 @@ struct _st_thread {
 #endif
   _st_clist_t links;          /* For putting on run/sleep/zombie queue */
   _st_clist_t wait_links;     /* For putting on mutex/condvar wait queue */
-#ifdef DEBUG
+#ifdef ST_ITERATE_CB
   _st_clist_t tlink;          /* For putting on thread queue */
 #endif
 
@@ -248,7 +248,7 @@ typedef struct _st_vp {
   _st_clist_t run_q;          /* run queue for this vp */
   _st_clist_t io_q;           /* io queue for this vp */
   _st_clist_t zombie_q;       /* zombie queue for this vp */
-#ifdef DEBUG
+#ifdef ST_ITERATE_CB
   _st_clist_t thread_q;       /* all threads of this vp */
 #endif
   int pagesize;
@@ -292,7 +292,7 @@ extern _st_eventsys_t *_st_eventsys;
 #define _ST_RUNQ                        (_st_this_vp.run_q)
 #define _ST_IOQ                         (_st_this_vp.io_q)
 #define _ST_ZOMBIEQ                     (_st_this_vp.zombie_q)
-#ifdef DEBUG
+#ifdef ST_ITERATE_CB
 #define _ST_THREADQ                     (_st_this_vp.thread_q)
 #endif
 
@@ -320,7 +320,7 @@ extern _st_eventsys_t *_st_eventsys;
 #define _ST_ADD_ZOMBIEQ(_thr)  ST_APPEND_LINK(&(_thr)->links, &_ST_ZOMBIEQ)
 #define _ST_DEL_ZOMBIEQ(_thr)  ST_REMOVE_LINK(&(_thr)->links)
 
-#ifdef DEBUG
+#ifdef ST_ITERATE_CB
 #define _ST_ADD_THREADQ(_thr)  ST_APPEND_LINK(&(_thr)->tlink, &_ST_THREADQ)
 #define _ST_DEL_THREADQ(_thr)  ST_REMOVE_LINK(&(_thr)->tlink)
 #endif
@@ -367,7 +367,7 @@ extern _st_eventsys_t *_st_eventsys;
 #define _ST_POLLQUEUE_PTR(_qp)      \
     ((_st_pollq_t *)((char *)(_qp) - offsetof(_st_pollq_t, links)))
 
-#ifdef DEBUG
+#ifdef ST_ITERATE_CB
 #define _ST_THREAD_THREADQ_PTR(_qp) \
     ((_st_thread_t *)((char *)(_qp) - offsetof(_st_thread_t, tlink)))
 #endif
@@ -394,30 +394,6 @@ extern _st_eventsys_t *_st_eventsys;
  * Threads context switching
  */
 
-#ifdef DEBUG
-extern _st_thread_t *_st_iterate_thread;
-void _st_iterate_threads(void);
-#define ST_DEBUG_ITERATE_THREADS() _st_iterate_threads()
-#else
-#define ST_DEBUG_ITERATE_THREADS()
-#endif
-
-#ifdef ST_SWITCH_CB
-#define ST_SWITCH_OUT_CB(_thread)		\
-    if (_st_this_vp.switch_out_cb != NULL &&	\
-        _thread != _st_this_vp.idle_thread) {	\
-      _st_this_vp.switch_out_cb(_thread);		\
-    }
-#define ST_SWITCH_IN_CB(_thread)		\
-    if (_st_this_vp.switch_in_cb != NULL &&	\
-	_thread != _st_this_vp.idle_thread ) {	\
-      _st_this_vp.switch_in_cb(_thread);		\
-    }
-#else
-#define ST_SWITCH_OUT_CB(_thread)
-#define ST_SWITCH_IN_CB(_thread)
-#endif
-
 /*
  * Switch away from the current thread context by saving its state and
  * calling the thread scheduler
@@ -425,28 +401,7 @@ void _st_iterate_threads(void);
 #define _ST_SWITCH_CONTEXT(_thread)       \
     ST_BEGIN_MACRO                        \
     _st_vp_schedule(_thread);             \
-    ST_DEBUG_ITERATE_THREADS();           \
-    ST_SWITCH_IN_CB(_thread);             \
     ST_END_MACRO
-
-/*
- * Restore a thread context that was saved by _ST_SWITCH_CONTEXT or
- * initialized by _ST_INIT_CONTEXT
- */
-#define _ST_RESTORE_CONTEXT(_thread)   \
-    ST_BEGIN_MACRO                     \
-    _ST_SET_CURRENT_THREAD(_thread);   \
-    MD_LONGJMP((_thread)->context, 1); \
-    ST_END_MACRO
-
-/*
- * Initialize the thread context preparing it to execute _main
- */
-#ifdef MD_INIT_CONTEXT
-#define _ST_INIT_CONTEXT MD_INIT_CONTEXT
-#else
-#error Unknown OS
-#endif
 
 /*
  * Number of bytes reserved under the stack "bottom"
@@ -474,9 +429,6 @@ extern int (*epoll_wait_f)(int epfd, struct epoll_event *events, int maxevents, 
  */
 
 void _st_vp_schedule(_st_thread_t *thread);
-void _st_vp_check_clock(void);
-void *_st_idle_thread_start(void *arg);
-void _st_thread_main(void);
 void _st_thread_cleanup(_st_thread_t *thread);
 void _st_add_sleep_q(_st_thread_t *thread, st_utime_t timeout);
 void _st_del_sleep_q(_st_thread_t *thread);
