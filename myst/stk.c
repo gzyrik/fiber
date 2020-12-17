@@ -81,21 +81,18 @@ _st_thread_t* _st_thread_alloc()
 }
 
 #ifdef MD_WINDOWS_FIBER
-_st_thread_t *_st_thread_new(void *(*start)(void *arg), void *arg, int stk_size)
+_st_thread_t *_st_create_fiber(LPFIBER_START_ROUTINE routine, int stk_size)
 {
   _st_thread_t* thread = _st_thread_alloc();
   if (!thread) return NULL;
 
   if (thread->context)
     DeleteFiber(thread->context);
-  thread->context = CreateFiberEx(0, stk_size, 0, (LPFIBER_START_ROUTINE)_st_thread_main, thread);
+  thread->context = CreateFiberEx(0, stk_size, 0, routine, thread);
   if (!thread->context) {
     ST_APPEND_LINK(&thread->links, _st_free_threads.prev);
     return NULL;
   }
-
-  thread->start = start;
-  thread->arg = arg;
   return thread;
 }
 int st_randomize_stacks(int on) { return 0; }

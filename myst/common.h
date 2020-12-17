@@ -192,7 +192,7 @@ struct _st_thread {
   _st_stack_t *stack;	      /* Info about thread's stack */
 #ifdef ST_SHARED_STACK
   char *bsp, *prvstk;
-  unsigned stklen, prvstk_size;
+  int stklen;
 #endif
   jmp_buf context;            /* Thread's context */
 #endif
@@ -436,7 +436,7 @@ void _st_del_sleep_q(_st_thread_t *thread);
 void _st_thread_free(_st_thread_t *thread);
 _st_thread_t* _st_thread_alloc();
 #ifdef MD_WINDOWS_FIBER
-_st_thread_t *_st_thread_new(void *(*start)(void *arg), void *arg, int stk_size);
+_st_thread_t *_st_create_fiber(LPFIBER_START_ROUTINE routine, int stk_size);
 #else
 _st_stack_t *_st_stack_new(int stack_size);
 void _st_stack_free(_st_stack_t *ts);

@@ -79,13 +79,30 @@
         MD_GET_SP(_thread) = (long) (_sp);         \
         ST_END_MACRO
 
+    #elif defined(_M_X64) || defined(_M_AMD64)
+//yasm -rcpp -DWIN64 -D__x86_64__ -fwin64  -pgas md.S -o md_x64.obj
+        #define MD_STACK_GROWS_DOWN
+        #define MD_JB_SP 3
+        extern int _st_md_cxt_save(jmp_buf env);
+        extern void _st_md_cxt_restore(jmp_buf env, int val);
+        #define MD_SETJMP(env) _st_md_cxt_save(env)
+        #define MD_LONGJMP(env, val) _st_md_cxt_restore(env, val)
+        #define MD_GET_SP(_t) *((__int64 *)&((_t)->context[MD_JB_SP]))
+
+        #define MD_INIT_CONTEXT(_thread, _sp, _main) \
+        ST_BEGIN_MACRO                             \
+        if (MD_SETJMP((_thread)->context))         \
+            _main();                               \
+        MD_GET_SP(_thread) = (__int64) (_sp);      \
+        ST_END_MACRO
+
     #else
-//yasm -rcpp -D_M_IX86=1 -D__x86_64__ -fwin64  -pgas md.S -o md_x64.obj
-//md_x64.obj invalid, instead by fiber
+        #define MD_STACK_GROWS_DOWN
         #define MD_WINDOWS_FIBER 1
         #define MD_SETJMP(x) 0
         #define MD_LONGJMP(env, val) SwitchToFiber(env)
-        #define MD_INIT_CONTEXT
+        #define MD_INIT_CONTEXT(_thread, _sp, _main)
+
     #endif
 
     #define MD_GET_UTIME()                       \

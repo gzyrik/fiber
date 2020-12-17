@@ -141,7 +141,8 @@ extern st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb);
 #endif
 
 extern st_thread_t st_thread_self(void);
-const char* st_thread_name(const char *name, st_thread_t thread);
+/** if |name| != NULL, set the thread or NULL(self), return old name */ 
+const char* st_thread_name(st_thread_t thread, const char *name);
 extern char* st_thread_stats(st_thread_t thread, const char* format);
 /** WARNING: MUST destruction local object manually before this */
 extern void st_thread_exit(void *retval);
@@ -281,7 +282,7 @@ public:
   template <typename T> const st_go& operator,(T &&f) const {
     auto* p = new detached_t(std::move(f));
     auto t = st_thread_create(__st_detached_functor, p, false, stack_size_);
-    if (name_) st_thread_name(name_, t);
+    if (name_) st_thread_name(t, name_);
     return *this;
   }
   template <typename T> static st_thread_t create(T &&f, int stack_size = ST_DEFAULT_STACK_SIZE) {

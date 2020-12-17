@@ -165,12 +165,22 @@ int st_poll(struct pollfd *pds, int npds, st_utime_t timeout)
 }
 
 #ifdef ST_SHARED_STACK
-static void _st_vp_save_stk(_st_thread_t *thread)
+static void _st_vp_save_stk(_st_thread_t* me, _st_thread_t **next)
 {
-  char *bsp = thread->bsp;
-  _st_stack_t *stack = thread->stack;
+  char *bsp;
+  _st_stack_t *stack;
+  _st_thread_t* thread;
+  if (me) me->stack->sp = next;
+  me = *next;
+  if (me->stack->owner == me) return;
+  thread = me->stack->owner;
+  me->stack->owner = me;
+  if (!thread) return;
+
+  bsp = thread->bsp;
+  stack = thread->stack;
   ST_ASSERT(thread->state != _ST_ST_ZOMBIE || thread->term);
-  thread->stklen = 0;
+  ST_ASSERT(thread->stklen == 0 && !thread->prvstk);
 #if defined (MD_STACK_GROWS_DOWN)
   if ((char*)stack->sp < bsp) {
     thread->stklen = bsp - (char*)stack->sp;
@@ -182,15 +192,9 @@ static void _st_vp_save_stk(_st_thread_t *thread)
 #else
   #error Unknown OS
 #endif
+  ST_ASSERT(thread->stklen >= 0);
   if (thread->stklen > 0) {
-    if (thread->stklen > thread->prvstk_size) {
-      thread->prvstk_size = thread->stklen;
-      /*
-      thread->prvstk_size = ((thread->stklen + _ST_PAGE_SIZE - 1)
-        / _ST_PAGE_SIZE) * _ST_PAGE_SIZE;
-      */
-      thread->prvstk = realloc(thread->prvstk, thread->prvstk_size);
-    }
+    thread->prvstk = malloc(thread->stklen);
     memcpy(thread->prvstk, bsp, thread->stklen);
 #ifdef ST_ITERATE_CB
     if (!_st_iterate_thread)
@@ -205,13 +209,15 @@ static void _st_vp_restore_stk(void)
   /* doing _st_iterate_threads */
   if (_st_iterate_thread) me = _st_iterate_thread;
 #endif
-  if (me->stklen > 0) {
+  if (me->stklen > 0 || me->prvstk) {
     char *bsp = me->bsp;
 #if defined (MD_STACK_GROWS_DOWN)
     bsp -= me->stklen;
 #endif
     memcpy(bsp, me->prvstk, me->stklen);
+    free(me->prvstk);
     me->stklen = 0;
+    me->prvstk = NULL;
   }
 }
 #endif
@@ -699,7 +705,7 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg,
   if (stk_size <= 0)
     stk_size = ST_DEFAULT_STACK_SIZE;
   stk_size = ((stk_size + _ST_PAGE_SIZE - 1) / _ST_PAGE_SIZE) * _ST_PAGE_SIZE;
-  if (!(thread = _st_thread_new(start, arg, stk_size)))
+  if (!(thread = _st_create_fiber((LPFIBER_START_ROUTINE)_st_thread_main, stk_size)))
     return NULL;
 #else
   _st_stack_t *stack;
@@ -783,10 +789,11 @@ init_thread:
   thread->bsp = stack->sp;
 #endif
   thread->stack = stack;
-  thread->start = start;
-  thread->arg = arg;
   _st_vp_init(thread);
 #endif /* MD_WINDOWS_FIBER */
+  thread->name = "";
+  thread->start = start;
+  thread->arg = arg;
   /* If thread is joinable, allocate a termination condition variable */
   if (joinable) {
     thread->term = st_cond_new();
@@ -826,12 +833,12 @@ _st_thread_t *st_thread_self(void)
 {
   return _ST_CURRENT_THREAD();
 }
-const char* st_thread_name(const char *name, st_thread_t thread)
+const char* st_thread_name(st_thread_t thread, const char *name)
 {
   const char *old;
   if (!thread) thread = _ST_CURRENT_THREAD();
   old = thread->name;
-  thread->name = name;
+  if (name) thread->name = name;
   return old;
 }
 static int fbytes(char* str, unsigned size)
@@ -861,7 +868,7 @@ char* st_thread_stats(st_thread_t thread, const char* format)
     switch(*p) {
     case '\0': goto clean;
     case '%': ST_STATS[i++] = *p; break;
-    case 'S':
+    case 'S':/* STATES Joinable PRIMORDIAL ON_SLEEPQ INTERRUPT TIMEDOUT SHARED_STK */
               ST_STATS[i++] = (thread->state != _ST_ST_ZOMBIE || thread->term) ? states[thread->state] : '-';
               ST_STATS[i++] = thread->term ? 'J' : '-';
               ST_STATS[i++] = (thread->flags & _ST_FL_PRIMORDIAL) ? 'P' : '-';
@@ -870,27 +877,21 @@ char* st_thread_stats(st_thread_t thread, const char* format)
               ST_STATS[i++] = (thread->flags & _ST_FL_TIMEDOUT) ?   'T' : '-';
               ST_STATS[i++] = (thread->flags & _ST_FL_SHARED_STK) ? 'S' : '-';
               break;
-    case 's':
 #ifndef MD_WINDOWS_FIBER 
-              if (thread->stack) {
+    case 's':/* valgrind_stack_id:stk_size/vaddr_size ref_count|stklen */
 #ifndef NVALGRIND
-                i += sprintf(ST_STATS+i, "%lu:", thread->stack->valgrind_stack_id);
+              i += sprintf(ST_STATS+i, "%lu:", thread->stack->valgrind_stack_id);
 #endif
-                i += fbytes(ST_STATS+i, thread->stack->stk_size);
-                ST_STATS[i++] = '/';
-                i += fbytes(ST_STATS+i, thread->stack->vaddr_size);
+              i += fbytes(ST_STATS+i, thread->stack->stk_size);
+              ST_STATS[i++] = '/';
+              i += fbytes(ST_STATS+i, thread->stack->vaddr_size);
 #ifdef ST_SHARED_STACK
-                i += sprintf(ST_STATS+i, " %d", thread->stack->ref_count);
-                if (thread->state != _ST_ST_RUNNING && thread->prvstk_size > 0) {
-                  ST_STATS[i++] = '|';
-                  i += fbytes(ST_STATS+i, thread->stklen);
-                  ST_STATS[i++] = '/';
-                  i += fbytes(ST_STATS+i, thread->prvstk_size);
-                }
-#endif
-              }
+              i += sprintf(ST_STATS+i, " %d", thread->stack->ref_count);
+              ST_STATS[i++] = '|';
+              i += fbytes(ST_STATS+i, thread->stklen);
 #endif
               break;
+#endif
     case 'a':
               i += sprintf(ST_STATS+i, "%p(%p)", thread->start, thread->arg);
               break;
@@ -900,8 +901,7 @@ char* st_thread_stats(st_thread_t thread, const char* format)
               break;
 #endif
     case 'n':
-              if (thread->name)
-                i += sprintf(ST_STATS+i,"%s", thread->name);
+              i += sprintf(ST_STATS+i,"%s", thread->name);
               break;
     }
     ++p;
@@ -961,20 +961,20 @@ static void _st_iterate_schedule(void)
 static void _st_vp_swap(_st_thread_t* me, _st_thread_t* thread)
 {
 #ifdef ST_SHARED_STACK
-  _st_thread_t *owner;
-  if (me) me->stack->sp = &owner;
-  if (thread->stack->owner != thread) {
-    owner = thread->stack->owner;
-    thread->stack->owner = thread;
-    if (owner) _st_vp_save_stk(owner);
-  }
+#if defined(_MSC_VER)
+  _st_thread_t *next = thread;
+  _st_vp_save_stk(me, &next);
+#else
+  _st_vp_save_stk(me, &thread);
 #endif
+#endif
+
   if (!me || !MD_SETJMP(me->context)) {
-    /* Resume the thread */
 #ifdef ST_ITERATE_CB
     if (!_st_iterate_thread)
 #endif
-    { _ST_SET_CURRENT_THREAD(thread);}
+    { _ST_SET_CURRENT_THREAD(thread); }
+    /* Resume the thread */
     MD_LONGJMP(thread->context, 1);
 
     /* Not going to land here */
@@ -989,6 +989,7 @@ static void _st_vp_swap(_st_thread_t* me, _st_thread_t* thread)
 #endif
 }
 
+#ifndef MD_WINDOWS_FIBER
 static void _st_vp_init(_st_thread_t* thread)
 {
 #ifndef __ia64__
@@ -1005,3 +1006,4 @@ static void _st_vp_init(_st_thread_t* thread)
   MD_INIT_CONTEXT(thread, thread->stack->sp, thread->stack->bsp, _st_thread_main);
 #endif
 }
+#endif

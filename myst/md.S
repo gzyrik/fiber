@@ -386,15 +386,17 @@
  * rflags, rip, rbp, rsp, rbx, r12, r13, r14, r15... these are 8 bytes each
  * mxcsr, fp control word, sigmask... these are 4 bytes each
  * add 16 ints for future expansion needs...
+ #define _JBLEN ((9 * 2) + 3 + 16)
+ typedef int jmp_buf[_JBLEN];
  */
-#define JB_RBX  4
-#define JB_RBP  2
-#define JB_R12  5
-#define JB_R13  6
-#define JB_R14  7
-#define JB_R15  8
-#define JB_RSP  3
-#define JB_PC   1
+    #define JB_RBX  4
+    #define JB_RBP  2
+    #define JB_R12  5
+    #define JB_R13  6
+    #define JB_R14  7
+    #define JB_R15  8
+    #define JB_RSP  3
+    #define JB_PC   1
 #else
     /*
      * Internal __jmp_buf layout
@@ -414,7 +416,7 @@
 
     /* _st_md_cxt_save(__jmp_buf env) */
     .globl _st_md_cxt_save
-#if !defined (DARWIN)
+#if !defined (DARWIN) && !defined(WIN64)
         .type _st_md_cxt_save, @function
 #endif
         .align 16
@@ -422,6 +424,28 @@
         /*
          * Save registers.
          */
+#if defined (WIN64)
+/* WIN: rcx，rdx，r8,r9 */
+    #define JB_RSI  8
+    #define JB_RDI  9
+        movq %rsi, (JB_RSI*8)(%rcx)
+        movq %rdi, (JB_RDI*8)(%rcx)
+        movq %rbx, (JB_RBX*8)(%rcx)
+        movq %rbp, (JB_RBP*8)(%rcx)
+        movq %r12, (JB_R12*8)(%rcx)
+        movq %r13, (JB_R13*8)(%rcx)
+        movq %r14, (JB_R14*8)(%rcx)
+        movq %r15, (JB_R15*8)(%rcx)
+        /* Save SP */
+        leaq 8(%rsp), %rdx
+        movq %rdx, (JB_RSP*8)(%rcx)
+        /* Save PC we are returning to */
+        movq (%rsp), %rax
+        movq %rax, (JB_PC*8)(%rcx)
+        xorq %rax, %rax
+        ret
+#else
+/* UNIX:rdi，rsi，rdx，rcx，r8，r9  */
         movq %rbx, (JB_RBX*8)(%rdi)
         movq %rbp, (JB_RBP*8)(%rdi)
         movq %r12, (JB_R12*8)(%rdi)
@@ -436,7 +460,8 @@
         movq %rax, (JB_PC*8)(%rdi)
         xorq %rax, %rax
         ret
-#if !defined (DARWIN)
+#endif
+#if !defined (DARWIN) && !defined(WIN64)
     .size _st_md_cxt_save, .-_st_md_cxt_save
 #endif
 
@@ -445,7 +470,7 @@
 
     /* _st_md_cxt_restore(__jmp_buf env, int val) */
     .globl _st_md_cxt_restore
-#if !defined (DARWIN)
+#if !defined (DARWIN) && !defined(WIN64)
         .type _st_md_cxt_restore, @function
 #endif
         .align 16
@@ -453,6 +478,27 @@
         /*
          * Restore registers.
          */
+#if defined (WIN64)
+/* WIN: rcx，rdx，r8,r9 */
+        movq (JB_RSI*8)(%rcx), %rsi
+        movq (JB_RDI*8)(%rcx), %rdi
+        movq (JB_RBX*8)(%rcx), %rbx
+        movq (JB_RBP*8)(%rcx), %rbp
+        movq (JB_R12*8)(%rcx), %r12
+        movq (JB_R13*8)(%rcx), %r13
+        movq (JB_R14*8)(%rcx), %r14
+        movq (JB_R15*8)(%rcx), %r15
+        /* Set return value */
+        test %esi, %esi
+        mov $01, %eax
+        cmove %eax, %esi
+        mov %esi, %eax
+        movq (JB_PC*8)(%rcx), %rdx
+        movq (JB_RSP*8)(%rcx), %rsp
+        /* Jump to saved PC */
+        jmpq *%rdx
+#else
+/* UNIX:rdi，rsi，rdx，rcx，r8，r9 */
         movq (JB_RBX*8)(%rdi), %rbx
         movq (JB_RBP*8)(%rdi), %rbp
         movq (JB_R12*8)(%rdi), %r12
@@ -468,7 +514,8 @@
         movq (JB_RSP*8)(%rdi), %rsp
         /* Jump to saved PC */
         jmpq *%rdx
-#if !defined (DARWIN)
+#endif
+#if !defined (DARWIN) && !defined(WIN64)
     .size _st_md_cxt_restore, .-_st_md_cxt_restore
 #endif
 
