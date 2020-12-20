@@ -23,4 +23,7 @@ target("st")
   end
   add_includedirs(".", {interface=true})
   if is_plat("macosx") then add_defines("DARWIN") end
-  if is_plat("linux") then add_defines("LINUX") end
+  if is_plat("linux") then
+      add_defines("LINUX")
+      add_syslinks("dl", {interface=true})
+  end

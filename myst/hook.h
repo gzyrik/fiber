@@ -5,7 +5,6 @@
 #ifndef _WIN32
 #define __USE_GNU
 #include <dlfcn.h>
-#include <pthread.h>
 #define SOCKOPTVAL_T void
 #define SELECT_TIMEVAL_T struct timeval
 #define ST_DLSYM(sym) dlsym(RTLD_NEXT, sym)

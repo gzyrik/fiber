@@ -61,52 +61,24 @@
     #define MD_ACCEPT_NB_INHERITED
     #define MD_ALWAYS_UNSERIALIZED_ACCEPT
     #define MD_HAVE_SOCKLEN_T
-
-    #if defined _M_IX86
-//yasm -rcpp -D_M_IX86=1 -D__i386__  -fwin32 -pgas md.S -o md_x86.obj
-        #define MD_STACK_GROWS_DOWN
-        #define MD_JB_SP 4
-        extern int st_md_cxt_save(jmp_buf env);
-        extern void st_md_cxt_restore(jmp_buf env, int val);
-        #define MD_SETJMP(env) st_md_cxt_save(env)
-        #define MD_LONGJMP(env, val) st_md_cxt_restore(env, val)
-        #define MD_GET_SP(_t) *((long *)&((_t)->context[MD_JB_SP]))
-
-        #define MD_INIT_CONTEXT(_thread, _sp, _main) \
-        ST_BEGIN_MACRO                             \
-        if (MD_SETJMP((_thread)->context))         \
-            _main();                               \
-        MD_GET_SP(_thread) = (long) (_sp);         \
-        ST_END_MACRO
-
-    #elif defined(_M_X64) || defined(_M_AMD64)
-//yasm -rcpp -DWIN64 -D__x86_64__ -fwin64  -pgas md.S -o md_x64.obj
-        #define MD_STACK_GROWS_DOWN
-        #define MD_JB_SP 3
-        extern int _st_md_cxt_save(jmp_buf env);
-        extern void _st_md_cxt_restore(jmp_buf env, int val);
-        #define MD_SETJMP(env) _st_md_cxt_save(env)
-        #define MD_LONGJMP(env, val) _st_md_cxt_restore(env, val)
-        #define MD_GET_SP(_t) *((__int64 *)&((_t)->context[MD_JB_SP]))
-
-        #define MD_INIT_CONTEXT(_thread, _sp, _main) \
-        ST_BEGIN_MACRO                             \
-        if (MD_SETJMP((_thread)->context))         \
-            _main();                               \
-        MD_GET_SP(_thread) = (__int64) (_sp);      \
-        ST_END_MACRO
-
-    #else
-        #define MD_STACK_GROWS_DOWN
-        #define MD_WINDOWS_FIBER 1
-        #define MD_SETJMP(x) 0
-        #define MD_LONGJMP(env, val) SwitchToFiber(env)
-        #define MD_INIT_CONTEXT(_thread, _sp, _main)
-
-    #endif
-
     #define MD_GET_UTIME()                       \
         return timeGetTime()*1000LL
+
+    #if defined _M_IX86
+//yasm -rcpp -D_WIN32 -D__i386__  -fwin32 -pgas md.S -o md_x86.obj
+        #define MD_STACK_GROWS_DOWN
+        #define MD_USE_BUILTIN_SETJMP
+        #define MD_JB_SP 4
+
+    #elif defined(_M_X64) || defined(_M_AMD64)
+//yasm -rcpp -D_WIN64 -D__x86_64__ -fwin64  -pgas md.S -o md_x64.obj
+        #define MD_STACK_GROWS_DOWN
+        #define MD_USE_BUILTIN_SETJMP
+        #define MD_JB_SP 2
+    #else
+        #define MD_WINDOWS_FIBER 1
+    #endif
+
 
 #elif defined (AIX)
 
@@ -164,17 +136,19 @@
 
 #elif defined (DARWIN)
 
-    #define MD_STACK_GROWS_DOWN
     #define MD_USE_BSD_ANON_MMAP
     #define MD_ACCEPT_NB_INHERITED
     #define MD_ALWAYS_UNSERIALIZED_ACCEPT
     #define MD_HAVE_SOCKLEN_T
-
-    #define MD_USE_BUILTIN_SETJMP
+    #define MD_GET_UTIME()              \
+        struct timeval tv;              \
+        (void) gettimeofday(&tv, NULL); \
+        return (tv.tv_sec * 1000000LL + tv.tv_usec)
 
     #if defined(__amd64__) || defined(__x86_64__)
-        #define MD_JB_SP 6 //SRS is 12
-        #define MD_GET_SP(_t) *((long *)&((_t)->context[MD_JB_SP]))
+        #define MD_STACK_GROWS_DOWN
+        #define MD_USE_BUILTIN_SETJMP
+        #define MD_JB_SP 3
     #else
         /* since macOS Mojave Version 10.14, i386 is removed from
          * the Xcode build setting
@@ -182,25 +156,7 @@
         #error Unknown CPU architecture
     #endif
 
-    #define MD_INIT_CONTEXT(_thread, _sp, _main)   \
-        ST_BEGIN_MACRO                             \
-        if (MD_SETJMP((_thread)->context))         \
-            _main();                               \
-        MD_GET_SP(_thread) = (long) (_sp);         \
-        ST_END_MACRO
-
-    #if defined(MD_USE_BUILTIN_SETJMP)
-        #define MD_SETJMP(env) st_md_cxt_save(env)
-        #define MD_LONGJMP(env, val) st_md_cxt_restore(env, val)
-
-        extern int st_md_cxt_save(jmp_buf env);
-        extern void st_md_cxt_restore(jmp_buf env, int val);
-    #endif
-
-    #define MD_GET_UTIME()              \
-        struct timeval tv;              \
-        (void) gettimeofday(&tv, NULL); \
-        return (tv.tv_sec * 1000000LL + tv.tv_usec)
+    
 
 #elif defined (FREEBSD)
 
@@ -374,7 +330,7 @@
     #elif defined(__mips__)
         #define MD_STACK_GROWS_DOWN
 
-        #define MD_INIT_CONTEXT(_thread, _sp, _main)               \
+        #define MD_INIT_CONTEXT(_thread, _sp, _main)                 \
             ST_BEGIN_MACRO                                           \
             MD_SETJMP((_thread)->context);                           \
             _thread->context[0].__jmpbuf[0].__pc = (__ptr_t) _main;  \
@@ -454,38 +410,18 @@
         #elif defined(__i386__)
             #define MD_STACK_GROWS_DOWN
             #define MD_USE_BUILTIN_SETJMP
-
-            #if defined(__GLIBC__) && __GLIBC__ >= 2
-                #ifndef JB_SP
-                    #define JB_SP 4
-                #endif
-                #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[JB_SP]
-            #else
-                /* not an error but certainly cause for caution */
-                #error "Untested use of old glibc on i386"
-                #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[0].__sp
-            #endif
+            #define MD_JB_SP 4
 
         #elif defined(__amd64__) || defined(__x86_64__)
             #define MD_STACK_GROWS_DOWN
             #define MD_USE_BUILTIN_SETJMP
-
-            #ifndef JB_RSP
-                #define JB_RSP 6
-            #endif
-            #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[JB_RSP]
+            #define MD_JB_SP 6
 
         #elif defined(__aarch64__)
             /* https://github.com/ossrs/state-threads/issues/9 */
             #define MD_STACK_GROWS_DOWN
             #define MD_USE_BUILTIN_SETJMP
-            #ifdef __BIONIC__
-                #define MD_GET_SP(_t) (_t)->context[13]
-            #elif defined(__GLIBC__)
-                #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[13]
-            #else
-                #error Unknown c lib
-            #endif
+            #define MD_JB_SP 13
 
         #elif defined(__arm__)
             #define MD_STACK_GROWS_DOWN
@@ -521,28 +457,11 @@
             #define MD_GET_SP(_t) (*(long *)(((char *)&(_t)->context[0].__jmpbuf[0]) + 76))
 
         #else
-            #error "Unknown CPU architecture"
+            #error "Unknown CPU architecture on Linux"
         #endif /* Cases with common MD_INIT_CONTEXT and different SP locations */
-
-        #define MD_INIT_CONTEXT(_thread, _sp, _main) \
-            ST_BEGIN_MACRO                             \
-            if (MD_SETJMP((_thread)->context))         \
-                _main();                                 \
-            MD_GET_SP(_thread) = (long) (_sp);         \
-            ST_END_MACRO
 
     #endif /* Cases with different MD_INIT_CONTEXT */
 
-    #if defined(MD_USE_BUILTIN_SETJMP) && !defined(USE_LIBC_SETJMP)
-        #define MD_SETJMP(env) _st_md_cxt_save(env)
-        #define MD_LONGJMP(env, val) _st_md_cxt_restore(env, val)
-
-        extern int _st_md_cxt_save(jmp_buf env);
-        extern void _st_md_cxt_restore(jmp_buf env, int val);
-    #else
-        #define MD_SETJMP(env) setjmp(env)
-        #define MD_LONGJMP(env, val) longjmp(env, val)
-    #endif
 
 #elif defined (NETBSD)
 
@@ -698,6 +617,35 @@
 
 #ifndef MD_CAP_STACK
     #define MD_CAP_STACK(var_addr)
+#endif
+
+#if defined(MD_USE_BUILTIN_SETJMP) && !defined(USE_LIBC_SETJMP)
+    extern int _st_md_cxt_save(jmp_buf env);
+    extern void _st_md_cxt_restore(jmp_buf env, int val);
+
+    #define MD_SETJMP(env) _st_md_cxt_save(env)
+    #define MD_LONGJMP(env, val) _st_md_cxt_restore(env, val)
+
+#elif defined(MD_WINDOWS_FIBER)
+    #define MD_SETJMP(x) 0
+    #define MD_LONGJMP(env, val) SwitchToFiber(env)
+
+#else
+    #define MD_SETJMP(env) setjmp(env)
+    #define MD_LONGJMP(env, val) longjmp(env, val)
+#endif /* MD_USE_BUILTIN_SETJMP */
+
+
+#ifndef MD_INIT_CONTEXT
+    #ifndef MD_GET_SP
+        #define MD_GET_SP(_t) *((void**)((_t)->context)+MD_JB_SP)
+    #endif
+    #define MD_INIT_CONTEXT(_thread, _sp, _main)   \
+        ST_BEGIN_MACRO                             \
+        if (MD_SETJMP((_thread)->context))         \
+            _main();                               \
+        MD_GET_SP(_thread) = (void*) (_sp);        \
+        ST_END_MACRO
 #endif
 
 #endif /* !__ST_MD_H__ */

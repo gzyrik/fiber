@@ -85,8 +85,10 @@ static void* offset_sp(void* sp, long padding)
 {
 #if defined (MD_STACK_GROWS_DOWN)
   return (char*)sp - padding;
-#else
+#elif defined (MD_STACK_GROWS_UP)
   return (char*)sp + padding;
+#else
+  #error Unknown OS
 #endif
 }
 static void* aligned_sp(void* sp, long padding)
@@ -375,13 +377,15 @@ static void *_st_idle_thread_start(void *arg)
     me->state = _ST_ST_RUNNABLE;
     _ST_SWITCH_CONTEXT(me);
   }
-#ifdef DEBUG
-  fprintf(stderr, "\n** ST EXIT");
-#endif
+  fprintf(stderr, "\n** ST EXIT ** \n");
   /* No more threads */
-  _exit(0);
-
+#ifdef _WIN32
+  ExitThread(0);
+#else
+  pthread_exit(NULL);
+#endif
   /* NOTREACHED */
+  abort();
   return NULL;
 }
 
@@ -979,7 +983,7 @@ static void _st_vp_swap(_st_thread_t* me, _st_thread_t* thread)
 
     /* Not going to land here */
 #ifndef MD_WINDOWS_FIBER
-    _exit(-1);
+    abort();
 #endif
   }
 

@@ -61,6 +61,7 @@ struct iovec {
 #include <netinet/in.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 typedef int SOCKET;
 #define INVALID_SOCKET (-1)
 #define WSAAPI
@@ -338,6 +339,7 @@ template <typename T>
 using chan = __st_chan<T>;
 #endif
 
+#if !(defined(__GNUC__) && (__GNUC__ < 5))
 /* 另开物理线程, 等待其耗时的非IO操作 */
 #include <thread>
 template <class Fn, class... Args>
@@ -357,7 +359,7 @@ bool st_async(Fn&& fn, Args&&... args) {
   close(sfd[1]);
   return ret;
 }
-
+#endif
 #endif /* !c++11 */
 
 #endif /* !__ST_THREAD_H__ */
