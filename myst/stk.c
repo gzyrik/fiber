@@ -121,13 +121,11 @@ _st_stack_t *_st_stack_new(int stack_size)
   int extra;
 
   for (qp = _st_free_stacks.next; qp != &_st_free_stacks; qp = qp->next) {
-    ts = _ST_THREAD_STACK_PTR(qp);
+    ts = _ST_STACK_PTR(qp);
     if (ts->stk_size >= stack_size) {
       /* Found a stack that is big enough */
       ST_REMOVE_LINK(&ts->links);
       _st_num_free_stacks--;
-      ts->links.next = NULL;
-      ts->links.prev = NULL;
       return ts;
     }
   }

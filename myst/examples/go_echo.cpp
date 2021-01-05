@@ -3,7 +3,7 @@
 #include <string.h>
 
 static const uint16_t port = 43333;
-static void echo_server(void)
+static void server(void)
 {
   int n;
   puts("[0]");
@@ -155,10 +155,8 @@ retry_read:
 int main()
 {
   st_init();
-  go client;
-  go []{
+  go 0, server, []{
     printf("[7] other fiber\n");
-  };
-  echo_server();
+  }, client;
   return st_thread_exit(NULL), 0;
 }

@@ -76,10 +76,10 @@ int main ()
     puts("[8]");
     int ret = ch_2.pop(0);
 
-    printf("[9] ret=%d\n", ret);
+    printf("[9] ret(%d)==-1\n", ret);
     ret = ch_2.push(100);
 
-    printf("[10] ret=%d\n", ret);
+    printf("[10] ret(%d)==-1\n", ret);
   };
 
   printf("start ......\n");

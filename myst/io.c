@@ -242,13 +242,13 @@ static _st_netfd_t *_st_netfd_new(SOCKET osfd, int nonblock, int is_socket)
 }
 
 
-_st_netfd_t *st_netfd_open(int osfd)
+_st_netfd_t *st_netfd_open(SOCKET osfd)
 {
   return _st_netfd_new(osfd, 1, 0);
 }
 
 
-_st_netfd_t *st_netfd_open_socket(int osfd)
+_st_netfd_t *st_netfd_open_socket(SOCKET osfd)
 {
   return _st_netfd_new(osfd, 1, 1);
 }

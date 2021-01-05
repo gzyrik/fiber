@@ -511,10 +511,6 @@
     movq (JB_R13*8)(JB_ENV), %r13
     movq (JB_R14*8)(JB_ENV), %r14
     movq (JB_R15*8)(JB_ENV), %r15
-#ifdef _WIN64
-    movq (JB_RSI*8)(JB_ENV), %rsi
-    movq (JB_RDI*8)(JB_ENV), %rdi
-#endif
     /* Set return value */
     test %esi, %esi
     mov $01, %eax
@@ -522,6 +518,10 @@
     mov %esi, %eax
     movq (JB_RIP*8)(JB_ENV), %rdx
     movq (JB_RSP*8)(JB_ENV), %rsp
+#ifdef _WIN64
+    movq (JB_RSI*8)(JB_ENV), %rsi
+    movq (JB_RDI*8)(JB_ENV), %rdi
+#endif
     /* Jump to saved PC */
     jmpq *%rdx
 #ifdef DOT_TYPE_SIZE

@@ -114,15 +114,19 @@ typedef struct _st_clist {
 #define ST_INSERT_LINK(_e,_l) ST_INSERT_AFTER(_e,_l)
 
 /* Return the head/tail of the list */
-#define ST_LIST_HEAD(_l) (_l)->next
-#define ST_LIST_TAIL(_l) (_l)->prev
+#define ST_CLIST_HEAD(_l) (_l)->next
+#define ST_CLIST_TAIL(_l) (_l)->prev
 
 /* Remove the element "_e" from it's circular list */
 #define ST_REMOVE_LINK(_e)	       \
     ST_BEGIN_MACRO		       \
 	(_e)->prev->next = (_e)->next; \
 	(_e)->next->prev = (_e)->prev; \
+    (_e)->next = (_e)->prev = NULL;\
     ST_END_MACRO
+
+#define ST_IS_LINK(_e) \
+    ( (_e)->next || (_e)->prev)
 
 /* Return non-zero if the given circular list "_l" is empty, */
 /* zero if the circular list is not empty */
@@ -177,6 +181,11 @@ typedef struct _st_cond {
 } _st_cond_t;
 
 
+typedef struct _st_pollq {
+  _st_clist_t links;          /* For putting on io queue */
+  struct pollfd *pds;         /* Array of poll descriptors */
+  int npds;                   /* Length of the array */
+} _st_pollq_t;
 
 struct _st_thread {
   const char* name;
@@ -192,7 +201,7 @@ struct _st_thread {
   _st_stack_t *stack;	      /* Info about thread's stack */
 #ifdef ST_SHARED_STACK
   char *bsp, *prvstk;
-  int stklen;
+  size_t stklen;
 #endif
   jmp_buf context;            /* Thread's context */
 #endif
@@ -210,6 +219,7 @@ struct _st_thread {
   void **private_data;        /* Per thread private data */
 
   _st_cond_t *term;           /* Termination condition variable for join */
+  _st_pollq_t pq;             /* For putting on io_q queue */
 };
 
 
@@ -219,13 +229,6 @@ typedef struct _st_mutex {
 } _st_mutex_t;
 
 
-typedef struct _st_pollq {
-  _st_clist_t links;          /* For putting on io queue */
-  _st_thread_t  *thread;      /* Polling thread */
-  struct pollfd *pds;         /* Array of poll descriptors */
-  int npds;                   /* Length of the array */
-  int on_ioq;                 /* Is it on ioq? */
-} _st_pollq_t;
 
 
 typedef struct _st_eventsys_ops {
@@ -310,6 +313,7 @@ extern _st_eventsys_t *_st_eventsys;
 
 #define _ST_ADD_IOQ(_pq)    ST_APPEND_LINK(&_pq.links, &_ST_IOQ)
 #define _ST_DEL_IOQ(_pq)    ST_REMOVE_LINK(&_pq.links)
+#define _ST_ON_IOQ(_pq)     ST_IS_LINK(&_pq.links)
 
 #define _ST_ADD_RUNQ(_thr)  ST_APPEND_LINK(&(_thr)->links, &_ST_RUNQ)
 #define _ST_DEL_RUNQ(_thr)  ST_REMOVE_LINK(&(_thr)->links)
@@ -361,11 +365,14 @@ extern _st_eventsys_t *_st_eventsys;
 #define _ST_THREAD_WAITQ_PTR(_qp)   \
     ((_st_thread_t *)((char *)(_qp) - offsetof(_st_thread_t, wait_links)))
 
-#define _ST_THREAD_STACK_PTR(_qp)   \
+#define _ST_STACK_PTR(_qp)  \
     ((_st_stack_t *)((char*)(_qp) - offsetof(_st_stack_t, links)))
 
 #define _ST_POLLQUEUE_PTR(_qp)      \
     ((_st_pollq_t *)((char *)(_qp) - offsetof(_st_pollq_t, links)))
+
+#define _ST_THREAD_PQ_PTR(_qp) \
+    ((_st_thread_t *)((char *)(pq) - offsetof(_st_thread_t, pq)))
 
 #ifdef ST_ITERATE_CB
 #define _ST_THREAD_THREADQ_PTR(_qp) \

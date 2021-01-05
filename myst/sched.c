@@ -120,7 +120,6 @@ int st_poll(struct pollfd *pds, int npds, st_utime_t timeout)
 {
   struct pollfd *pd;
   struct pollfd *epd = pds + npds;
-  _st_pollq_t pq;
   _st_thread_t *me = _ST_CURRENT_THREAD();
   int n;
 
@@ -133,11 +132,9 @@ int st_poll(struct pollfd *pds, int npds, st_utime_t timeout)
   if ((*_st_eventsys->pollset_add)(pds, npds) < 0)
     return -1;
 
-  pq.pds = pds;
-  pq.npds = npds;
-  pq.thread = me;
-  pq.on_ioq = 1;
-  _ST_ADD_IOQ(pq);
+  me->pq.pds = pds;
+  me->pq.npds = npds;
+  _ST_ADD_IOQ(me->pq);
   if (timeout != ST_UTIME_NO_TIMEOUT)
     _ST_ADD_SLEEPQ(me, timeout);
   me->state = _ST_ST_IO_WAIT;
@@ -145,9 +142,9 @@ int st_poll(struct pollfd *pds, int npds, st_utime_t timeout)
   _ST_SWITCH_CONTEXT(me);
 
   n = 0;
-  if (pq.on_ioq) {
+  if (_ST_ON_IOQ(me->pq)) {
     /* If we timed out, the pollq might still be on the ioq. Remove it */
-    _ST_DEL_IOQ(pq);
+    _ST_DEL_IOQ(me->pq);
     (*_st_eventsys->pollset_del)(pds, npds);
   } else {
     /* Count the number of ready descriptors */
@@ -179,10 +176,11 @@ static void _st_vp_save_stk(_st_thread_t* me, _st_thread_t **next)
   me->stack->owner = me;
   if (!thread) return;
 
-  bsp = thread->bsp;
-  stack = thread->stack;
   ST_ASSERT(thread->state != _ST_ST_ZOMBIE || thread->term);
   ST_ASSERT(thread->stklen == 0 && !thread->prvstk);
+
+  bsp = thread->bsp;
+  stack = thread->stack;
 #if defined (MD_STACK_GROWS_DOWN)
   if ((char*)stack->sp < bsp) {
     thread->stklen = bsp - (char*)stack->sp;
@@ -194,15 +192,19 @@ static void _st_vp_save_stk(_st_thread_t* me, _st_thread_t **next)
 #else
   #error Unknown OS
 #endif
-  ST_ASSERT(thread->stklen >= 0);
-  if (thread->stklen > 0) {
-    thread->prvstk = malloc(thread->stklen);
-    memcpy(thread->prvstk, bsp, thread->stklen);
-#ifdef ST_ITERATE_CB
-    if (!_st_iterate_thread)
-#endif
-    { ST_SWITCH_OUT_CB(thread); }
+  else return;
+
+  thread->prvstk = malloc(thread->stklen);
+  memcpy(thread->prvstk, bsp, thread->stklen);
+  if (thread->state == _ST_ST_IO_WAIT) {
+    char* pds = (char*)thread->pq.pds;
+    if (pds >= bsp && pds < bsp + thread->stklen)
+      thread->pq.pds = (struct pollfd*)(thread->prvstk+(pds-bsp));
   }
+#ifdef ST_ITERATE_CB
+  if (!_st_iterate_thread)
+#endif
+  { ST_SWITCH_OUT_CB(thread); }
 }
 static void _st_vp_restore_stk(void)
 {
@@ -380,6 +382,7 @@ static void *_st_idle_thread_start(void *arg)
   fprintf(stderr, "\n** ST EXIT ** \n");
   /* No more threads */
 #ifdef _WIN32
+  WSACleanup();
   ExitThread(0);
 #else
   pthread_exit(NULL);
@@ -443,6 +446,8 @@ void st_thread_exit(void *retval)
 
   /* Find another thread to run */
   _ST_SWITCH_CONTEXT(thread);
+  /* NOTREACHED */
+  abort();
 }
 
 

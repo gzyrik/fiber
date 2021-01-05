@@ -38,6 +38,14 @@
 #include <errno.h>
 #include "common.h"
 
+#define _ST_REMOVE_IOQ_PTR(_pq) do{\
+  _st_thread_t *thread = _ST_THREAD_PQ_PTR(_pq); \
+  ST_REMOVE_LINK(&_pq->links); \
+  if (thread->flags & _ST_FL_ON_SLEEPQ) _ST_DEL_SLEEPQ(thread);\
+  thread->state = _ST_ST_RUNNABLE;\
+  _ST_ADD_RUNQ(thread);\
+} while(0)
+
 #ifdef MD_HAVE_KQUEUE
 #include <sys/event.h>
 #endif
@@ -233,8 +241,9 @@ ST_HIDDEN void _st_select_find_bad_fd(void)
 
     _ST_SELECT_MAX_OSFD = -1;
 
-    for (q = _ST_IOQ.next; q != &_ST_IOQ; q = q->next) {
+    for (q = _ST_IOQ.next; q != &_ST_IOQ;) {
         pq = _ST_POLLQUEUE_PTR(q);
+        q = q->next;
         notify = 0;
         epds = pq->pds + pq->npds;
         pq_max_osfd = -1;
@@ -256,8 +265,6 @@ ST_HIDDEN void _st_select_find_bad_fd(void)
         }
 
         if (notify) {
-            ST_REMOVE_LINK(&pq->links);
-            pq->on_ioq = 0;
             /*
              * Decrement the count of descriptors for each descriptor/event
              * because this I/O request is being removed from the ioq
@@ -282,10 +289,7 @@ ST_HIDDEN void _st_select_find_bad_fd(void)
                 }
             }
 
-            if (pq->thread->flags & _ST_FL_ON_SLEEPQ)
-                _ST_DEL_SLEEPQ(pq->thread);
-            pq->thread->state = _ST_ST_RUNNABLE;
-            _ST_ADD_RUNQ(pq->thread);
+            _ST_REMOVE_IOQ_PTR(pq);
         } else {
             if (_ST_SELECT_MAX_OSFD < pq_max_osfd)
                 _ST_SELECT_MAX_OSFD = pq_max_osfd;
@@ -333,8 +337,9 @@ ST_HIDDEN void _st_select_dispatch(void)
     /* Notify threads that are associated with the selected descriptors */
     if (nfd > 0) {
         _ST_SELECT_MAX_OSFD = -1;
-        for (q = _ST_IOQ.next; q != &_ST_IOQ; q = q->next) {
+        for (q = _ST_IOQ.next; q != &_ST_IOQ;) {
             pq = _ST_POLLQUEUE_PTR(q);
+            q = q->next;
             notify = 0;
             epds = pq->pds + pq->npds;
             pq_max_osfd = -1;
@@ -361,8 +366,6 @@ ST_HIDDEN void _st_select_dispatch(void)
                 }
             }
             if (notify) {
-                ST_REMOVE_LINK(&pq->links);
-                pq->on_ioq = 0;
                 /*
                  * Decrement the count of descriptors for each descriptor/event
                  * because this I/O request is being removed from the ioq
@@ -387,10 +390,7 @@ ST_HIDDEN void _st_select_dispatch(void)
                     }
                 }
 
-                if (pq->thread->flags & _ST_FL_ON_SLEEPQ)
-                    _ST_DEL_SLEEPQ(pq->thread);
-                pq->thread->state = _ST_ST_RUNNABLE;
-                _ST_ADD_RUNQ(pq->thread);
+                _ST_REMOVE_IOQ_PTR(pq);
             } else {
                 if (_ST_SELECT_MAX_OSFD < pq_max_osfd)
                     _ST_SELECT_MAX_OSFD = pq_max_osfd;
@@ -541,8 +541,9 @@ ST_HIDDEN void _st_poll_dispatch(void)
     /* Notify threads that are associated with the selected descriptors */
     if (nfd > 0) {
         pollfds = _ST_POLLFDS;
-        for (q = _ST_IOQ.next; q != &_ST_IOQ; q = q->next) {
+        for (q = _ST_IOQ.next; q != &_ST_IOQ;) {
             pq = _ST_POLLQUEUE_PTR(q);
+            q = q->next;
             epds = pollfds + pq->npds;
             for (pds = pollfds; pds < epds; pds++) {
                 if (pds->revents)
@@ -550,13 +551,8 @@ ST_HIDDEN void _st_poll_dispatch(void)
             }
             if (pds < epds) {
                 memcpy(pq->pds, pollfds, sizeof(struct pollfd) * pq->npds);
-                ST_REMOVE_LINK(&pq->links);
-                pq->on_ioq = 0;
 
-                if (pq->thread->flags & _ST_FL_ON_SLEEPQ)
-                    _ST_DEL_SLEEPQ(pq->thread);
-                pq->thread->state = _ST_ST_RUNNABLE;
-                _ST_ADD_RUNQ(pq->thread);
+                _ST_REMOVE_IOQ_PTR(pq);
 
                 _ST_POLL_OSFD_CNT -= pq->npds;
                 ST_ASSERT(_ST_POLL_OSFD_CNT >= 0);
@@ -901,8 +897,9 @@ ST_HIDDEN void _st_kq_dispatch(void)
 
         _st_kq_data->dellist_cnt = 0;
 
-        for (q = _ST_IOQ.next; q != &_ST_IOQ; q = q->next) {
+        for (q = _ST_IOQ.next; q != &_ST_IOQ;) {
             pq = _ST_POLLQUEUE_PTR(q);
+            q = q->next;
             notify = 0;
             epds = pq->pds + pq->npds;
                      
@@ -922,8 +919,6 @@ ST_HIDDEN void _st_kq_dispatch(void)
                 }
             }
             if (notify) {
-                ST_REMOVE_LINK(&pq->links);
-                pq->on_ioq = 0;
                 for (pds = pq->pds; pds < epds; pds++) {
                     osfd = pds->fd;
                     events = pds->events;
@@ -949,10 +944,7 @@ ST_HIDDEN void _st_kq_dispatch(void)
                     }
                 }
 
-                if (pq->thread->flags & _ST_FL_ON_SLEEPQ)
-                    _ST_DEL_SLEEPQ(pq->thread);
-                pq->thread->state = _ST_ST_RUNNABLE;
-                _ST_ADD_RUNQ(pq->thread);
+                _ST_REMOVE_IOQ_PTR(pq);
             }
         }
 
@@ -1287,8 +1279,9 @@ ST_HIDDEN void _st_epoll_dispatch(void)
             }
         }
 
-        for (q = _ST_IOQ.next; q != &_ST_IOQ; q = q->next) {
+        for (q = _ST_IOQ.next; q != &_ST_IOQ;) {
             pq = _ST_POLLQUEUE_PTR(q);
+            q = q->next;
             notify = 0;
             epds = pq->pds + pq->npds;
 
@@ -1317,18 +1310,13 @@ ST_HIDDEN void _st_epoll_dispatch(void)
                 }
             }
             if (notify) {
-                ST_REMOVE_LINK(&pq->links);
-                pq->on_ioq = 0;
                 /*
                  * Here we will only delete/modify descriptors that
                  * didn't fire (see comments in _st_epoll_pollset_del()).
                  */
                 _st_epoll_pollset_del(pq->pds, pq->npds);
 
-                if (pq->thread->flags & _ST_FL_ON_SLEEPQ)
-                    _ST_DEL_SLEEPQ(pq->thread);
-                pq->thread->state = _ST_ST_RUNNABLE;
-                _ST_ADD_RUNQ(pq->thread);
+                _ST_REMOVE_IOQ_PTR(pq);
             }
         }
 
