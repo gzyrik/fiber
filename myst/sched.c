@@ -41,6 +41,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <time.h>
 #include <errno.h>
 #include "common.h"
@@ -863,59 +864,153 @@ static int fbytes(char* str, unsigned size)
     i = sprintf(str, "%d", size);
   return i;
 }
-char* st_thread_stats(st_thread_t thread, const char* format)
+char* st_thread_stats(st_thread_t thread, const char* p, ...)
 {
   static char ST_STATS[1024];
-  const char* states = "*RFLCSZU", *p = format;
   int i=0;
-  while (*p) {
+  va_list argv;
+  va_start(argv, p);
+  while (*p && i+1 < sizeof(ST_STATS)) {
+    char strbuf[128], padchar;
+    const char *str = strbuf, *format;
+    int len=0, width=0, pad=0, precision=0;
     if (*p != '%') {
       ST_STATS[i++] = *p++;
       continue;
     }
-    ++p;
-    switch(*p) {
-    case '\0': goto clean;
-    case '%': ST_STATS[i++] = *p; break;
-    case 'S':/* STATES Joinable PRIMORDIAL ON_SLEEPQ INTERRUPT TIMEDOUT SHARED_STK */
-              ST_STATS[i++] = (thread->state != _ST_ST_ZOMBIE || thread->term) ? states[thread->state] : '-';
-              ST_STATS[i++] = thread->term ? 'J' : '-';
-              ST_STATS[i++] = (thread->flags & _ST_FL_PRIMORDIAL) ? 'P' : '-';
-              ST_STATS[i++] = (thread->flags & _ST_FL_ON_SLEEPQ) ?  'Q' : '-';
-              ST_STATS[i++] = (thread->flags & _ST_FL_INTERRUPT) ?  'I' : '-';
-              ST_STATS[i++] = (thread->flags & _ST_FL_TIMEDOUT) ?   'T' : '-';
-              ST_STATS[i++] = (thread->flags & _ST_FL_SHARED_STK) ? 'S' : '-';
-              break;
-#ifndef MD_WINDOWS_FIBER 
-    case 's':/* valgrind_stack_id:stk_size/vaddr_size ref_count|stklen */
-#ifndef NVALGRIND
-              i += sprintf(ST_STATS+i, "%lu:", thread->stack->valgrind_stack_id);
-#endif
-              i += fbytes(ST_STATS+i, thread->stack->stk_size);
-              ST_STATS[i++] = '/';
-              i += fbytes(ST_STATS+i, thread->stack->vaddr_size);
-#ifdef ST_SHARED_STACK
-              i += sprintf(ST_STATS+i, " %d", thread->stack->ref_count);
-              ST_STATS[i++] = '|';
-              i += fbytes(ST_STATS+i, thread->stklen);
-#endif
-              break;
-#endif
-    case 'a':
-              i += sprintf(ST_STATS+i, "%p(%p)", thread->start, thread->arg);
-              break;
-#ifdef ST_SHARED_STACK
-    case 'b':
-              i += sprintf(ST_STATS+i, "%p", thread->bsp);
-              break;
-#endif
-    case 'n':
-              i += sprintf(ST_STATS+i,"%s", thread->name);
-              break;
+    format = p++;
+#define PAD_RIGHT 1
+#define PAD_ZERO  2
+#define PAD_ADD   4
+#define PAD_POUND 8
+#define PAD_SPACE 16
+    if (*p == '\0') goto clean;
+    while (*p == '-' || *p == '0' || *p == '+' || *p == '#' || *p == ' ') {
+      if (!(pad&PAD_RIGHT) && *p == '-')
+        pad |= PAD_RIGHT;
+      else if (!(pad&PAD_ZERO) && *p == '0')
+        pad |= PAD_ZERO;
+      else if (!(pad&PAD_ADD) && *p == '+')
+        pad |= PAD_ADD;
+      else if (!(pad&PAD_POUND) && *p == '#')
+        pad |= PAD_POUND;
+      else if (!(pad&PAD_SPACE) && *p == ' ')
+        pad |= PAD_SPACE;
+      else break;
+      ++p;
+    } 
+    for (; *p >= '0' && *p <= '9'; ++p) {
+      width *= 10;
+      width += *p - '0';
     }
-    ++p;
+    if (*p == '.') {
+      ++p;
+      if (*p == '*') precision = -1;
+      else for (; *p >= '0' && *p <= '9'; ++p) {
+        precision *= 10;
+        precision += *p - '0';
+      }
+    }
+    switch(*p++) {
+    case '\0':
+      goto clean;
+    case 'T': {
+      const char* states[] = {"RUNNING", "RUNNABLE", "IO_WAIT", "LOCK_WAIT", "COND_WAIT", "SLEEPING", "ZOMBIE", "SUSPENDED"};
+      switch(*p++) {
+      case '\0':
+        goto clean;
+      case 'a': /* arg */
+        len = sprintf(strbuf, "%p", thread->arg);
+        break;
+      case 'p': /* function */
+        len = sprintf(strbuf, "%p", thread->start);
+        break;
+      case 'n': /* name */
+        len = sprintf(strbuf, "%s", thread->name);
+        break;
+      case 'f':/* flags */
+        len = sprintf(strbuf, "%u", thread->flags);
+        break;
+      case 's':
+        len = sprintf(strbuf, "%d", thread->state);
+        break;
+      case 'F':
+        strbuf[len++] = thread->term ? 'J' : '-';
+        strbuf[len++] = (thread->flags & _ST_FL_PRIMORDIAL) ? 'P' : '-';
+        strbuf[len++] = (thread->flags & _ST_FL_ON_SLEEPQ) ?  'Q' : '-';
+        strbuf[len++] = (thread->flags & _ST_FL_INTERRUPT) ?  'I' : '-';
+        strbuf[len++] = (thread->flags & _ST_FL_TIMEDOUT) ?   'T' : '-';
+        strbuf[len++] = (thread->flags & _ST_FL_SHARED_STK) ? 'S' : '-';
+        break;
+      case 'S':
+        str = (thread->state != _ST_ST_ZOMBIE || thread->term) ? states[thread->state] : "DEAD";
+        len = strlen(str);
+      }} break;
+
+#ifndef MD_WINDOWS_FIBER 
+    case 'S': {
+      switch(*p++) {
+      case '\0':
+        goto clean;
+#ifndef NVALGRIND
+      case 'i': /* valgrind_stack_id */
+        len = sprintf(strbuf, "%lu:", thread->stack->valgrind_stack_id);
+        break;
+#endif
+      case 's':/* stk_size */
+        len = fbytes(strbuf, thread->stack->stk_size);
+        break;
+      case 'v': /* vaddr_size */
+        len = fbytes(strbuf, thread->stack->vaddr_size);
+        break;
+#ifdef ST_SHARED_STACK
+      case 'r': /* sstk ref_count */
+        len = sprintf(strbuf, " %d", thread->stack->ref_count);
+        break;
+      case 'l': /* sstk size */
+        len = fbytes(strbuf, thread->stklen);
+        break;
+      case 'b': /* base sp */
+        len = sprintf(strbuf, "%p", thread->bsp);
+      }} break;
+#endif
+#endif
+      /* standards */
+    case 's':
+      str = va_arg(argv, const char*);
+      if (str) len = strlen(str);
+      break;
+    case 'd':
+      len = sprintf(strbuf, "%d", va_arg(argv, int));
+      break;
+    case '%':
+      strbuf[0] = '%';
+      len = 1;
+    }
+    if (precision == -1) width = va_arg(argv, int);
+    padchar = (pad & PAD_ZERO) ? '0' : ' ';
+    if (len + i + 1 >=  sizeof(ST_STATS)) {
+      len = sizeof(ST_STATS) - i - 1;
+      width = 0;
+    }
+    else if (len >= width)
+      width = 0;
+    else if (width + i + 1 >= sizeof(ST_STATS))
+      width = sizeof(ST_STATS) - i - 1 - len;
+    else
+      width -= len;
+
+    if (!(pad & PAD_RIGHT)) {
+      for ( ; width > 0; --width) ST_STATS[i++] = padchar;
+    }
+    if (len > 0)  {
+      strncpy(ST_STATS+i, str, len);
+      i += len;
+    }
+    for ( ; width > 0; --width) ST_STATS[i++] = padchar;
   }
 clean:
+  va_end(argv);
   ST_STATS[i++] = '\0';
   return ST_STATS;
 }

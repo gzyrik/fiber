@@ -144,7 +144,7 @@ extern st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb);
 extern st_thread_t st_thread_self(void);
 /** if |name| != NULL, set the thread or NULL(self), return old name */ 
 const char* st_thread_name(st_thread_t thread, const char *name);
-extern char* st_thread_stats(st_thread_t thread, const char* format);
+extern char* st_thread_stats(st_thread_t thread, const char* format, ...);
 /** WARNING: MUST destruction local object manually before this */
 extern void st_thread_exit(void *retval);
 extern int st_thread_join(st_thread_t thread, void **retvalp);

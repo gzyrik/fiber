@@ -2,16 +2,16 @@
 #include <iostream>
 static void on_switch_cb_out(st_thread_t thread)
 {
-  std::cerr << st_thread_stats(thread, "O:%S\t%n\t%b\n");
+  std::cerr << st_thread_stats(thread, "O:%-8Tn %TS\t%TF\t%Sl\n");
 }
 static void on_switch_cb_in(st_thread_t thread)
 {
-  std::cerr << st_thread_stats(thread, "I:%S\t%n\t%b\n");
+  std::cerr << st_thread_stats(thread, "I:%Tn\n");
 }
 static void on_iterate_cb(st_thread_t thread, int flags)
 {
   const char* messg[]={"", "begin", "end", "error"};
-  fprintf(stderr, "%s: Iteration %s\n", st_thread_stats(thread, "%n"), messg[flags&0x3]);
+  std::cerr << st_thread_stats(thread, "%4Tn: Iteration %s\n", messg[flags&0x3]);
 }
 int main(int argc, char *argv[])
 {
