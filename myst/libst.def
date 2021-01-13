@@ -32,10 +32,13 @@ st_read
 st_read_fully 
 st_read_resid 
 st_recvfrom 
+st_send 
+st_recv 
 st_sendto 
 st_sleep 
 st_thread_create 
 st_thread_exit 
+st_thread_atexit 
 st_thread_getspecific 
 st_thread_interrupt 
 st_thread_join 
@@ -61,6 +64,7 @@ _st_iterate_threads_cb
 st_iterate_threads
 st_thread_name
 st_thread_stats
+st_bind
 _st_errno
 closesocket
 bind

@@ -393,6 +393,12 @@ static void *_st_idle_thread_start(void *arg)
   return NULL;
 }
 
+void st_thread_atexit(st_thread_t thread, void (*cb)(void* arg, void* retval), void* arg)
+{
+  if (!thread) thread = _ST_CURRENT_THREAD();
+  thread->atexit_cb = cb;
+  thread->atexit_arg = arg;
+}
 
 void st_thread_exit(void *retval)
 {
@@ -402,6 +408,8 @@ void st_thread_exit(void *retval)
   _st_thread_cleanup(thread);
   _st_active_count--;
   thread->state = _ST_ST_ZOMBIE;
+  if (thread->atexit_cb)
+    thread->atexit_cb(thread->atexit_arg, retval);
   if (thread->term) {
     /* Put thread on the zombie queue */
     _ST_ADD_ZOMBIEQ(thread);
@@ -851,163 +859,220 @@ const char* st_thread_name(st_thread_t thread, const char *name)
   if (name) thread->name = name;
   return old;
 }
-static int fbytes(char* str, unsigned size)
+static int sfmt_size(char* str, unsigned size)
 {
-  int i;
   if (size >= 1024*1024*1024)
-    i = sprintf(str, "%dG", size/1024/1024/1024);
+    return sprintf(str, "%dG", size/1024/1024/1024);
   else if (size >= 1024*1024)
-    i = sprintf(str, "%dM", size/1024/1024);
+    return sprintf(str, "%dM", size/1024/1024);
   else if (size >= 1024)
-    i = sprintf(str, "%dK", size/1024);
+    return sprintf(str, "%dK", size/1024);
   else
-    i = sprintf(str, "%d", size);
-  return i;
+    return sprintf(str, "%d", size);
 }
-char* st_thread_stats(st_thread_t thread, const char* p, ...)
+static int sfmt_thread(const char specifier, char *str, st_thread_t thread)
 {
-  static char ST_STATS[1024];
-  int i=0;
-  va_list argv;
-  va_start(argv, p);
-  while (*p && i+1 < sizeof(ST_STATS)) {
-    char strbuf[128], padchar;
-    const char *str = strbuf, *format;
-    int len=0, width=0, pad=0, precision=0;
-    if (*p != '%') {
-      ST_STATS[i++] = *p++;
-      continue;
-    }
-    format = p++;
+  int i = 0;
+  const char* states[] = {
+    "RUNNING", "RUNNABLE", "IO_WAIT", "LOCK_WAIT", "COND_WAIT", "SLEEPING", "ZOMBIE", "SUSPENDED"};
+  switch(specifier) {
+  case '\0':
+    return -1;
+  case 'a': /* arg */
+    return sprintf(str, "%p", thread->arg);
+  case 'p': /* function */
+    return sprintf(str, "%p", thread->start);
+  case 'n': /* name */
+    return sprintf(str, "%s", thread->name);
+  case 'f':/* flags */
+    return sprintf(str, "%u", thread->flags);
+  case 's':
+    return sprintf(str, "%d", thread->state);
+  case 'F':
+    str[i++] = thread->term ? 'J' : '-';
+    str[i++] = (thread->flags & _ST_FL_PRIMORDIAL) ? 'P' : '-';
+    str[i++] = (thread->flags & _ST_FL_ON_SLEEPQ) ?  'Q' : '-';
+    str[i++] = (thread->flags & _ST_FL_INTERRUPT) ?  'I' : '-';
+    str[i++] = (thread->flags & _ST_FL_TIMEDOUT) ?   'T' : '-';
+    str[i++] = (thread->flags & _ST_FL_SHARED_STK) ? 'S' : '-';
+    return i;
+  case 'S':
+    if (thread->state != _ST_ST_ZOMBIE || thread->term)
+      strcpy(str, states[thread->state]);
+    else
+      strcpy(str, "DEAD");
+    return strlen(str);
+  }
+  return 0;
+}
+#ifndef MD_WINDOWS_FIBER
+static int sfmt_stack(const char specifier, char *str, st_thread_t thread)
+{
+  switch(specifier) {
+  case '\0':
+    return -1;
+#ifndef NVALGRIND
+  case 'i': /* valgrind_stack_id */
+    return sprintf(str, "%lu:", thread->stack->valgrind_stack_id);
+#endif
+  case 's':/* stk_size */
+    return sfmt_size(str, thread->stack->stk_size);
+  case 'v': /* vaddr_size */
+    return sfmt_size(str, thread->stack->vaddr_size);
+#ifdef ST_SHARED_STACK
+  case 'r': /* sstk ref_count */
+    return sprintf(str, " %d", thread->stack->ref_count);
+  case 'l': /* sstk size */
+    return sfmt_size(str, thread->stklen);
+  case 'b': /* base sp */
+    return sprintf(str, "%p", thread->bsp);
+#endif
+  }
+  return 0;
+}
+#endif
 #define PAD_RIGHT 1
 #define PAD_ZERO  2
 #define PAD_ADD   4
 #define PAD_POUND 8
 #define PAD_SPACE 16
-    if (*p == '\0') goto clean;
-    while (*p == '-' || *p == '0' || *p == '+' || *p == '#' || *p == ' ') {
-      if (!(pad&PAD_RIGHT) && *p == '-')
-        pad |= PAD_RIGHT;
-      else if (!(pad&PAD_ZERO) && *p == '0')
-        pad |= PAD_ZERO;
-      else if (!(pad&PAD_ADD) && *p == '+')
-        pad |= PAD_ADD;
-      else if (!(pad&PAD_POUND) && *p == '#')
-        pad |= PAD_POUND;
-      else if (!(pad&PAD_SPACE) && *p == ' ')
-        pad |= PAD_SPACE;
-      else break;
-      ++p;
-    } 
+typedef struct {
+  char padchar;
+  int width, pad, precision;
+  char *str;
+  int len;
+} pformat_t;
+static const char* parse_format(const char* p, pformat_t* fmt, char* strbuf)
+{
+  memset(fmt, 0, sizeof(pformat_t));
+  fmt->str = strbuf;
+  while (*p == '-' || *p == '0' || *p == '+' || *p == '#' || *p == ' ') {
+    if (!(fmt->pad&PAD_RIGHT) && *p == '-')
+      fmt->pad |= PAD_RIGHT;
+    else if (!(fmt->pad&PAD_ZERO) && *p == '0')
+      fmt->pad |= PAD_ZERO;
+    else if (!(fmt->pad&PAD_ADD) && *p == '+')
+      fmt->pad |= PAD_ADD;
+    else if (!(fmt->pad&PAD_POUND) && *p == '#')
+      fmt->pad |= PAD_POUND;
+    else if (!(fmt->pad&PAD_SPACE) && *p == ' ')
+      fmt->pad |= PAD_SPACE;
+    else break;
+    ++p;
+  } 
+  if (*p == '*') {
+    ++p;
+    fmt->width = -1;
+  }
+  else {
     for (; *p >= '0' && *p <= '9'; ++p) {
-      width *= 10;
-      width += *p - '0';
+      fmt->width *= 10;
+      fmt->width += *p - '0';
     }
-    if (*p == '.') {
+  }
+  if (*p == '.') {
+    ++p;
+    if (*p == '*') {
       ++p;
-      if (*p == '*') precision = -1;
-      else for (; *p >= '0' && *p <= '9'; ++p) {
-        precision *= 10;
-        precision += *p - '0';
+      fmt->precision = -1;
+    }
+    else {
+      for (; *p >= '0' && *p <= '9'; ++p) {
+        fmt->precision *= 10;
+        fmt->precision += *p - '0';
       }
     }
+  }
+  fmt->padchar = (fmt->pad & PAD_ZERO) ? '0' : ' ';
+  return p;
+}
+static int copy_format(char* dst, const size_t size, pformat_t* fmt)
+{
+  int pad = 0;
+  if (fmt->len > size)
+    fmt->len = size;
+  else if (fmt->len >= fmt->width)
+    pad = 0;
+  else if (fmt->width > size)
+    pad = size - fmt->len;
+  else
+    pad = fmt->width - fmt->len;
+
+  fmt->width = pad + fmt->len;
+  if (!(fmt->pad & PAD_RIGHT))
+    for (; pad; --pad) *dst++ = fmt->padchar;
+  for (; fmt->len; --fmt->len) *dst++ = *fmt->str++;
+  for (; pad; --pad) *dst++ = fmt->padchar;
+  return fmt->width;
+}
+char* st_thread_stats(st_thread_t thread, const char* p, ...)
+{
+  int i=0;
+  va_list argv;
+  char format[16] = "%d";
+  char strbuf[128];
+  static char ST_STATS[1024];
+  va_start(argv, p);
+  while (*p && i+1 < sizeof(ST_STATS)) {
+    pformat_t pfmt;
+    if (*p != '%') {
+      ST_STATS[i++] = *p++;
+      continue;
+    }
+    p = parse_format(++p, &pfmt, strbuf);
+    if (pfmt.width == -1) 
+      pfmt.width = va_arg(argv, int);
+    if (pfmt.precision == -1)
+      pfmt.precision = va_arg(argv, int);
     switch(*p++) {
     case '\0':
       goto clean;
-    case 'T': {
-      const char* states[] = {"RUNNING", "RUNNABLE", "IO_WAIT", "LOCK_WAIT", "COND_WAIT", "SLEEPING", "ZOMBIE", "SUSPENDED"};
-      switch(*p++) {
-      case '\0':
-        goto clean;
-      case 'a': /* arg */
-        len = sprintf(strbuf, "%p", thread->arg);
-        break;
-      case 'p': /* function */
-        len = sprintf(strbuf, "%p", thread->start);
-        break;
-      case 'n': /* name */
-        len = sprintf(strbuf, "%s", thread->name);
-        break;
-      case 'f':/* flags */
-        len = sprintf(strbuf, "%u", thread->flags);
-        break;
-      case 's':
-        len = sprintf(strbuf, "%d", thread->state);
-        break;
-      case 'F':
-        strbuf[len++] = thread->term ? 'J' : '-';
-        strbuf[len++] = (thread->flags & _ST_FL_PRIMORDIAL) ? 'P' : '-';
-        strbuf[len++] = (thread->flags & _ST_FL_ON_SLEEPQ) ?  'Q' : '-';
-        strbuf[len++] = (thread->flags & _ST_FL_INTERRUPT) ?  'I' : '-';
-        strbuf[len++] = (thread->flags & _ST_FL_TIMEDOUT) ?   'T' : '-';
-        strbuf[len++] = (thread->flags & _ST_FL_SHARED_STK) ? 'S' : '-';
-        break;
-      case 'S':
-        str = (thread->state != _ST_ST_ZOMBIE || thread->term) ? states[thread->state] : "DEAD";
-        len = strlen(str);
-      }} break;
-
+    case 'T':
+      pfmt.len = sfmt_thread(*p++, strbuf, thread);
+      break;
 #ifndef MD_WINDOWS_FIBER 
-    case 'S': {
-      switch(*p++) {
-      case '\0':
-        goto clean;
-#ifndef NVALGRIND
-      case 'i': /* valgrind_stack_id */
-        len = sprintf(strbuf, "%lu:", thread->stack->valgrind_stack_id);
-        break;
-#endif
-      case 's':/* stk_size */
-        len = fbytes(strbuf, thread->stack->stk_size);
-        break;
-      case 'v': /* vaddr_size */
-        len = fbytes(strbuf, thread->stack->vaddr_size);
-        break;
-#ifdef ST_SHARED_STACK
-      case 'r': /* sstk ref_count */
-        len = sprintf(strbuf, " %d", thread->stack->ref_count);
-        break;
-      case 'l': /* sstk size */
-        len = fbytes(strbuf, thread->stklen);
-        break;
-      case 'b': /* base sp */
-        len = sprintf(strbuf, "%p", thread->bsp);
-      }} break;
-#endif
+    case 'S':
+      pfmt.len = sfmt_stack(*p++, strbuf, thread);
+      break;
 #endif
       /* standards */
-    case 's':
-      str = va_arg(argv, const char*);
-      if (str) len = strlen(str);
-      break;
-    case 'd':
-      len = sprintf(strbuf, "%d", va_arg(argv, int));
-      break;
     case '%':
-      strbuf[0] = '%';
-      len = 1;
+      ST_STATS[i++] = '%';
+      continue;
+    case 'B':
+      pfmt.len = sfmt_size(strbuf, va_arg(argv, size_t));
+      break;
+    case 's':
+      if (pfmt.str = va_arg(argv, char*))
+        pfmt.len = strlen(pfmt.str);
+      break;
+    case 'p':
+      pfmt.len = sprintf(strbuf, "%p", va_arg(argv, void*));
+      break;
+    case 'o':
+    case 'u':
+    case 'c':
+    case 'X':
+    case 'x':
+    case 'd':
+      format[1] = p[-1];
+      pfmt.len = sprintf(strbuf, format, va_arg(argv, int));
+      break;
+    case 'f':
+    case 'F':
+    case 'e':
+    case 'E':
+    case 'g':
+    case 'G':
+    case 'a':
+    case 'A':
+      format[1] = p[-1];
+      pfmt.len = sprintf(strbuf, format, va_arg(argv, double));
+      break;
     }
-    if (precision == -1) width = va_arg(argv, int);
-    padchar = (pad & PAD_ZERO) ? '0' : ' ';
-    if (len + i + 1 >=  sizeof(ST_STATS)) {
-      len = sizeof(ST_STATS) - i - 1;
-      width = 0;
-    }
-    else if (len >= width)
-      width = 0;
-    else if (width + i + 1 >= sizeof(ST_STATS))
-      width = sizeof(ST_STATS) - i - 1 - len;
-    else
-      width -= len;
-
-    if (!(pad & PAD_RIGHT)) {
-      for ( ; width > 0; --width) ST_STATS[i++] = padchar;
-    }
-    if (len > 0)  {
-      strncpy(ST_STATS+i, str, len);
-      i += len;
-    }
-    for ( ; width > 0; --width) ST_STATS[i++] = padchar;
+    if (pfmt.len < 0) goto clean;
+    else if (pfmt.len > 0) 
+      i += copy_format(ST_STATS+i, sizeof(ST_STATS) - i - 1, &pfmt);
   }
 clean:
   va_end(argv);
@@ -1020,6 +1085,7 @@ clean:
 st_iterate_cb_t _st_iterate_threads_cb = NULL;
 void st_iterate_threads(st_iterate_cb_t cb)
 {
+  ST_ASSERT(!_st_iterate_threads_cb && !_st_iterate_thread);
   _st_iterate_threads_cb = cb;
   _st_iterate_schedule();
 }

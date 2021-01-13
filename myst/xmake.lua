@@ -2,7 +2,7 @@ is_termux = os.getenv"PREFIX"
 is_termux = is_termux and string.find(is_termux, "com.termux")
 
 if is_mode("release") then add_defines("NDEBUG") end
-includes("examples")
+includes("examples", "http")
 target("st")
   add_files("event.c","io.c","sched.c","sync.c", "stk.c", "key.c")
   if is_plat("windows") then

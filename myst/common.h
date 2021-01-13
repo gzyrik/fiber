@@ -220,6 +220,8 @@ struct _st_thread {
 
   _st_cond_t *term;           /* Termination condition variable for join */
   _st_pollq_t pq;             /* For putting on io_q queue */
+  void (*atexit_cb)(void* arg, void* retval);
+  void* atexit_arg;
 };
 
 
