@@ -14,7 +14,7 @@ typedef struct {
 typedef struct {
   http_key_t method;
   http_val_t path;
-  int minor;
+  http_val_t version;
   ssize_t contentLength;
   size_t headerNumber;
   http_header_t *header;

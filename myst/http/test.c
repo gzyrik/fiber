@@ -4,6 +4,8 @@
 static void* handle_root(http_handler_t* self, http_t* http, http_session_t* session)
 {
     size_t i;
+    fprintf(stderr, "%.*s\n",
+        (int)session->version.len, session->version.ptr);
     fprintf(stderr, "%.*s:%.*s\n",
         (int)session->method.len, session->method.ptr, (int)session->path.len, session->path.ptr);
     for (i=0; i<session->headerNumber; ++i) {

@@ -4,10 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <stdarg.h>
 #include <stdio.h>
 typedef struct _http_session  _http_session;
-static ssize_t parse_request(_http_session *session);
 struct _http_context {
   st_cond_t term;
   _http_session* session;
@@ -101,8 +99,14 @@ static int read_line(_http_session* s, char* line)
 int http_read(http_session_t* session, char* data, size_t length)
 {
   _http_session* s= (_http_session*)session;
-  if (!s->http->context->thread) return -1; /* quiting */
-  if (s->closedRead) return -1; /* over */
+  if (!s->http->context->thread) {
+    errno = EPERM;
+    return -1; /* quiting */
+  }
+  if (s->closedRead) {
+    errno = EILSEQ;
+    return -1; /* over */
+  }
   if (s->chunkedRead) {
     char line[128];
     size_t n, i=0;
@@ -140,22 +144,29 @@ int http_redirect(http_session_t* session,  const char* url)
 int http_set_status(http_session_t* session, int statusCode)
 {
   _http_session* s= (_http_session*)session;
-  if (!s->http->context->thread) return -1; /* quiting */
-  if (s->closedWrite) return -1; /* over */
-  if (s->status == 0) return -1; /* already sent */
-  if (statusCode <= 0) return -1;
+  if (!s->http->context->thread || s->status == 0 || s->closedWrite) {
+    errno = EPERM;
+    return -1;
+  }
+  if (statusCode <= 0) {
+    errno = EINVAL;
+    return -1;
+  }
   s->status = statusCode;
   return 0;
 }
 int http_set_header(http_session_t* session, const char* key, const char* val)
 {
   size_t klen, vlen;
-  va_list argv;
   _http_session* s= (_http_session*)session;
-  if (!s->http->context->thread) return -1; /* quiting */
-  if (s->closedWrite) return -1; /* over */
-  if (s->status == 0) return -1; /* already sent */
-  if (!key || !val) return -1;
+  if (!s->http->context->thread || s->status == 0 || s->closedWrite) {
+    errno = EPERM;
+    return -1;
+  }
+  if (!key || !val) {
+    errno = EINVAL;
+    return -1;
+  }
   while (isspace(*key)) ++key;
   while (isspace(*val)) ++val;
   klen = strlen(key);
@@ -164,21 +175,19 @@ int http_set_header(http_session_t* session, const char* key, const char* val)
 
   vlen = strlen(val);
   while (vlen > 0 && isspace(val[vlen-1])) --vlen;
-  if (s->writePos + klen + 1 + vlen + 2 > sizeof(s->buf))
+  if (s->writePos + klen + 1 + vlen + 2 > sizeof(s->buf)) {
+    errno = ENOSPC;
     return -1;
-  memcpy(s->buf + s->writePos, key, klen);
-  s->writePos += klen;
-  s->buf[s->writePos++] = ':';
-  memcpy(s->buf + s->writePos, val, vlen);
-  s->writePos += vlen;
-  s->buf[s->writePos++] = '\r';
-  s->buf[s->writePos++] = '\n';
+  }
 
   if (skeyncmp(key, "Transfer-Encoding", klen) == 0)
     s->chunkedWrite = (strncmp(val, "chunked", vlen) == 0);
   else if (skeyncmp(key, "Content-Length", klen) == 0) {
     s->contentLength = atol(val);
-    if (s->contentLength == -1) return -1;
+    if (s->contentLength == -1) {
+      errno = EINVAL;
+      return -1;
+    }
   }
   else if (skeyncmp(key, "Connection", klen) == 0) {
     if (strncmp(val, "close", vlen) == 0)
@@ -186,6 +195,14 @@ int http_set_header(http_session_t* session, const char* key, const char* val)
     else if (strncmp(val, "keep-alive", vlen) == 0)
       s->keepAlive = 1;
   }
+
+  memcpy(s->buf + s->writePos, key, klen);
+  s->writePos += klen;
+  s->buf[s->writePos++] = ':';
+  memcpy(s->buf + s->writePos, val, vlen);
+  s->writePos += vlen;
+  s->buf[s->writePos++] = '\r';
+  s->buf[s->writePos++] = '\n';
   return 0;
 }
 static const char* status_message(int status)
@@ -230,9 +247,14 @@ static int response_status_header(_http_session* s, size_t contentLength)
 int http_write(http_session_t* session, const char* data, size_t length)
 {
   _http_session* s= (_http_session*)session;
-  if (!s->http->context->thread) return -1; /* quiting */
-  if (s->closedWrite) return -1; /* over */
-  if (s->status == -1) return -1; /* no status */
+  if (!s->http->context->thread || s->status == -1) {
+    errno = EPERM;
+    return -1; /* quiting nor status*/
+  }
+  if (s->closedWrite) {
+    errno = EILSEQ;
+    return -1; /* over */
+  }
   if (s->status > 0 && response_status_header(s, length) < 0)
     return -1;
   if (s->chunkedWrite) {
@@ -249,9 +271,13 @@ int http_write(http_session_t* session, const char* data, size_t length)
       s->closedWrite = 1;
     return st_send(s->netfd, "\r\n", 2, 0, ST_UTIME_NO_TIMEOUT);
   }
-  s->contentOffset += length;
-  if (s->contentOffset > (size_t)s->contentLength) return -1;
-  if (s->contentOffset == s->contentLength) s->closedWrite = 1;
+  if (s->contentLength >= 0) {
+    if (s->contentOffset + length >= (size_t)s->contentLength) {
+      length = s->contentLength - s->contentOffset;
+      s->closedWrite = 1;
+    }
+    s->contentOffset += length;
+  }
   return st_send(s->netfd, data, length, 0, ST_UTIME_NO_TIMEOUT);
 }
 
@@ -290,14 +316,22 @@ static http_handler_t* find_handler(http_context_t *ctx, http_val_t* path)
   }
   return NULL;
 }
+ssize_t http_parse_request(http_session_t* s, const size_t headerSize,
+  const char* const bufptr, const char* const bufend,
+  size_t *pos, char* state);
 static void* session_thread(void* session)
 {
   st_utime_t utime;
-  http_handler_t* handler = NULL;
+  char parser_state;
+  http_handler_t* handler;
   _http_session *s = (_http_session*)session;
 restart:
+  handler = NULL;
+  parser_state = '\0';
   utime = st_utime();
   s->deadtime = utime + s->http->headerTimeout;
+  s->readPos = s->bufLen = 0;
+  s->base.headerNumber = 0;
   do {
     /* read the request */
     ssize_t ret = st_recv(s->netfd, s->buf + s->bufLen,
@@ -309,13 +343,13 @@ restart:
       return "RequestIsTooLongError";
 
     /* parse the request */
-    ret = parse_request(s);
-    if (!handler && s->base.path.len > 0) {
+    ret = http_parse_request(&s->base, sizeof(s->header)/sizeof(s->header[0]),
+      s->buf, s->buf + s->bufLen, &s->readPos, &parser_state);
+    if (ret >= 0 && !handler && s->base.path.len > 0) {
       handler = find_handler(s->http->context, &s->base.path);
       if (!handler) return "NoHandlerError";
     }
     if (ret > 0) {
-      s->readPos = ret;
       qsort(s->base.header, s->base.headerNumber, sizeof(http_header_t), keycmp);
       break; /* successfully parsed the request */
     }
@@ -358,14 +392,13 @@ restart:
 static _http_session* alloc_session(http_context_t* ctx, int stacksize)
 {
   _http_session* session = ctx->free_list;
-  if (session) {
+  if (session) 
     ctx->free_list = session->next;
-    memset(session, 0, sizeof(_http_session));
-  }
-  else {
-    session = calloc(1, sizeof(_http_session));
-    if (!session) return NULL;
-  }
+  else if (!(session=malloc(sizeof(_http_session))))
+    return NULL;
+#ifndef NDEBUG
+  memset(session, 0xFF, sizeof(_http_session));
+#endif
   session->base.header = session->header;
   session->thread = st_thread_create(session_thread, session, 0, stacksize);
   if (!session->thread) {
@@ -405,22 +438,24 @@ static int update_handlers(http_t* http, size_t num)
   http_context_t* ctx = http->context;
   if (!ctx) return 0;
 
-  ctx->handlerNumber += num;
-  if (ctx->handlerNumber > ctx->handlerSize) {
-    ctx->handlerSize = (ctx->handlerNumber/16+1) * 16;
+  num += ctx->handlerNumber;
+  ctx->handlerNumber = 0;
+  if (num > ctx->handlerSize) {
+    ctx->handlerSize = (num/16+1) * 16;
     if (ctx->handler) free(ctx->handler);
-    ctx->handler = calloc(ctx->handlerSize, sizeof(http_handler_t*));
-    if (!ctx->handler) return -1;
+    ctx->handler = malloc(ctx->handlerSize * sizeof(http_handler_t*));
+    if (!ctx->handler) {
+      ctx->handlerSize = 0;
+      return -1;
+    }
   }
-  num = 0;
   h = http->handler;
   while (h)  {
     while (h->path.len > 0 && h->path.ptr[h->path.len-1] == '/')
       h->path.len--;
-    ctx->handler[num++] = h;
+    ctx->handler[ctx->handlerNumber++] = h;
     h = h->next;
   }
-  if (num != ctx->handlerNumber) return -1;
   qsort(ctx->handler, ctx->handlerNumber, sizeof(http_handler_t*), url_cmp);
   return 0;
 }
@@ -431,7 +466,10 @@ static int init_context(http_context_t* ctx, http_t* http)
   memset(ctx, 0, sizeof(http_context_t));
   ctx->thread = st_thread_self();
   while (h) {
-    if (!h->callback || !h->path.len || !h->path.ptr) return -1;
+    if (!h->callback || !h->path.len || !h->path.ptr) {
+      errno = EINVAL;
+      return -1;
+    }
     ++num;
     h = h->next;
   }
@@ -447,8 +485,10 @@ int http_loop(http_t* http, int port, int stacksize)
   http_context_t ctx;
   _http_session* session;
   if (http->headerTimeout > http->sessionTimeout
-    || !http->handler || !http->headerTimeout)
+    || !http->handler || !http->headerTimeout){
+    errno = EINVAL;
     return -1;
+  }
   if (init_context(&ctx, http) != 0)
     return -1;
   if (!(sfd = st_bind(AF_INET, IPPROTO_TCP, port, 128)))
@@ -491,8 +531,10 @@ int http_mount(http_t* http, http_handler_t* handler)
   size_t num = 0;
   http_handler_t* h = handler;
   while (h) {
-    if (!h->callback || !h->path.len || !h->path.ptr) return -1;
-
+    if (!h->callback || !h->path.len || !h->path.ptr) {
+      errno = EINVAL;
+      return -1;
+    }
     ++num;
     if (!h->next) break;
     h = h->next;
@@ -501,20 +543,4 @@ int http_mount(http_t* http, http_handler_t* handler)
   h->next = http->handler;
   http->handler = handler;
   return update_handlers(http, num);
-}
-struct phr_header;
-int phr_parse_request(const char *buf_start, size_t len, const char **method, size_t *method_len,
-  const char **path, size_t *path_len, int *minor_version,
-  struct phr_header *headers, size_t *num_headers, size_t last_len);
-static ssize_t parse_request(_http_session *session)
-{
-  int ret;
-  http_session_t* base = &session->base;
-  base->headerNumber = sizeof(session->header) / sizeof(http_header_t);
-  ret = phr_parse_request(session->buf, session->bufLen,
-    &base->method.ptr, &base->method.len,
-    &base->path.ptr, &base->path.len, &base->minor,
-    (struct phr_header*)session->header, &base->headerNumber, 0);
-  if (ret == -2) return 0;
-  return ret;
 }
