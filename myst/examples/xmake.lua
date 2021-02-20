@@ -26,3 +26,7 @@ target("proxy", {files = "proxy.c"})
 target("lookupdns")
   add_files("lookupdns.c","res.c")
   if not is_termux then add_syslinks("resolv") end
+
+target("http1", {files = "http1.c"})
+target("http2", {files = "http2.c"})
+target("ws1", {files = "ws1.c"})

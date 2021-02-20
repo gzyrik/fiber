@@ -120,14 +120,18 @@
   <ItemGroup>
     <ClInclude Include="common.h" />
     <ClInclude Include="hook.h" />
+    <ClInclude Include="http.h" />
     <ClInclude Include="md.h" />
     <ClInclude Include="st.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="event.c" />
+    <ClCompile Include="http.c" />
+    <ClCompile Include="http_parse.c" />
     <ClCompile Include="io.c" />
     <ClCompile Include="key.c" />
     <ClCompile Include="sched.c" />
+    <ClCompile Include="sha1.c" />
     <ClCompile Include="stk.c" />
     <ClCompile Include="sync.c" />
   </ItemGroup>

@@ -193,9 +193,9 @@ static _st_netfd_t *_st_netfd_new(SOCKET osfd, int nonblock, int is_socket)
 
 #ifdef ST_HOOK_SYS
   if (osfd < 0 || osfd > _st_osfd_limit)
-      return NULL;
+    return NULL;
   if (_st_netfd_hook[osfd] != NULL)
-      return _st_netfd_hook[osfd];
+    return _st_netfd_hook[osfd];
 #endif
 
   if ((*_st_eventsys->fd_new)(osfd) < 0)
@@ -227,7 +227,7 @@ static _st_netfd_t *_st_netfd_new(SOCKET osfd, int nonblock, int is_socket)
       ;
     /* Do it the Posix way */
     else if ((flags = _ST_SYS_CALL(fcntl)(osfd, F_GETFL, 0)) < 0 ||
-        _ST_SYS_CALL(fcntl)(osfd, F_SETFL, flags | O_NONBLOCK) < 0) {
+      _ST_SYS_CALL(fcntl)(osfd, F_SETFL, flags | O_NONBLOCK) < 0) {
       st_netfd_free(fd);
       return NULL;
     }
@@ -953,34 +953,238 @@ clean:
   _ST_SYS_CALL(closesocket)(fd);
   return NULL;
 }
-
-int st_sockaddr(struct sockaddr *sa, int domain, const char* ip, int port)
+static void ip_trim_left(char **pstr)
 {
-  if (domain == AF_INET) {
-    struct sockaddr_in* ipv4 = (struct sockaddr_in*)sa;
-    ipv4->sin_family = AF_INET;
-    ipv4->sin_port = htons (port);
-    if (!ip)
-      ipv4->sin_addr.s_addr = htonl (INADDR_ANY);
-    else if (ip[0])
-      inet_pton(AF_INET, ip, &ipv4->sin_addr);
-    else 
-      ipv4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    return sizeof(*ipv4);
+  char ch;
+  while ((ch = **pstr) != '\0')
+  {
+    if (ch != ' ' && ch != '\t' && ch !=  '\r' && ch != '\n')
+      break;
+    (*pstr) ++;
   }
-  else if (domain == AF_INET6) {
-    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)sa;
-    ipv6->sin6_family = AF_INET6;
-    ipv6->sin6_port = htons (port);
-    if (!ip)
-      ipv6->sin6_addr = in6addr_any;
-    else if (ip[0])
-      inet_pton(AF_INET6, ip, &ipv6->sin6_addr);
-    else
-      ipv6->sin6_addr = in6addr_loopback;
-    return sizeof(*ipv6);
+}
+static void ip_get_token(const char **pstr,char *dst,int dstLen,char *sep)
+{
+  char ch;
+  while (dstLen > 1 && (ch = **pstr) != '\0')
+  {
+    (*pstr) ++;
+    if (ch == ':' || ch == '.' || ch == '/' || ch == '%' || ch == ']')
+    {
+      *sep = ch;
+      *dst = 0;
+      return;
+    }
+    *dst = ch;
+    dst ++;dstLen --;
+  }
+  *sep = 0;
+  *dst = 0;
+}
+static int ip_get_ip4(char *token,unsigned char *dst)
+{
+  int lval;char *end;
+
+  ip_trim_left(&token);
+  if (token[0] == 0)
+    return -1;
+
+  lval = (int)strtol(token,&end,0);
+  if (lval < 0 || lval > 255)
+    return -1;
+
+  ip_trim_left(&end);
+  if (end[0] != 0) return -1;
+
+  dst[0] = (unsigned char)lval;
+  return 0;
+}
+static int ipv4_decode(const char *host,unsigned char *addr,unsigned short* port)
+{
+  char buf[16],sep;
+  int i;
+
+  for (i=0;i<4;i++)
+  {
+    ip_get_token(&host,buf,16,&sep);
+    if (i == 3)
+    {
+      if (sep == ':')
+      {
+        char *end;
+        unsigned short p = (unsigned short)strtol(host,&end,0);
+        if (end[0] != 0 && end[0]!= '/') return -1;
+        if (port) *port = p;
+      }
+      else if (sep != '\0')
+        return -1;
+    }
+    else if (sep != '.')
+      return -1;
+    if (ip_get_ip4(buf,addr) < 0)
+      return -1;
+    addr ++;
   }
   return 0;
+}
+static int ip_get_ip6(char *token,unsigned char *dst)
+{
+  int lval;char *end;
+
+  ip_trim_left(&token);
+  if (token[0] == 0)
+    return 1;
+
+  lval = (int)strtol(token,&end,16);
+  if (lval < 0 || lval > 65535)
+    return -1;
+
+  ip_trim_left(&end);
+  if (end[0] != 0) return -1;
+
+  dst[0] = (unsigned char)(lval>>8);
+  dst[1] = (unsigned char)(lval>>0);
+  return 0;
+}
+static int ipv6_decode(const char *host,unsigned char *addr,unsigned short* port)
+{
+  char buf[16],sep;
+  unsigned char *paddr = addr;
+  unsigned char *pzero = 0;
+  int i,ret;
+  char endch = '\0';
+  if (*host == '['){
+    ++host;
+    endch = ']';
+  }
+
+  for (i=0;i<8;i++)
+  {
+    ip_get_token(&host,buf,16,&sep);
+    if (sep == '.')
+    {
+      if (paddr > addr+12)
+        return -1;
+      if (ip_get_ip4(buf,paddr) < 0)
+        return -1;
+      paddr ++;
+
+      for (i=0;i<3;i++)
+      {
+        ip_get_token(&host,buf,16,&sep);
+        if (sep != ((i==2)?endch:'.'))
+          return -1;
+        if (ip_get_ip4(buf,paddr) < 0)
+          return -1;
+        paddr ++;
+      }
+      break;
+    }
+
+    ret = ip_get_ip6(buf,paddr);
+    if (ret < 0) return -1;
+
+    if (ret == 0)
+    {
+      if (pzero && i == 1)
+        return -1;
+      paddr += 2;
+      if (sep == 0 || sep == '/' || sep == '%' || sep == endch)
+        break;
+      if (paddr >= addr+16)
+        return -1;
+      continue;
+    }
+
+    if (sep == 0 || sep == '/' || sep == '%' || sep == endch)
+      break;
+    if (pzero != 0 && i > 1)
+      return -1;
+    pzero = paddr;
+  }
+
+  if (sep != 0 && sep != endch)
+  {
+    int lval;char *end;
+    ip_get_token(&host,buf,16,&sep);
+    if (sep != endch || buf[0] == 0)
+      return -1;
+
+    lval = (int)strtol(buf,&end,16);
+    if (lval < 0 || lval > 128)
+      return -1;
+  }
+
+  if (!pzero)
+  {
+    if (paddr != addr+16)
+      return -1;
+  }
+  else
+  {
+    addr += 16;
+    if (addr != paddr)
+    {
+      while (paddr != pzero)
+      {
+        addr[-1] = paddr[-1];
+        addr[-2] = paddr[-2];
+        addr -= 2;paddr -= 2;
+      }
+      while (addr != pzero)
+      {
+        addr[-1] = 0;
+        addr[-2] = 0;
+        addr -= 2;
+      }
+    }
+  }
+  if (sep == ']')
+  {
+    if (*host == ':')
+    {
+      char *end;
+      unsigned short p = (unsigned short)strtol(host+1,&end,0);
+      if (end[0] != 0 && end[0] != '/') return -1;
+      if (port) *port = p;
+    }
+    else if (*host != 0)
+      return -1;
+  }
+  return 0;
+}
+
+int st_sockaddr(struct sockaddr *sa, int domain, const char* addr, unsigned short port)
+{
+  while (domain == AF_INET6 || domain == AF_UNSPEC) {
+    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)sa;
+    ipv6->sin6_family = AF_INET6;
+    if (!addr)
+      ipv6->sin6_addr = in6addr_any;
+    else if (!addr[0])
+      ipv6->sin6_addr = in6addr_loopback;
+    else if (ipv6_decode(addr,(unsigned char *)&ipv6->sin6_addr.s6_addr, &port) < 0) {
+      if (domain == AF_INET6) return -1;
+      break;
+    }
+    ipv6->sin6_port = htons (port);
+    return sizeof(*ipv6);
+  } while (0);
+  while (domain == AF_INET || domain == AF_UNSPEC) {
+    struct sockaddr_in* ipv4 = (struct sockaddr_in*)sa;
+    ipv4->sin_family = AF_INET;
+    if (!addr)
+      ipv4->sin_addr.s_addr = htonl (INADDR_ANY);
+    else if (!addr[0])
+      ipv4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    else if (ipv4_decode(addr,(unsigned char *)&ipv4->sin_addr.s_addr, &port) < 0) {
+      if (domain == AF_INET) return -1;
+      break;
+    }
+    ipv4->sin_port = htons (port);
+    return sizeof(*ipv4);
+  }
+  return -1;
 }
 const char* st_inetaddr(const struct sockaddr *sa, int addrlen, int *domain, int *port)
 {

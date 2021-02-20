@@ -5,6 +5,7 @@ if is_mode("release") then add_defines("NDEBUG") end
 includes("examples", "http")
 target("st")
   add_files("event.c","io.c","sched.c","sync.c", "stk.c", "key.c")
+  add_files("http.c", "http_parse.c", "sha1.c")
   if is_plat("windows") then
       set_kind("shared")
       add_shflags("/def:myst/libst.def")

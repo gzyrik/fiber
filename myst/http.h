@@ -1,7 +1,14 @@
-#ifndef _HTTP
-#define _HTTP
-#include "../st.h"
+#ifndef __ST_HTTP_H__
+#define __ST_HTTP_H__
+#include "st.h"
 #include <stdio.h>
+#if __GNUC__
+#pragma GCC visibility push(default)
+#endif
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** 字符串引用
  * http_key_t 引用忽略大小写的字符串
  * http_val_t 引用大小写敏感的字符串
@@ -42,12 +49,24 @@ const http_val_t* http_get_value(const http_session_t* session, const char* key)
 int http_read(const http_session_t* session, char* data, size_t length);
 /** 设置响应值 */
 int http_set_status(const http_session_t* session, int status);
-/** 设置响应属性 */
+/** 设置响应或代理属性 */
 int http_set_header(const http_session_t* session, const char* key, const char* value);
 /** 写入响应数据流 */
 int http_write(const http_session_t* session, const char* data, size_t length);
 /** 设置跳转地址 */
 int http_redirect(const http_session_t* session,  const char* url);
+/** 执行代理
+ * @param[in] url 末尾'/'表示绝对根路径,反之前缀添加path
+ * @retval 失败返回负数
+ * @note
+ * 例如当前 /proxy/test.html
+ * - 设置url='http://127.0.0.1/', 代理 http://127.0.0.1/test.html
+ * - 设置url='http://127.0.0.1',  代理 http://127.0.0.1/proxy/test.html
+ * - 设置url='http://127.0.0.1/aaa/', 代理 http://127.0.0.1/aaa/test.html
+ * - 设置url='http://127.0.0.1/aaa',  代理 http://127.0.0.1/aaatest.html
+ */
+int http_proxy_loop(const http_session_t* session, const char* url);
+
 
 enum {
   WS_CONTINUATION    = 0x00,
@@ -94,7 +113,7 @@ int websocket_send(websocket_t* websocket, int flags, char* data, size_t length)
 typedef struct http_handler_t http_handler_t;
 
 /** 路径处理器
- * - path 忽略大小写的路径并忽略末尾的'/'
+ * - path 忽略大小写的路径,通常以'/'开头并忽略末尾的'/'
  * - callback 处理函数
  * - 用于链式管理的私有指针
  */
@@ -108,8 +127,10 @@ struct http_handler_t {
 typedef struct _http_context http_context_t;
 
 /** http 服务接口
- * - headerTimeout 头部读取超时
- * - sessionTimeout 单个会话总超时
+ * - headerTimeout 每个会话的头部读取超时
+ * - sessionTimeout 每个会话的总超时
+ * - headerBufferSize 每个会话头部字节可能的最大字节数
+ * - headerMaxNumber  每个会话属性可能的最大个数
  * - logFile, logPrintf 日志打印
  * - root 根路径处理句柄,作为无匹配时的默认处理
  * - context 处于循环状态的上下文
@@ -117,6 +138,8 @@ typedef struct _http_context http_context_t;
 struct http_t {
   st_utime_t headerTimeout;
   st_utime_t sessionTimeout;
+  size_t headerBufferSize;
+  size_t headerMaxNumber;
   FILE* logFile;
   int (*logPrintf)(FILE* logFile, const char* const format, ...);
   http_handler_t root;
@@ -146,5 +169,10 @@ int http_mount(http_t* http, http_handler_t* handler);
  * @retval 返回卸载个数
  */
 int http_unmount(http_t* http, const char* path);
-
+#ifdef __cplusplus
+}
+#endif
+#if __GNUC__
+#pragma GCC visibility pop
+#endif
 #endif
