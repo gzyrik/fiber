@@ -4,6 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <stdarg.h>
 typedef struct _http_session  _http_session;
 struct _http_context {
   st_cond_t term;
@@ -18,7 +19,7 @@ struct _http_session {
   http_session_t request;
   _http_session* next;
   http_t* http;
-  http_header_t header[1024]; /* readHeader and writeHeader */
+  http_header_t *header; /* readHeader and writeHeader */
   st_thread_t thread;
   st_netfd_t netfd;
   st_utime_t deadtime;
@@ -59,6 +60,11 @@ static int keycmp(const void *k0, const void* k1)
   const http_key_t *b = k1;
   if (a->len != b->len) return (int)(a->len - b->len);
   return http_strcmp(a->ptr, b->ptr, a->len);
+}
+static int keycmp1(const void *k0, const char* str)
+{
+  const http_key_t *a = k0;
+  return http_strcmp(a->ptr, str, a->len);
 }
 const http_val_t* http_get_value(const http_session_t* session, const char* key)
 {
@@ -168,67 +174,76 @@ int http_set_status(const http_session_t* session, int statusCode)
   s->status = statusCode;
   return 0;
 }
-int http_set_header(const http_session_t* request, const char* key, const char* val)
+static int check_header(_http_session* s, http_header_t* h)
 {
-  size_t klen, vlen;
-  http_header_t* header;
-  _http_session* s= (_http_session*)request;
-  if (!s->http->context->thread || s->status == 0 || s->closedWrite || s->websocket) {
-    errno = EPERM;
-    return -1;
-  }
-  if (!key || !val) {
-    errno = EINVAL;
-    return -1;
-  }
-  if (s->headerNumber >= sizeof(s->header)) {
-    errno = ENOMEM;
-    return -1;
-  }
-  while (isspace(*key)) ++key;
-  while (isspace(*val)) ++val;
-  klen = strlen(key);
-  while (klen > 0 && isspace(key[klen-1])) --klen;
-  if (!klen) return 0;
-
-  vlen = strlen(val);
-  while (vlen > 0 && isspace(val[vlen-1])) --vlen;
-  if (s->writePos + klen + 1 + vlen + 2 > s->http->headerBufferSize*2) {
-    errno = ENOSPC;
-    return -1;
-  }
-
-  if (http_strcmp(key, "Transfer-Encoding", klen) == 0)
-    s->chunkedWrite = (strncmp(val, "chunked", vlen) == 0);
-  else if (http_strcmp(key, "Content-Length", klen) == 0) {
-    s->contentLength = atol(val);
+  if (keycmp1(&h->key, "Transfer-Encoding") == 0)
+    s->chunkedWrite = (keycmp1(&h->val, "chunked") == 0);
+  else if (keycmp1(&h->key, "Content-Length") == 0) {
+    s->contentLength = atol(h->val.ptr);
     if (s->contentLength == -1) {
       errno = EINVAL;
       return -1;
     }
   }
-  else if (http_strcmp(key, "Connection", klen) == 0) {
-    if (strncmp(val, "close", vlen) == 0)
+  else if (keycmp1(&h->key, "Connection") == 0) {
+    if (keycmp1(&h->val, "close") == 0)
       s->keepAlive = 0;
-    else if (strncmp(val, "keep-alive", vlen) == 0)
+    else if (keycmp1(&h->val, "keep-alive") == 0)
       s->keepAlive = 1;
-    else if (strncmp(val, "Upgrade", vlen) == 0)
+    else if (keycmp1(&h->val, "Upgrade") == 0)
       s->keepAlive = 1;
   }
+  return 0;
+}
+int http_set_header(const http_session_t* request, const char* key, const char* fmt, ...)
+{
+  va_list argv;
+  size_t klen, writePos;
+  http_header_t* header;
+  _http_session* s = (_http_session*)request;
+  if (!s || !s->http->context->thread || s->status == 0 || s->closedWrite || s->websocket) {
+    errno = EPERM;
+    return -1;
+  }
+  if (!key || !fmt) {
+    errno = EINVAL;
+    return -1;
+  }
+  if (s->headerNumber >= s->http->headerMaxNumber*2) {
+    errno = ENOMEM;
+    return -1;
+  }
+  while (isspace(*key)) ++key;
+  while (isspace(*fmt)) ++fmt;
+  klen = strlen(key);
+  while (klen > 0 && isspace(key[klen-1])) --klen;
+  if (!klen) return 0;
 
+  if (s->writePos + klen + 1 + strlen(fmt) + 2 > s->http->headerBufferSize*2) {
+    errno = ENOSPC;
+    return -1;
+  }
+
+  writePos = s->writePos;
   header = &s->header[s->headerNumber];
-  header->key.ptr = s->buf + s->writePos;
+  header->key.ptr = s->buf + writePos;
   memcpy(header->key.ptr, key, klen);
   header->key.len = klen;
-  s->writePos += klen;
-  s->buf[s->writePos++] = ':';
+  writePos += klen;
+  s->buf[writePos++] = ':';
 
-  header->val.ptr = s->buf + s->writePos;
-  memcpy(header->val.ptr, val, vlen);
-  header->val.len = vlen;
-  s->writePos += vlen;
-  s->buf[s->writePos++] = '\r';
-  s->buf[s->writePos++] = '\n';
+  header->val.ptr = s->buf + writePos;
+  va_start(argv,fmt);
+  header->val.len = vsprintf(header->val.ptr, fmt, argv);
+  va_end(argv);
+  while (header->val.len > 0 && isspace(header->val.ptr[header->val.len-1]))
+    --header->val.len;
+  writePos += header->val.len;
+  s->buf[writePos++] = '\r';
+  s->buf[writePos++] = '\n';
+  if (check_header(s, header) < 0)
+    return -1;
+  s->writePos = writePos;
   s->headerNumber++;
   return 0;
 }
@@ -327,6 +342,7 @@ int http_write(const http_session_t* session, const char* data, size_t length)
 
 static void free_session(http_context_t* ctx, _http_session *session)
 {
+  if (session->header) free(session->header);
   if (session->buf) free(session->buf);
   if (session->netfd) st_netfd_close(session->netfd);
   session->next = ctx->free_list;
@@ -380,18 +396,46 @@ static void log_request(http_t* http, const http_session_t* session, http_handle
   }
   http->logPrintf(http->logFile, "<\n");
 }
+static http_handler_t* init_session(_http_session *s)
+{
+  http_handler_t* handler; 
+  const http_val_t* val;
+  qsort(s->request.header, s->request.headerNumber, sizeof(http_header_t), keycmp);
+  s->path = s->request.path;
+  s->headerNumber = s->request.headerNumber;
+  handler = find_handler(s->http, &s->request.path);
+  log_request(s->http, (http_session_t*)s, handler);
+
+  val = http_get_value((http_session_t*)s, "Connection");
+  s->keepAlive = (val && keycmp1(val, "keep-alive") == 0);
+  s->request.contentLength = -1;
+  val = http_get_value((http_session_t*)s, "Transfer-Encoding");
+  s->chunkedRead = (val && keycmp1(val, "chunked") == 0);
+  if (!s->chunkedRead) {
+    val = http_get_value((http_session_t*)s, "Content-Length");
+    if (val)
+      s->request.contentLength = atol(val->ptr);
+    if (!val || s->request.contentLength < 0)
+      s->keepAlive = 0;
+  }
+  s->status = -1;
+  s->chunkedWrite = s->closedWrite = s->closedRead = 0;
+  s->contentOffset = s->chunkedLength = 0;
+  s->contentLength = -1;
+  s->writePos = s->readLen;
+  s->deadtime += s->http->sessionTimeout - s->http->headerTimeout;
+  return handler;
+}
 static void* session_thread(void* session)
 {
   st_utime_t utime;
   ssize_t ret;
   char parser_state;
-  http_handler_t* handler;
   _http_session *s = (_http_session*)session;
   http_t* http = s->http;
 restart:
-  handler = NULL;
   parser_state = '\0';
-  s->websocket = 0;
+  s->websocket = s->chunkedRead = s->chunkedWrite = 0;
   utime = st_utime();
   s->deadtime = utime + s->http->headerTimeout;
   s->readPos = s->readLen = 0;
@@ -407,7 +451,7 @@ restart:
       return "RequestIsTooLongError";
 
     /* parse the request */
-    ret = http_parse_request(session, sizeof(s->header)/sizeof(s->header[0]),
+    ret = http_parse_request(session, http->headerMaxNumber,
       s->buf, s->buf + s->readLen, &s->readPos, &parser_state);
     if (ret < 0) return "ParseError";
     else if (ret > 0) break; /* successfully parsed the request */
@@ -416,32 +460,8 @@ restart:
     utime = st_utime();
     if (utime >= s->deadtime) return "Timeout";
   } while (1);
-
-  qsort(s->request.header, s->request.headerNumber, sizeof(http_header_t), keycmp);
-  s->path = s->request.path;
-  s->headerNumber = s->request.headerNumber;
-  handler = find_handler(http, &s->request.path);
-  log_request(http, (http_session_t*)s, handler);
-
   do {
-    const http_val_t* val = http_get_value((http_session_t*)s, "Connection");
-    s->keepAlive = (val && http_strcmp(val->ptr, "keep-alive", val->len) == 0);
-    s->request.contentLength = -1;
-    val = http_get_value((http_session_t*)s, "Transfer-Encoding");
-    s->chunkedRead = (val && http_strcmp(val->ptr, "chunked", val->len) == 0);
-    if (!s->chunkedRead) {
-      val = http_get_value((http_session_t*)s, "Content-Length");
-      if (val)
-        s->request.contentLength = atol(val->ptr);
-      if (!val || s->request.contentLength < 0)
-        s->keepAlive = 0;
-    }
-    s->status = -1;
-    s->chunkedWrite = s->closedWrite = s->closedRead = 0;
-    s->contentOffset = s->chunkedLength = 0;
-    s->contentLength = -1;
-    s->writePos = s->readLen;
-    s->deadtime += http->sessionTimeout - http->headerTimeout;
+    http_handler_t* handler = init_session(s);
     handler->callback(handler, http, (http_session_t*)s);
     if (s->status == -1) s->status = 501; /* no status */
     if (s->status > 0 && response_status_header(s, 0) < 0)
@@ -466,18 +486,17 @@ static _http_session* alloc_session(http_t* http, int stacksize)
 #ifndef NDEBUG
   memset(session, 0xFF, sizeof(_http_session));
 #endif
-  session->request.header = session->header;
   session->buf = malloc(http->headerBufferSize*2);
-  if (!session->buf) {
-    free_session(ctx, session);
-    return NULL;
-  }
+  if (!session->buf) goto clean;
+  session->header = malloc(http->headerMaxNumber*2*sizeof(http_header_t));
+  if (!session->header) goto clean;
+
+  session->request.header = session->header;
   session->thread = st_thread_create(session_thread, session, 0, stacksize);
-  if (!session->thread) {
-    free_session(ctx, session);
-    return NULL;
-  }
-  return session;
+  if (session->thread) return session;
+clean:
+  free_session(ctx, session);
+  return NULL;
 }
 static void on_session_exit(void* arg, void* retval)
 {
@@ -559,6 +578,8 @@ int http_loop(http_t* http, int port, int stacksize)
   if (!(sfd = st_bind(AF_INET, IPPROTO_TCP, port, 128)))
     return -1;
 
+  if (http->logPrintf)
+    http->logPrintf(http->logFile, "# Start port %d\n", port);
   while (ctx.thread) {
     st_netfd_t cfd = st_accept(sfd, NULL, NULL, ST_UTIME_NO_TIMEOUT);
     if (!cfd) continue;
@@ -581,6 +602,8 @@ int http_loop(http_t* http, int port, int stacksize)
   }
   http->context = NULL;
   term_context(&ctx);
+  if (http->logPrintf)
+    http->logPrintf(http->logFile, "# Quit port %d\n", port);
   return 0;
 }
 
@@ -683,7 +706,7 @@ int websocket_send(websocket_t* websocket, int flags, char* data, size_t size)
     for (i=0;i<size;++i)
       data[i] = data[i] ^ masking_key[i & 0x3];
   }
-  http_write(websocket->session, header, p - header);
+  http_write(websocket->session, (char*)header, p - header);
   http_write(websocket->session, data,size);
   return p - header + size;
 }
@@ -729,7 +752,7 @@ static ssize_t websocket_process(websocket_t* websocket, const void* buf, size_t
       return ret;
 
     if (mask) {
-      const char* masking_key = data + header_size - 4;
+      const unsigned char* masking_key = data + header_size - 4;
       for (i = 0; i < N; ++i)
         data[i+header_size] ^= masking_key[i&0x3];
     }
@@ -740,9 +763,9 @@ static ssize_t websocket_process(websocket_t* websocket, const void* buf, size_t
       st_thread_exit(NULL);
     }
     else if (opcode == WS_PING)
-      websocket_send(websocket, WS_PONG|WS_FIN, data+header_size, N);
+      websocket_send(websocket, WS_PONG|WS_FIN, (char*)data+header_size, N);
     else
-      websocket->onmessage(websocket, s->http, fin|opcode, data+header_size, N);
+      websocket->onmessage(websocket, s->http, fin|opcode, (char*)data+header_size, N);
     ret += header_size + N;
   }
   return ret;
@@ -770,11 +793,11 @@ int websocket_loop(websocket_t* websocket, const http_session_t* session, const 
     char sec_websocket_accept[29];
     const http_val_t* val = http_get_value(session, "Upgrade");
     if (!val) return -1;
-    if (http_strcmp("websocket", val->ptr, val->len) != 0) return -1;
+    if (keycmp1(val, "websocket") != 0) return -1;
     if (!(val = http_get_value(session, "Connection"))) return -1;
-    if (http_strcmp("upgrade", val->ptr, val->len) != 0) return -1;
+    if (keycmp1(val, "upgrade") != 0) return -1;
     if (!(val = http_get_value(session, "Sec-WebSocket-Version"))) return -1;
-    if (http_strcmp("13", val->ptr, val->len) != 0) return -1;
+    if (keycmp1(val, "13") != 0) return -1;
     if (!(val = http_get_value(session, "Sec-WebSocket-Key"))) return -1;
     if (val->len != 24) return -1;
     websocket_accept_key(sec_websocket_accept, val->ptr);
@@ -845,7 +868,7 @@ int http_proxy_loop(const http_session_t* session, const char* url)
     int len;
     char* str = buf + bufLen;
     http_header_t* h = &session->header[i];
-    if (!http_strcmp(h->key.ptr, "Host", h->key.len)) {
+    if (keycmp1(&h->key, "Host") == 0) {
       len = p ? p - url : strlen(url);
       len = sprintf(str, "Host:%.*s\r\n", len, url);
     }

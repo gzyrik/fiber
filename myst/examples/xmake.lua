@@ -22,10 +22,7 @@ target("go-chan")
   add_files("go_chan.cpp","go0.cpp")
 
 target("proxy", {files = "proxy.c"})
-
-target("lookupdns")
-  add_files("lookupdns.c","res.c")
-  if not is_termux then add_syslinks("resolv") end
+target("lookupdns", {files="lookupdns.c"})
 
 target("http1", {files = "http1.c"})
 target("http2", {files = "http2.c"})

@@ -170,7 +170,7 @@ int main(int argc, char *argv[])
     st_cfg_eventsys(ST_EVENTSYS_ALT);
 
   /* Initialize the ST library */
-  if (st_init() < 0) {
+  if (st_init(NULL) < 0) {
     print_sys_error("st_init");
     exit(1);
   }

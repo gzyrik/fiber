@@ -12,7 +12,7 @@ int main ()
   // 使用以下代码将创建一个无缓冲区的、用于传递整数的chan：
   chan<int> ch_0;
 
-  st_init();
+  st_init(NULL);
   go foo0;
 
   // chan是引用计数的, 复制chan并不会产生新的chan, 只会引用旧的chan.

@@ -2,7 +2,7 @@
 #include <iostream>
 int main(int argc, char *argv[])
 {
-  st_init();
+  st_init(NULL);
   chan<int> ch;
   go [=]{
     for (int i = 0; i < 10; ++i) {

@@ -136,6 +136,7 @@
 
 #elif defined (DARWIN)
 
+    #define PATH_RESOLV_CONF "/etc/resolv.conf"
     #define MD_USE_BSD_ANON_MMAP
     #define MD_ACCEPT_NB_INHERITED
     #define MD_ALWAYS_UNSERIALIZED_ACCEPT
@@ -277,6 +278,7 @@
 
 #elif defined (LINUX)
 
+    #define PATH_RESOLV_CONF "/etc/resolv.conf"
     /*
      * These are properties of the linux kernel and are the same on every
      * flavor and architecture.

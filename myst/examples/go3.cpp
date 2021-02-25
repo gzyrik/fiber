@@ -17,7 +17,7 @@ int main(int argc, char *argv[])
 {
   fprintf(stderr, "%3s: %s %-8s %-6s %s\n", "ACT", "NAME", "STATUS", "FLAGS", "STACK");
   fputs("_______________________________\n", stderr);
-  st_init();
+  st_init(NULL);
 #ifdef ST_SWITCH_CB
   st_set_switch_out_cb(on_switch_cb_out);
   st_set_switch_in_cb(on_switch_cb_in);

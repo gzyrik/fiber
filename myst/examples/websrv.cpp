@@ -27,7 +27,7 @@ int main(int argc, char *argv[])
     }
 
 #ifdef CPPHTTPLIB_ST_SUPPORT
-    if (st_init() < 0) {
+    if (st_init(NULL) < 0) {
         perror("st_init");
         return -1;
     }

@@ -66,6 +66,11 @@ st_thread_name
 st_thread_stats
 st_bind
 _st_errno
+st_sockaddr
+st_inetaddr
+st_reset_dns
+st_getaddrinfo
+st_freeaddrinfo
 
 http_strcmp
 http_get_value

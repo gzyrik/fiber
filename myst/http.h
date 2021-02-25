@@ -50,7 +50,7 @@ int http_read(const http_session_t* session, char* data, size_t length);
 /** 设置响应值 */
 int http_set_status(const http_session_t* session, int status);
 /** 设置响应或代理属性 */
-int http_set_header(const http_session_t* session, const char* key, const char* value);
+int http_set_header(const http_session_t* session, const char* key, const char* value_fmt, ...);
 /** 写入响应数据流 */
 int http_write(const http_session_t* session, const char* data, size_t length);
 /** 设置跳转地址 */

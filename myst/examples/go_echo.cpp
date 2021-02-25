@@ -154,7 +154,7 @@ retry_read:
 
 int main()
 {
-  st_init();
+  st_init(NULL);
   go 0, server, []{
     printf("[7] other fiber\n");
   }, client;

@@ -19,6 +19,23 @@ static void handle_proxy(http_handler_t* self, http_t* http, const http_session_
   http_set_header(session, "Proxy", "True");
   http_proxy_loop(session, proxy->url);
 }
+static void *http2(void *host)
+{
+  http_t http; 
+  memset(&http, 0, sizeof(http));
+
+  http.headerBufferSize = 1024;
+  http.headerMaxNumber = 16;
+  http.headerTimeout = 30*1000;
+  http.sessionTimeout = 1000*1000;
+  http.logFile = stderr;
+  http.logPrintf = fprintf;
+  http.root.callback = handle_root;
+
+  http_loop(&http, 7010, 64*1024);
+  return NULL;
+}
+
 int main(int argc, char* argv[])
 {
   http_t http; 
@@ -35,13 +52,14 @@ int main(int argc, char* argv[])
   http.root.callback = handle_root;
 
   memset(&proxy, 0, sizeof(proxy));
-  proxy.url = "http://10.211.55.2:3344/";
+  proxy.url = "http://127.0.0.1:7010/";
   h->path.len = 6;
   h->path.ptr = "/proxy";
   h->callback = handle_proxy;
   http_mount(&http, h);
 
-  st_init();
+  st_init(NULL);
+  st_thread_create(http2, NULL, 0, ST_DEFAULT_STACK_SIZE);
   http_loop(&http,  3344,  64*1024);
   return 0;
 }

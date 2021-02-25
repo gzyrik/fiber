@@ -265,6 +265,7 @@ typedef struct _st_vp {
   st_switch_cb_t switch_out_cb;	/* called when a thread is switched out */
   st_switch_cb_t switch_in_cb;	/* called when a thread is switched in */
 #endif
+  void (*atexit_cb)();
 } _st_vp_t;
 
 

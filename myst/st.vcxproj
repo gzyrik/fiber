@@ -130,10 +130,12 @@
     <ClCompile Include="http_parse.c" />
     <ClCompile Include="io.c" />
     <ClCompile Include="key.c" />
+    <ClCompile Include="res.c" />
     <ClCompile Include="sched.c" />
     <ClCompile Include="sha1.c" />
     <ClCompile Include="stk.c" />
     <ClCompile Include="sync.c" />
+    <ClCompile Include="win_dns.c" />
   </ItemGroup>
   <ItemGroup>
     <None Include="libst.def" />

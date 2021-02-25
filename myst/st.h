@@ -57,6 +57,7 @@ struct iovec {
 #include <sys/uio.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
+#include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <fcntl.h>
@@ -123,7 +124,7 @@ typedef struct _st_netfd *  st_netfd_t;
 typedef struct _st_chan *   st_chan_t;
 /** WARNING: SHOULD call before st_init */
 extern int st_cfg_eventsys(int eventsys);
-extern int st_init(void);
+extern int st_init(void (*atexit)());
 extern int st_getfdlimit(void);
 #ifdef _WIN32
 extern int* _st_errno(void);
@@ -201,8 +202,12 @@ extern st_netfd_t st_socket(int domain, int type, int protocol);
 extern int st_poll(struct pollfd *pds, int npds, st_utime_t timeout);
 extern st_netfd_t st_bind(int domain, int protocol, int port, int backlog);
 /* !ip or 'any' set addr=any; !ip[0] or 'loopback' set addr=loopback; return socklen_t */
-extern int st_sockaddr(struct sockaddr *sa, int domain, const char* addr, unsigned short dft_port);
-extern const char* st_inetaddr(const struct sockaddr *addr, int addrlen, int *domain, int *port);
+extern int st_reset_dns(void);
+extern int st_sockaddr(void *sockaddr, int domain, const char* addr, int dft_port);
+extern int st_getaddrinfo(const char *name,
+  struct addrinfo *hints, unsigned *ttl, st_utime_t timeout);
+extern void st_freeaddrinfo(struct addrinfo *hints);
+extern const char* st_inetaddr(const void *sockaddr, int addrlen, int *domain, int *port);
 extern st_netfd_t st_accept(st_netfd_t fd, struct sockaddr *addr, socklen_t *addrlen,
 			    st_utime_t timeout);
 extern int st_connect(st_netfd_t fd, const struct sockaddr *addr, int addrlen,

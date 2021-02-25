@@ -22,7 +22,7 @@ int main(int argc, char* argv[])
   http.logPrintf = fprintf;
   http.root.callback = handle_root;
 
-  st_init();
+  st_init(NULL);
   http_loop(&http, 3344, 64*1024);
   return 0;
 }

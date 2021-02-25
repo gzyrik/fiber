@@ -31,52 +31,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 #include <st.h>
-
-#if !defined(NETDB_INTERNAL) && defined(h_NETDB_INTERNAL)
-#define NETDB_INTERNAL h_NETDB_INTERNAL
-#endif
 
 /* Resolution timeout (in microseconds) */
 #define TIMEOUT (2*1000000LL)
-
 static struct addrinfo _hints;
 /* External function defined in the res.c file */
-void st_freeaddrinfo(struct addrinfo *res);
-int st_getaddrinfo(const char *node, const char *service,
-  const struct addrinfo *hints, struct addrinfo **res, st_utime_t *timeout);
-
-
 static void *do_resolve(void *host)
 {
-  struct addrinfo *addr=NULL;
-  st_utime_t timeout = TIMEOUT;
-  int n = st_getaddrinfo(host, NULL, &_hints, &addr, &timeout);
+  unsigned ttl = 0;
+  int n = st_getaddrinfo(host, &_hints, &ttl, TIMEOUT);
 
   if (n < 0) {
     fprintf(stderr, "st_getaddrinfo: can't resolve %s: ", (char *)host);
-    if (h_errno == NETDB_INTERNAL)
-      perror("");
-    else
-      herror("");
-  } else if(addr) {
-    struct addrinfo* ai = addr;
+    perror("");
+  }
+  else {
+    struct addrinfo* ai = _hints.ai_next;
     for(n; n>0; --n, ai=ai->ai_next) {
       if (!ai->ai_addr) continue;
       printf("%-40s %s ttl %ds\n", (char *)host,
-        st_inetaddr(ai->ai_addr, ai->ai_addrlen, NULL, NULL),
-        timeout/1000000);
+        st_inetaddr(ai->ai_addr, ai->ai_addrlen, NULL, NULL), ttl);
     }
-    st_freeaddrinfo(addr);
+    st_freeaddrinfo(&_hints);
   }
-
   return NULL;
 }
 
@@ -95,17 +73,21 @@ int main(int argc, char *argv[])
     exit(1);
   }
 
-  if (st_init() < 0) {
+  if (st_init(NULL) < 0) {
     perror("st_init");
     exit(1);
   }
 
   _hints.ai_family = AF_UNSPEC;
+  _hints.ai_addr = NULL;
   for (i = 1; i < argc; i++) {
     if (argv[i][0] == '@') {
-      struct sockaddr_storage sa;
+      static struct sockaddr_storage sa;
       _hints.ai_addr = (struct sockaddr*)&sa;
-      _hints.ai_addrlen = st_sockaddr(_hints.ai_addr, AF_INET, &argv[i][1], 53);
+      if (st_sockaddr(_hints.ai_addr, AF_UNSPEC, &argv[i][1], 53) < 0) {
+        perror("st_sockaddr");
+        exit(1);
+      }
     }
     else if (!strcmp(argv[i], "-6"))
       _hints.ai_family = AF_INET6;

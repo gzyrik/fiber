@@ -260,7 +260,7 @@ void _st_vp_schedule(_st_thread_t* me)
 /*
  * Initialize this Virtual Processor
  */
-int st_init(void)
+int st_init(void (*atexit_cb)())
 {
   _st_thread_t *thread;
 
@@ -276,6 +276,9 @@ int st_init(void)
   }
 
   if (_st_io_init() < 0)
+    return -1;
+
+  if (st_reset_dns() < 0)
     return -1;
 
   memset(&_st_this_vp, 0, sizeof(_st_vp_t));
@@ -341,6 +344,7 @@ int st_init(void)
   _st_this_vp.idle_thread->flags = _ST_FL_IDLE_THREAD;
   _st_active_count--;
   _ST_DEL_RUNQ(_st_this_vp.idle_thread);
+  _st_this_vp.atexit_cb = atexit_cb;
   return 0;
 }
 
@@ -381,6 +385,7 @@ static void *_st_idle_thread_start(void *arg)
     _ST_SWITCH_CONTEXT(me);
   }
   fprintf(stderr, "\n** ST EXIT ** \n");
+  if (_st_this_vp.atexit_cb) _st_this_vp.atexit_cb();
   /* No more threads */
 #ifdef _WIN32
   WSACleanup();
@@ -1043,7 +1048,7 @@ char* st_thread_stats(st_thread_t thread, const char* p, ...)
       pfmt.len = sfmt_size(strbuf, va_arg(argv, size_t));
       break;
     case 's':
-      if (pfmt.str = va_arg(argv, char*))
+      if ((pfmt.str=va_arg(argv, char*)) != NULL)
         pfmt.len = strlen(pfmt.str);
       break;
     case 'p':

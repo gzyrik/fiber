@@ -12,7 +12,7 @@ struct A {
 
 int main(int argc, char *argv[])
 {
-    st_init();
+    st_init(NULL);
     //----------------------------------
     // 使用关键字go创建协程, go后面可以使用:
     //     1.void(*)()函数指针, 比如:foo.
