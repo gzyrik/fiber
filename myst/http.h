@@ -2,6 +2,7 @@
 #define __ST_HTTP_H__
 #include "st.h"
 #include <stdio.h>
+#include <stdarg.h>
 #if __GNUC__
 #pragma GCC visibility push(default)
 #endif
@@ -141,7 +142,7 @@ struct http_t {
   size_t headerBufferSize;
   size_t headerMaxNumber;
   FILE* logFile;
-  int (*logPrintf)(FILE* logFile, const char* const format, ...);
+  int (*logPrintf)(FILE * stream, const char * format, va_list arg);
   http_handler_t root;
   /*< private >*/
   http_context_t *context;

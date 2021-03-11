@@ -34,13 +34,13 @@
 #include <st.h>
 
 /* Resolution timeout (in microseconds) */
-#define TIMEOUT (2*1000000LL)
+static st_utime_t _timeout = 2*1000000LL;
 static struct addrinfo _hints;
 /* External function defined in the res.c file */
 static void *do_resolve(void *host)
 {
   unsigned ttl = 0;
-  int n = st_getaddrinfo(host, &_hints, &ttl, TIMEOUT);
+  int n = st_getaddrinfo(host, &_hints, &ttl, _timeout);
 
   if (n < 0) {
     fprintf(stderr, "st_getaddrinfo: can't resolve %s: ", (char *)host);
@@ -93,6 +93,9 @@ int main(int argc, char *argv[])
       _hints.ai_family = AF_INET6;
     else if (!strcmp(argv[i], "-4"))
       _hints.ai_family = AF_INET;
+    else if (!strcmp(argv[i], "-t")) {
+      if (++i < argc) _timeout = atoi(argv[i]) * 1000000LL;
+    }
     /* Create a separate thread for each host name */
     else if (st_thread_create(do_resolve, argv[i], 0, 0) == NULL) {
       perror("st_thread_create");

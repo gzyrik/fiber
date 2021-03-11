@@ -19,7 +19,7 @@ int main(int argc, char* argv[])
   http.headerTimeout = 30*1000;
   http.sessionTimeout = 1000*1000;
   http.logFile = stderr;
-  http.logPrintf = fprintf;
+  http.logPrintf = vfprintf;
   http.root.callback = handle_root;
 
   st_init(NULL);

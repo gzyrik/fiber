@@ -461,6 +461,7 @@ static int parse_answer(unsigned char*ans, int len, struct addrinfo *res, unsign
         memcpy(&ipv4->sin_addr, cp, n);
         res->ai_addrlen = sizeof(struct sockaddr_in);
         res->ai_addr = (struct sockaddr*)ipv4;
+        res->ai_family = PF_INET;
       }
       else {
         struct sockaddr_in6* ipv6 = calloc(1, sizeof(struct sockaddr_in6));
@@ -469,6 +470,7 @@ static int parse_answer(unsigned char*ans, int len, struct addrinfo *res, unsign
         memcpy(&ipv6->sin6_addr, cp, n);
         res->ai_addrlen = sizeof(struct sockaddr_in6);
         res->ai_addr = (struct sockaddr*)ipv6;
+        res->ai_family = PF_INET6;
       }
     }
     else if (type == T_CNAME) {

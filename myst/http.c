@@ -3,8 +3,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <stdio.h>
-#include <stdarg.h>
+static void http_log(http_t *http, const char* format, ...) 
+{
+  va_list args;
+  if (!http || !http->logPrintf) return;
+  va_start (args, format);
+  http->logPrintf(http->logFile, format, args);
+  va_end (args);
+}
 typedef struct _http_session  _http_session;
 struct _http_context {
   st_cond_t term;
@@ -268,13 +274,13 @@ static const char* status_message(int status)
 static void log_response(http_t* http, _http_session* s)
 {
   size_t i;
-  if (!http->logPrintf) return;
-  http->logPrintf(http->logFile, "> HTTP/1.1 %d %s\n", s->status, status_message(s->status));
+  if (!http|| !http->logPrintf || !s) return;
+  http_log(http, "> HTTP/1.1 %d %s\n", s->status, status_message(s->status));
   for (i=s->request.headerNumber; i<s->headerNumber; ++i) {
     http_header_t* h = &s->header[i];
-    http->logPrintf(http->logFile, "> %.*s: %.*s\n", (int)h->key.len, h->key.ptr, (int)h->val.len, h->val.ptr);
+    http_log(http, "> %.*s: %.*s\n", (int)h->key.len, h->key.ptr, (int)h->val.len, h->val.ptr);
   }
-  http->logPrintf(http->logFile, ">\n");
+  http_log(http, ">\n");
 }
 static int response_status_header(_http_session* s, size_t contentLength)
 {
@@ -383,18 +389,18 @@ ssize_t http_parse_request(http_session_t* s, const size_t headerSize,
 static void log_request(http_t* http, const http_session_t* session, http_handler_t* handler)
 {
   size_t i;
-  if (!http->logPrintf) return;
-  http->logPrintf(http->logFile, "< %.*s %.*s/%.*s %.*s\n",
+  if (!http|| !session || !handler || !http->logPrintf) return;
+  http_log(http, "< %.*s %.*s/%.*s %.*s\n",
     (int)session->method.len, session->method.ptr,
     (int)handler->path.len,   handler->path.ptr,
     (int)session->path.len,   session->path.ptr,
     (int)session->version.len,session->version.ptr);
   for (i=0; i<session->headerNumber; ++i) {
     http_header_t* h = &session->header[i];
-    http->logPrintf(http->logFile, "< %.*s: %.*s\n",
+    http_log(http, "< %.*s: %.*s\n",
       (int)h->key.len, h->key.ptr, (int)h->val.len, h->val.ptr);
   }
-  http->logPrintf(http->logFile, "<\n");
+  http_log(http, "<\n");
 }
 static http_handler_t* init_session(_http_session *s)
 {
@@ -504,7 +510,7 @@ static void on_session_exit(void* arg, void* retval)
   http_context_t* ctx = session->http->context;
   if (ctx->session == session)
     ctx->session = session->next;
-  else {
+  else if (ctx->session) {
     _http_session* prev = ctx->session;
     while (prev->next != session) prev = prev->next;
     prev->next = session->next;
@@ -578,8 +584,7 @@ int http_loop(http_t* http, int port, int stacksize)
   if (!(sfd = st_bind(AF_INET, IPPROTO_TCP, port, 128)))
     return -1;
 
-  if (http->logPrintf)
-    http->logPrintf(http->logFile, "# Start port %d\n", port);
+  http_log(http, "# Start port %d\n", port);
   while (ctx.thread) {
     st_netfd_t cfd = st_accept(sfd, NULL, NULL, ST_UTIME_NO_TIMEOUT);
     if (!cfd) continue;
@@ -602,8 +607,7 @@ int http_loop(http_t* http, int port, int stacksize)
   }
   http->context = NULL;
   term_context(&ctx);
-  if (http->logPrintf)
-    http->logPrintf(http->logFile, "# Quit port %d\n", port);
+  http_log(http, "# Quit port %d\n", port);
   return 0;
 }
 
@@ -635,16 +639,12 @@ int http_mount(http_t* http, http_handler_t* handler)
       return -1;
     }
     if (handler_super(&http->root, &h->path)) {
-      if (http->logPrintf) {
-        http->logPrintf(http->logFile, "# EEXIST %.*s/\n", 
-          (int)h->path.len, h->path.ptr);
-      }
+      http_log(http, "# EEXIST %.*s/\n", (int)h->path.len, h->path.ptr);
       errno = EEXIST;
       return -1;
     }
-    if (http->context && http->logPrintf) {
-      http->logPrintf(http->logFile, "# Mount %.*s/\n", 
-        (int)h->path.len, h->path.ptr);
+    if (http->context) {
+      http_log(http, "# Mount %.*s/\n", (int)h->path.len, h->path.ptr);
     }
     ++num;
     if (!h->next) break;
@@ -668,10 +668,7 @@ int http_unmount(http_t* http, const char* path)
 
   h = &http->root;
   while ((h = handler_super(h, &key)) != NULL) {
-    if (http->logPrintf) {
-      http->logPrintf(http->logFile, "# Unmount %.*s/\n", 
-        (int)h->next->path.len, h->next->path.ptr);
-    }
+    http_log(http, "# Unmount %.*s/\n", (int)h->next->path.len, h->next->path.ptr);
     h->next = h->next->next;
     ++num;
   }
@@ -719,8 +716,7 @@ int websocket_close(websocket_t* websocket)
   }
   else {
     char bye[6] = { 0x88, 0x80, 0x00, 0x00, 0x00, 0x00 };
-    if (s->http->logPrintf)
-      s->http->logPrintf(s->http->logFile, "> WS_CLOSE\n");
+    http_log(s->http, "> WS_CLOSE\n");
     st_thread_interrupt(s->thread);
     s->keepAlive = 0;
     return http_write(websocket->session, bye, 6);
@@ -757,8 +753,7 @@ static ssize_t websocket_process(websocket_t* websocket, const void* buf, size_t
         data[i+header_size] ^= masking_key[i&0x3];
     }
     if (opcode == WS_CLOSE) {
-      if (s->http->logPrintf)
-        s->http->logPrintf(s->http->logFile, "< WS_CLOSE\n");
+      http_log(s->http, "< WS_CLOSE\n");
       websocket->onclose(websocket, s->http);
       st_thread_exit(NULL);
     }
@@ -849,8 +844,14 @@ int http_proxy_loop(const http_session_t* session, const char* url)
   http = s->http;
   p = strstr(url, "://");
   url = !p ? url : p+3;
-  i = st_sockaddr((struct sockaddr*)&sa, AF_INET, url, 80);
+  i = st_sockaddr((struct sockaddr*)&sa, AF_UNSPEC, url, 80);
+  if (i <=0 ) {
+    errno = EPERM;
+    http_log(http, "# EPERM URL '%s'\n", url);
+    return -1;
+  }
   sockfd = st_socket(AF_INET, SOCK_STREAM, 0);
+  if (!sockfd) return -1;
   bufLen = st_connect(sockfd, (struct sockaddr*)&sa, i, ST_UTIME_NO_TIMEOUT);
   if (bufLen < 0) goto clean;
   p = strchr(url, '/');//path
@@ -862,26 +863,24 @@ int http_proxy_loop(const http_session_t* session, const char* url)
   else
     bufLen += sprintf(buf+bufLen, " %s%.*s", p, (int)session->path.len, session->path.ptr);
   bufLen += sprintf(buf+bufLen, " %.*s\r\n", (int)session->version.len,session->version.ptr);
-  if (http->logPrintf)
-    http->logPrintf(http->logFile, "> %.*s\n", (int)(bufLen-2), buf);
+  http_log(http, "> %.*s\n", (int)(bufLen-2), buf);
   for (i=0; i<s->headerNumber; ++i) {
     int len;
     char* str = buf + bufLen;
     http_header_t* h = &session->header[i];
     if (keycmp1(&h->key, "Host") == 0) {
       len = p ? p - url : strlen(url);
-      len = sprintf(str, "Host:%.*s\r\n", len, url);
+      len = sprintf(str, "Host: %.*s\r\n", len, url);
     }
     else {
-      len = sprintf(str, "%.*s:%.*s\r\n",
+      len = sprintf(str, "%.*s: %.*s\r\n",
         (int)h->key.len, h->key.ptr, (int)h->val.len, h->val.ptr);
     }
-    if (http->logPrintf)
-      http->logPrintf(http->logFile, "> %.*s\n", (int)(len-2), str);
+    http_log(http, "> %.*s\n", (int)(len-2), str);
     bufLen += len;
   }
   bufLen += sprintf(buf+bufLen,"\r\n");
-  if (http->logPrintf) http->logPrintf(http->logFile, ">\n");
+  http_log(http, ">\n");
   bufLen = st_send(sockfd, buf, bufLen, 0, ST_UTIME_NO_TIMEOUT);
   if (bufLen < 0) goto clean;
   while (!s->closedRead) {
@@ -896,7 +895,10 @@ int http_proxy_loop(const http_session_t* session, const char* url)
   st_netfd_close(sockfd);
 clean:
   st_netfd_close(sockfd);
-  if (bufLen >=0) st_thread_exit(NULL);
+  if (bufLen >=0 || !http->context->thread)
+    st_thread_exit(NULL);
+  http_log(http, "# Proxy failed '%.*s' ~>'%s'\n",
+    (int)s->path.len, s->path.ptr, url); 
   return bufLen;
 }
 
