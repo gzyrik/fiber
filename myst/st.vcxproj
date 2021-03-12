@@ -130,6 +130,7 @@
     <ClCompile Include="http_parse.c" />
     <ClCompile Include="io.c" />
     <ClCompile Include="key.c" />
+    <ClCompile Include="regex.c" />
     <ClCompile Include="res.c" />
     <ClCompile Include="sched.c" />
     <ClCompile Include="sha1.c" />

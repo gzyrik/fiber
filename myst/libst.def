@@ -87,6 +87,7 @@ http_loop
 http_quit
 http_mount
 http_unmount
+http_regex_match
 
 closesocket
 bind

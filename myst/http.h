@@ -22,6 +22,9 @@ typedef struct {
 /** 忽略大小写的字符比较 */
 int http_strcmp(const char a[], const char b[], size_t len);
 
+/** 正则匹配 */
+int http_regex_match(const http_val_t* str, const http_val_t* pstr, http_val_t captures[]);
+
 /** HTTP 的头部属性 */
 typedef struct {
   http_key_t key;
@@ -30,7 +33,7 @@ typedef struct {
 
 /** HTTP 会话
  * - method 请求的方法. 例如'GET', 'POST'
- * - path 请求的相对路径. 相对当前http_handler_t.path 的路径
+ * - path 请求的相对路径. 相对当前http_handler_t.path 目录的路径
  * - version 请求的HTTP 版本. 例如 'HTTP/1.1'
  * - contentLength 可读取的数据流长度,-1表示未知
  * - header, headerNumber 会话属性数组和长度
@@ -44,7 +47,7 @@ typedef struct {
   http_header_t *header;
 } http_session_t;
 
-/** 查找属性值 */
+/** 请求的属性值 */
 const http_val_t* http_get_value(const http_session_t* session, const char* key);
 /** 读取 HTTP 数据流*/
 int http_read(const http_session_t* session, char* data, size_t length);
@@ -52,19 +55,21 @@ int http_read(const http_session_t* session, char* data, size_t length);
 int http_set_status(const http_session_t* session, int status);
 /** 设置响应或代理属性 */
 int http_set_header(const http_session_t* session, const char* key, const char* value_fmt, ...);
+/** 获取响应或代理属性 */
+const http_val_t* http_get_header(const http_session_t* session, const char* key);
 /** 写入响应数据流 */
 int http_write(const http_session_t* session, const char* data, size_t length);
 /** 设置跳转地址 */
 int http_redirect(const http_session_t* session,  const char* url);
 /** 执行代理
- * @param[in] url 末尾'/'表示绝对根路径,反之前缀添加path
+ * @param[in] url 末尾'/'表示绝对根路径,反之前缀添加目录
  * @retval 失败返回负数
  * @note
  * 例如当前 /proxy/test.html
- * - 设置url='http://127.0.0.1/', 代理 http://127.0.0.1/test.html
- * - 设置url='http://127.0.0.1',  代理 http://127.0.0.1/proxy/test.html
- * - 设置url='http://127.0.0.1/aaa/', 代理 http://127.0.0.1/aaa/test.html
- * - 设置url='http://127.0.0.1/aaa',  代理 http://127.0.0.1/aaatest.html
+ * - 设置url='127.0.0.1/', 代理 127.0.0.1/test.html
+ * - 设置url='127.0.0.1',  代理 127.0.0.1/proxy/test.html
+ * - 设置url='127.0.0.1/aaa/', 代理 127.0.0.1/aaa/test.html
+ * - 设置url='127.0.0.1/aaa',  代理 127.0.0.1/aaatest.html
  */
 int http_proxy_loop(const http_session_t* session, const char* url);
 
@@ -114,12 +119,14 @@ int websocket_send(websocket_t* websocket, int flags, char* data, size_t length)
 typedef struct http_handler_t http_handler_t;
 
 /** 路径处理器
- * - path 忽略大小写的路径,通常以'/'开头并忽略末尾的'/'
+ * - path 忽略大小写的目录, 通常以'/'开头并忽略末尾的'/'
+ * - pattern 匹配的除 path 之后的部分. 空则默认全部匹配,但最低优级级.
  * - callback 处理函数
  * - 用于链式管理的私有指针
  */
 struct http_handler_t {
   http_key_t path;
+  http_key_t pattern;
   void (*callback)(http_handler_t* self, http_t* http, const http_session_t* session);
   /*< private >*/
   http_handler_t *next;
@@ -161,15 +168,17 @@ int http_loop(http_t* http, int port, int stacksize);
 void http_quit(http_t* http);
 
 /** 动态挂载路径处理器
- * 若handler为链表,则可同时批量挂载
+ * @param[in] handler 若handler为链表,则可同时批量挂载
  * @retval 失败直接返回负数
  */
 int http_mount(http_t* http, http_handler_t* handler);
 
 /** 动态卸载路径处理器
+ * @param[in] path_pattern 忽略大小写的目录, 通常以'/'开头并忽略末尾的'/'
  * @retval 返回卸载个数
  */
-int http_unmount(http_t* http, const char* path);
+int http_unmount(http_t* http, http_key_t* path);
+
 #ifdef __cplusplus
 }
 #endif
