@@ -23,19 +23,12 @@ int main(int argc, char *argv[])
   st_set_switch_in_cb(on_switch_cb_in);
 #endif
   go 0, "test", [] {
-    go 0, "sub0", []{
-      //fputs("+\n", stderr);
-      st_sleep(1);
-    };
-    go 0, "sub1", []{
-      //fputs("-\n", stderr);
-      st_sleep(0);
-    };
+      go 0, "sub0", []{ st_sleep(0); };
+      go 0, "sub1", []{ st_sleep(0); };
   };
-  st_sleep(1);
-  //fputs("$\n", stderr);
+  st_sleep(0);
 #ifdef ST_ITERATE_CB
   st_iterate_threads(on_iterate_cb);
 #endif
-  return st_thread_exit(NULL), 0;
+  return st_term();
 }

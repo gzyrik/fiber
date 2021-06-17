@@ -7,6 +7,7 @@ target("st")
   add_files("event.c","io.c","sched.c","sync.c", "stk.c", "key.c")
   add_files("http.c", "http_parse.c", "sha1.c", "regex.c")
   add_files("res.c")
+  add_includedirs(".", {interface=true})
   if is_plat("windows") then
       set_kind("shared")
       add_shflags("/def:myst/libst.def")
@@ -21,11 +22,11 @@ target("st")
   else
       set_kind("static")
       add_files("md.S")
+      if is_plat("macosx") then
+          add_defines("DARWIN")
+      elseif is_plat("linux") then
+          add_defines("LINUX")
+          add_syslinks("dl", {interface=true})
+      end
       -- if not is_termux then add_syslinks("resolv", {interface=true}) end
-  end
-  add_includedirs(".", {interface=true})
-  if is_plat("macosx") then add_defines("DARWIN") end
-  if is_plat("linux") then
-      add_defines("LINUX")
-      add_syslinks("dl", {interface=true})
   end

@@ -266,6 +266,12 @@ typedef struct _st_vp {
   st_switch_cb_t switch_in_cb;	/* called when a thread is switched in */
 #endif
   void (*atexit_cb)();
+#ifdef DEBUG
+  int num_threads;
+  int num_free_threads;
+  int num_stacks;
+  int num_free_stacks;
+#endif
 } _st_vp_t;
 
 

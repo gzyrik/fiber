@@ -1,4 +1,6 @@
 EXPORTS
+st_init 
+st_term
 st_accept 
 st_cond_broadcast 
 st_cond_destroy 
@@ -8,7 +10,6 @@ st_cond_timedwait
 st_cond_wait 
 st_connect 
 st_getfdlimit 
-st_init 
 st_key_create 
 st_key_getlimit 
 st_mutex_destroy 

@@ -124,7 +124,9 @@ typedef struct _st_netfd *  st_netfd_t;
 typedef struct _st_chan *   st_chan_t;
 /** WARNING: SHOULD call before st_init */
 extern int st_cfg_eventsys(int eventsys);
-extern int st_init(void (*atexit)());
+extern int st_init(void (*atterm)());
+/** wait for all thread */
+extern int st_term(void);
 extern int st_getfdlimit(void);
 #ifdef _WIN32
 extern int* _st_errno(void);
@@ -311,9 +313,9 @@ protected:
 public:
   st_chan(const st_chan& ch): chan_(st_chan_addref(ch.chan_, true)), ret_(ch.ret_) {}
   st_chan(st_chan&& ch): chan_(ch.chan_), ret_(ch.ret_) { ch.chan_ = nullptr; }
-  ~st_chan() { st_chan_release(&chan_, false); }
-  void close() const { st_chan_release(&chan_, true); }
-  void release() const { st_chan_release(&chan_, false); }
+  ~st_chan() { release(); }
+  void close() const { if (chan_) { st_chan_release(&chan_, true); chan_ = nullptr; } }
+  void release() const { if (chan_) { st_chan_release(&chan_, false); chan_ = nullptr; } }
   int push(st_utime_t timeout = ST_UTIME_NO_TIMEOUT) const { return ret_ = st_chan_push(chan_, nullptr, timeout); }
   int pop(st_utime_t timeout = ST_UTIME_NO_TIMEOUT) const { return ret_ = st_chan_pop(chan_, nullptr, timeout); }
   operator bool() const { return !ret_ && chan_ && st_chan_alive(chan_); }
@@ -341,8 +343,7 @@ public:
   using st_chan::operator=; using st_chan::operator>>; using st_chan::operator<<;
 };
 #if !defined(chan) && !defined(ST_NOT_DEFINE_CHAN)
-template <typename T>
-using chan = __st_chan<T>;
+template <typename T> using chan = __st_chan<T>;
 #endif
 
 #if !(defined(__GNUC__) && (__GNUC__ < 5))

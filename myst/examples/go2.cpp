@@ -1,19 +1,15 @@
 #include <st.h>
-#include <iostream>
 int main(int argc, char *argv[])
 {
   st_init(NULL);
   chan<int> ch;
   go [=]{
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 10; ++i) 
       ch << i;
-      st_sleep(0);
-      std::cout << ',';
-    }
     ch.close();
   };
   int v;
-  while (ch >> v) std::cout << v;
+  while (ch >> v) fputc('0'+v, stderr);
   ch = nullptr;
-  return st_thread_exit(NULL), 0;
+  return st_term();
 }

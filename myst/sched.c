@@ -364,15 +364,52 @@ st_switch_cb_t st_set_switch_out_cb(st_switch_cb_t cb)
   return ocb;
 }
 #endif
+static void _free_thread(_st_thread_t *thread)
+{
+#ifdef ST_ITERATE_CB
+  _ST_DEL_THREADQ(thread);
+#endif
 
+#ifdef MD_WINDOWS_FIBER
+  _st_thread_free(thread);
+#else
+  /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
+#ifndef NVALGRIND
+  if (!(thread->flags & _ST_FL_SHARED_STK)) {
+    VALGRIND_STACK_DEREGISTER(thread->stack->valgrind_stack_id);
+  }
+#endif
+  do {
+    _st_stack_t *stack = thread->stack;
+#ifdef ST_SHARED_STACK
+    if (thread->prvstk) 
+      free(thread->prvstk);
+    if (stack && stack->owner == thread)
+      stack->owner = NULL;
+#endif
+    if (thread->flags & _ST_FL_SHARED_STK)
+      _st_thread_free(thread);
+    if (stack != NULL) /* no PRIMORDIAL stack */
+      _st_stack_free(stack);
+  } while (0);
+#endif
+}
 
-/*
- * Start function for the idle thread
- */
-/* ARGSUSED */
-static void *_st_idle_thread_start(void *arg)
+int st_term(void)
 {
   _st_thread_t *me = _ST_CURRENT_THREAD();
+  if (!me) return -1;
+  else if (me->flags & _ST_FL_PRIMORDIAL) {
+    _free_thread(_st_this_vp.idle_thread);
+    _st_this_vp.idle_thread = me;
+    _st_active_count--;
+    me->state = _ST_ST_RUNNABLE;
+    _ST_SWITCH_CONTEXT(me);
+  }
+  else if (me != _st_this_vp.idle_thread) {
+    errno = EINVAL;
+    return -1;
+  }
 
   while (_st_active_count > 0) {
     /* Idle vp till I/O is ready or the smallest timeout expired */
@@ -384,11 +421,29 @@ static void *_st_idle_thread_start(void *arg)
     me->state = _ST_ST_RUNNABLE;
     _ST_SWITCH_CONTEXT(me);
   }
-  fprintf(stderr, "\n** ST EXIT ** \n");
-  if (_st_this_vp.atexit_cb) _st_this_vp.atexit_cb();
-  /* No more threads */
+  _free_thread(me);
+  _st_this_vp.idle_thread = NULL;
+#ifdef MD_WINDOWS_FIBER
+  ConvertFiberToThread();
+#endif
 #ifdef _WIN32
   WSACleanup();
+#endif
+  fprintf(stderr, "\n** ST TERM ** \n");
+  if (_st_this_vp.atexit_cb)
+    _st_this_vp.atexit_cb();
+  return 0;
+}
+
+/*
+ * Start function for the idle thread
+ */
+/* ARGSUSED */
+static void *_st_idle_thread_start(void *arg)
+{
+  st_term();
+  /* No more threads */
+#ifdef _WIN32
   ExitThread(0);
 #else
   pthread_exit(NULL);
@@ -429,35 +484,7 @@ void st_thread_exit(void *retval)
     st_cond_destroy(thread->term);
     thread->term = NULL;
   }
-
-#ifdef ST_ITERATE_CB
-  _ST_DEL_THREADQ(thread);
-#endif
-
-#ifdef MD_WINDOWS_FIBER
-  _st_thread_free(thread);
-#else
-  /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
-#ifndef NVALGRIND
-  if (!(thread->flags & _ST_FL_SHARED_STK)) {
-    VALGRIND_STACK_DEREGISTER(thread->stack->valgrind_stack_id);
-  }
-#endif
-  do {
-    _st_stack_t *stack = thread->stack;
-#ifdef ST_SHARED_STACK
-    if (thread->prvstk) 
-      free(thread->prvstk);
-    if (stack && stack->owner == thread)
-      stack->owner = NULL;
-#endif
-    if (thread->flags & _ST_FL_SHARED_STK)
-      _st_thread_free(thread);
-    if (stack != NULL) /* no PRIMORDIAL stack */
-      _st_stack_free(stack);
-  } while (0);
-#endif
-
+  _free_thread(thread);
   /* Find another thread to run */
   _ST_SWITCH_CONTEXT(thread);
   /* NOTREACHED */

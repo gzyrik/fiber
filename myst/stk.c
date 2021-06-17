@@ -62,6 +62,9 @@ void _st_thread_free(_st_thread_t *thread)
 #endif
   /* Put the thread on the free list */
   ST_APPEND_LINK(&thread->links, _st_free_threads.prev);
+#ifdef DEBUG
+  _st_this_vp.num_free_threads++;
+#endif
 }
 _st_thread_t* _st_thread_alloc()
 {
@@ -70,10 +73,16 @@ _st_thread_t* _st_thread_alloc()
     thread = (_st_thread_t *)malloc(ST_SIZEOF_KEYS_THREAD);
     if (!thread)
       return NULL;
+#ifdef DEBUG
+    _st_this_vp.num_threads++;
+#endif
   }
   else {
     thread = _ST_THREAD_PTR(_st_free_threads.next);
     ST_REMOVE_LINK(&thread->links);
+#ifdef DEBUG
+    _st_this_vp.num_free_threads--;
+#endif
   }
   memset(thread, 0, ST_SIZEOF_KEYS_THREAD);
   thread->private_data = (void **)(thread + 1);
@@ -109,7 +118,6 @@ static void srandom(unsigned int x) { srand(x); }
 #define REDZONE	_ST_PAGE_SIZE
 
 static _st_clist_t _st_free_stacks = ST_INIT_STATIC_CLIST(&_st_free_stacks);
-static int _st_num_free_stacks = 0;
 static int _st_randomize_stacks = 0;
 
 static char *_st_new_stk_segment(int size);
@@ -125,7 +133,9 @@ _st_stack_t *_st_stack_new(int stack_size)
     if (ts->stk_size >= stack_size) {
       /* Found a stack that is big enough */
       ST_REMOVE_LINK(&ts->links);
-      _st_num_free_stacks--;
+#ifdef DEBUG
+      _st_this_vp.num_free_stacks--;
+#endif
       return ts;
     }
   }
@@ -140,6 +150,9 @@ _st_stack_t *_st_stack_new(int stack_size)
     free(ts);
     return NULL;
   }
+#ifdef DEBUG
+  _st_this_vp.num_stacks++;
+#endif
   ts->stk_size = stack_size;
   ts->stk_bottom = ts->vaddr + REDZONE;
   ts->stk_top = ts->stk_bottom + stack_size;
@@ -174,7 +187,9 @@ void _st_stack_free(_st_stack_t *ts)
 
   /* Put the stack on the free list */
   ST_APPEND_LINK(&ts->links, _st_free_stacks.prev);
-  _st_num_free_stacks++;
+#ifdef DEBUG
+  _st_this_vp.num_free_stacks++;
+#endif
 }
 
 

@@ -505,7 +505,7 @@ ST_HIDDEN void _st_poll_dispatch(void)
      * Build up the array of struct pollfd to wait on.
      * If existing array is not big enough, release it and allocate a new one.
      */
-    ST_ASSERT(_ST_POLL_OSFD_CNT >= 0);
+    ST_ASSERT(_ST_POLL_OSFD_CNT > 0);
     if (_ST_POLL_OSFD_CNT > _ST_POLLFDS_SIZE) {
         free(_ST_POLLFDS);
         _ST_POLLFDS = (struct pollfd *) malloc((_ST_POLL_OSFD_CNT + 10) *

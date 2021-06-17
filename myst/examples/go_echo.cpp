@@ -158,5 +158,5 @@ int main()
   go 0, server, []{
     printf("[7] other fiber\n");
   }, client;
-  return st_thread_exit(NULL), 0;
+  return st_term();
 }

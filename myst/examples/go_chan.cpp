@@ -85,7 +85,5 @@ int main ()
   printf("start ......\n");
   //!!! 一定要在 st_thread_exit() 前手工释放局部对象
   ch_0 = ch_2 = ch_1 = nullptr;
-  st_thread_exit(NULL);
-  puts("**ERROR: Not here\n");
-  return 0;
+  return st_term();
 }
