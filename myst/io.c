@@ -1227,7 +1227,8 @@ int st_sockaddr(void *sa, int domain, const char* addr, int port)
       addr = name;
     }
     hints.ai_family = domain;
-    if (st_getaddrinfo(addr, &hints, NULL, ST_UTIME_NO_TIMEOUT) <= 0)
+    hints.ai_canonname = (char*)addr;
+    if (st_getaddrinfo(&hints, NULL, ST_UTIME_NO_TIMEOUT) <= 0)
       return -1;
     slen = hints.ai_next->ai_addrlen;
     memcpy(sa, hints.ai_next->ai_addr, slen);

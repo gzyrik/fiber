@@ -612,15 +612,14 @@ void st_freeaddrinfo(struct addrinfo *hints)
 }
 
 /* timeout for udp send/recv, after return ttl */
-int st_getaddrinfo(const char *name, struct addrinfo* hints,
-  unsigned *ttl, st_utime_t timeout)
+int st_getaddrinfo(struct addrinfo* hints, unsigned *ttl, st_utime_t timeout)
 {
   size_t i;
   int ret;
-  if (!hints || hints->ai_next)
+  if (!hints || hints->ai_next || !hints->ai_canonname || !hints->ai_canonname[0])
     return -1;
   if (hints->ai_addr) {
-    ret = fetch_domain(name, hints->ai_addr, hints, ttl, timeout);
+    ret = fetch_domain(hints->ai_canonname, hints->ai_addr, hints, ttl, timeout);
     if (ret > 0) {
       for (i=0; i<_nameserver_cnt; ++i) {
         if (!sock_addr_cmp(&_nameserver[i], hints->ai_addr))
@@ -634,7 +633,7 @@ int st_getaddrinfo(const char *name, struct addrinfo* hints,
     }
   }
   for (i=0; i<_nameserver_cnt; ++i) {
-    ret = fetch_domain(name, (struct sockaddr*)&_nameserver[i], hints, ttl, timeout);
+    ret = fetch_domain(hints->ai_canonname, (struct sockaddr*)&_nameserver[i], hints, ttl, timeout);
     if (ret > 0) {
       if (i > 0) {
         struct sockaddr_storage tmp = _nameserver[i];

@@ -22,7 +22,7 @@ target("go-chan")
   add_files("go_chan.cpp","go0.cpp")
 
 target("proxy", {files = "proxy.c"})
-target("lookupdns", {files="lookupdns.c"})
+target("dig", {files="dig.c"})
 
 target("http1", {files = "http1.c"})
 target("http2", {files = "http2.c"})
