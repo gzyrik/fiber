@@ -125,7 +125,7 @@ typedef struct _st_chan *   st_chan_t;
 /** WARNING: SHOULD call before st_init */
 extern int st_cfg_eventsys(int eventsys);
 extern int st_init(void (*atterm)());
-/** wait for all thread */
+/** wait for all. WARNING: MUST destruction local object manually before this */
 extern int st_term(void);
 extern int st_getfdlimit(void);
 #ifdef _WIN32

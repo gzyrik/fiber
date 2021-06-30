@@ -222,7 +222,7 @@ int main(int argc, char *argv[])
     start_daemon();
 
   /* Initialize the ST library */
-  if (st_init() < 0)
+  if (st_init(NULL) < 0)
     err_sys_quit(errfd, "ERROR: initialization failed: st_init");
 
   /* Set thread throttling parameters */

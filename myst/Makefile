@@ -292,7 +292,7 @@ OBJS        = $(TARGETDIR)/sched.o \
               $(TARGETDIR)/sync.o  \
               $(TARGETDIR)/key.o   \
               $(TARGETDIR)/io.o    \
-              $(TARGETDIR)/event.o
+              $(TARGETDIR)/event.o $(TARGETDIR)/res.o
 OBJS        += $(EXTRA_OBJS)
 HEADER      = $(TARGETDIR)/st.h
 SLIBRARY    = $(TARGETDIR)/libst.a

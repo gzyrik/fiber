@@ -3,10 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 /* External function defined in the res.c file */
-static void *do_resolve(struct addrinfo *hints)
+static void *do_resolve(void *arg)
 {
     int n;
     unsigned ttl = 0;
+    struct addrinfo *hints = arg;
     st_utime_t timeout = (st_utime_t)hints->ai_flags * 10000000LL; //XXX: ai_flags as timeout
     n = st_getaddrinfo(hints, &ttl, timeout);
 
@@ -16,7 +17,7 @@ static void *do_resolve(struct addrinfo *hints)
     }
     else {
         struct addrinfo* ai = hints->ai_next;
-        for(n; n>0; --n, ai=ai->ai_next) {
+        for(; n>0; --n, ai=ai->ai_next) {
             if (!ai->ai_addr) continue;
             printf("%-40s %s ttl %ds\n", hints->ai_canonname,
                 st_inetaddr(ai->ai_addr, ai->ai_addrlen, NULL, NULL), ttl);

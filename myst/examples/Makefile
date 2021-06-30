@@ -70,7 +70,7 @@ EXTRALIBS   = -ldl
 ifeq ($(OS),)
 EXAMPLES    = unknown
 else
-EXAMPLES    = $(OBJDIR)/lookupdns $(OBJDIR)/proxy $(OBJDIR)/server $(OBJDIR)/go1 $(OBJDIR)/go3 $(OBJDIR)/go_echo $(OBJDIR)/go_chan
+EXAMPLES    = $(OBJDIR)/dig $(OBJDIR)/proxy $(OBJDIR)/server $(OBJDIR)/go1 $(OBJDIR)/go3 $(OBJDIR)/go_echo $(OBJDIR)/go_chan
 endif
 
 
@@ -79,15 +79,15 @@ endif
 #
 
 ifeq (DARWIN, $(findstring DARWIN, $(OS)))
-LIBRESOLV   = -lresolv
+#LIBRESOLV   = -lresolv
 endif
 
 ifeq (LINUX, $(findstring LINUX, $(OS)))
-LIBRESOLV   = -lresolv
+#LIBRESOLV   = -lresolv
 endif
 
 ifeq (SOLARIS, $(findstring SOLARIS, $(OS)))
-LIBRESOLV   = -lresolv
+#LIBRESOLV   = -lresolv
 EXTRALIBS   += -lsocket -lnsl
 endif
 
@@ -98,8 +98,8 @@ endif
 
 all: $(EXAMPLES)
 
-$(OBJDIR)/lookupdns: lookupdns.c $(OBJDIR)/res.o $(LIBST) $(HEADER)
-	$(CC) $(CFLAGS) -I$(INCDIR) lookupdns.c $(OBJDIR)/res.o $(LIBST) $(LIBRESOLV) $(EXTRALIBS) -o $@
+$(OBJDIR)/dig: dig.c $(LIBST) $(HEADER)
+	$(CC) $(CFLAGS) -I$(INCDIR) dig.c $(LIBST) $(LIBRESOLV) $(EXTRALIBS) -o $@
 
 $(OBJDIR)/proxy: proxy.c $(LIBST) $(HEADER)
 	$(CC) $(CFLAGS) -I$(INCDIR) proxy.c $(LIBST) $(EXTRALIBS) -o $@

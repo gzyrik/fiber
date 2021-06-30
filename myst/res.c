@@ -637,7 +637,7 @@ int st_getaddrinfo(struct addrinfo* hints, unsigned *ttl, st_utime_t timeout)
     if (ret > 0) {
       if (i > 0) {
         struct sockaddr_storage tmp = _nameserver[i];
-        for (i; i > 0; --i)
+        for (; i > 0; --i)
           _nameserver[i] = _nameserver[i-1];
         _nameserver[0] = tmp;
       }
